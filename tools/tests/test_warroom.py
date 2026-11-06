@@ -29,7 +29,7 @@ os.environ["WARROOM_HOME"] = str(WORKSPACE)  # Before anything loads: this decid
 
 sys.path.insert(0, str(CODE_ROOT / "tools"))
 
-from warroom import checks, cli, demo, discover, inbox, refresh, score, server, sources, store  # noqa: E402
+from warroom import checks, cli, demo, discover, inbox, refresh, score, server, settings, sources, store  # noqa: E402
 
 CFG = store.load_config()
 MODEL = store.ROOT / "applications" / "2026-11-acme-principal-robotics-software-engineer"
@@ -557,6 +557,369 @@ class Freshness(unittest.TestCase):
         self.assertEqual(sources.workday_posted_date("Posted 3 Days Ago", today), "2026-11-02")
         self.assertIsNone(sources.workday_posted_date("Posted 30+ Days Ago", today))
         self.assertIsNone(sources.workday_posted_date(None, today))
+
+
+PROMOTE = {
+    "city_points": 10, "industry_points": 10, "mentions_needed": 2,
+    "cities": [
+        {"name": "Hill Valley", "match": r"hill valley(?!,?\s*(ca\b|california))"},
+        {"name": "Eagleton", "points": 4},
+        {"name": "Sunnydale"},
+    ],
+    "industry": [
+        {"name": "Robotics", "terms": [r"\brobotics?\b", r"\brobots?\b"], "companies": ["Globex"]},
+        {"name": "Medical devices", "terms": [r"medical devices?"], "points": 6},
+    ],
+}
+PROMOTED_CFG = {**CFG, "promote": PROMOTE}
+
+
+class Promotion(unittest.TestCase):
+    TODAY = date(2026, 11, 5)
+
+    def view(self, cfg=PROMOTED_CFG, **job):
+        return score.freshness({"score": 60, "reposts": 0, "redates": 0, "company": "Initech", **job}, cfg, self.TODAY)
+
+    def test_preferred_city_raises_priority(self):
+        view = self.view(location="Hill Valley, WI")
+        self.assertEqual((view["rank"], view["promoted"]), (70, ["Hill Valley"]))
+        self.assertIn("Preferred city Hill Valley +10", view["freshness_reasons"])
+
+    def test_no_match_or_no_config_changes_nothing(self):
+        for cfg in (PROMOTED_CFG, {k: v for k, v in CFG.items() if k != "promote"}):
+            view = self.view(cfg, location="Remote - US", title="Staff Engineer", description="Build web services.")
+            self.assertEqual((view["rank"], view["promoted"]), (60, []))
+
+    def test_city_is_a_whole_word_in_the_location(self):
+        self.assertEqual(self.view(location="Sunnydaleton, WI")["promoted"], [])
+        self.assertEqual(self.view(location="Remote", description="Offices in Sunnydale.")["promoted"], [])
+        self.assertEqual(self.view(location="Remote | Sunnydale, WI")["promoted"], ["Sunnydale"])
+
+    def test_match_can_exclude_a_namesake(self):
+        self.assertEqual(self.view(location="Hill Valley, CA")["promoted"], [])
+        self.assertEqual(self.view(location="Hybrid - Hill Valley")["promoted"], ["Hill Valley"])
+
+    def test_a_line_can_override_the_points(self):
+        self.assertEqual(self.view(location="Eagleton")["rank"], 64)
+        self.assertEqual(self.view(title="Medical Devices Lead")["rank"], 66)
+
+    def test_each_list_counts_once_at_its_best_match(self):
+        view = self.view(location="Eagleton | Hill Valley | Sunnydale")
+        self.assertEqual(view["rank"], 70)
+        self.assertEqual(len(view["promoted"]), 3)
+        both = self.view(title="Robotics Lead, Medical Devices")
+        self.assertEqual(both["rank"], 70)
+
+    def test_city_and_industry_add_up(self):
+        self.assertEqual(self.view(location="Hill Valley", company="Globex")["rank"], 80)
+
+    def test_industry_needs_more_than_a_passing_mention(self):
+        self.assertEqual(self.view(description="Customers include robotics firms.")["promoted"], [])
+        self.assertEqual(self.view(description="We build robots. Robotics is the whole company.")["promoted"], ["Robotics"])
+
+    def test_industry_from_title_or_employer_needs_no_mentions(self):
+        self.assertEqual(self.view(title="Robotics Software Lead")["promoted"], ["Robotics"])
+        self.assertEqual(self.view(company="Acme Robotics")["promoted"], ["Robotics"])
+        self.assertEqual(self.view(company="Globex")["promoted"], ["Robotics"])
+        self.assertEqual(self.view(company="Globexian Foods")["promoted"], [])
+
+    def test_a_promotion_does_not_outweigh_age(self):
+        fresh = self.view(posted_at="2026-11-03")
+        stale = self.view(posted_at="2026-09-01", location="Hill Valley", company="Globex")
+        self.assertGreater(fresh["rank"], stale["rank"])
+
+    def test_filter_score_and_keep_decision_ignore_promotions(self):
+        for title, location, description in (
+            ("Staff Firmware Engineer", "Remote - US", "robots and more robots"),
+            ("Staff Firmware Engineer", "Hill Valley, WI", "firmware"),
+            ("Robotics Sales Lead", "Remote - US", "robots and more robots"),
+        ):
+            with self.subTest(title=title, location=location):
+                self.assertEqual(score.evaluate(title, location, "", description, PROMOTED_CFG),
+                                 score.evaluate(title, location, "", description, {**CFG, "promote": {}}))
+
+
+class PromotionConfig(unittest.TestCase):
+    """The lists actually in the example's search.toml."""
+    TODAY = date(2026, 11, 5)
+
+    def promoted(self, **job):
+        return score.freshness({"score": 60, "company": "Initech", **job}, CFG, self.TODAY)["promoted"]
+
+    def test_the_example_lists_pass_the_settings_checks(self):
+        self.assertEqual(settings.validate(CFG["promote"]), CFG["promote"])
+
+    def test_every_pattern_compiles(self):
+        rules = CFG["promote"]
+        for city in rules["cities"]:
+            score.re.compile(city.get("match") or score._named(city["name"]))
+        for industry in rules["industry"]:
+            for term in industry.get("terms", []):
+                score.re.compile(term)
+
+    def test_cities_get_past_the_filters(self):
+        for city in ("Sunnydale, WI", "Eagleton, WI", "Hill Valley, WI"):
+            with self.subTest(city):
+                self.assertEqual(score.classify_location(city, "", CFG), "local")
+                self.assertEqual(len(self.promoted(location=city)), 1)
+
+    def test_namesake_is_not_the_preferred_city(self):
+        self.assertEqual(self.promoted(location="Hill Valley, CA"), [])
+
+    def test_benefits_text_is_not_an_industry(self):
+        text = "We offer medical, dental and vision. Medical cover starts on day one. Medical leave."
+        self.assertEqual(self.promoted(description=text), [])
+
+    def test_chromolithography_is_not_semiconductors(self):
+        self.assertNotIn("Semiconductors", self.promoted(description="Chromolithography, chromolithography and chromolithography."))
+
+    def test_a_degree_list_is_not_an_industry(self):
+        text = "Experience in robotics or controls. Degree in Engineering, Robotics or a related field."
+        self.assertEqual(self.promoted(description=text), [])
+
+
+class PromotionOnDashboard(Base):
+    def test_radar_ranks_on_a_description_it_does_not_send(self):
+        self.add(source_id="plain", title="Plain", score=70)
+        wanted = self.add(source_id="wanted", title="Wanted", score=65, description="We build robots. Robotics is the job.")
+        state = server.build_state(self.conn, PROMOTED_CFG)
+        ranked = sorted(state["jobs"], key=lambda j: -j["rank"])
+        self.assertEqual([j["title"] for j in ranked], ["Wanted", "Plain"])
+        self.assertEqual(ranked[0]["promoted"], ["Robotics"])
+        self.assertNotIn("description", ranked[0])
+        detail = server.job_detail(self.conn, wanted, PROMOTED_CFG)
+        self.assertEqual((detail["rank"], detail["promoted"]), (ranked[0]["rank"], ["Robotics"]))
+        self.assertIn("robots", detail["description"])
+
+    def test_todays_orders_follow_the_promotion(self):
+        posted = (date.today() - timedelta(days=1)).isoformat()
+        self.add(source_id="a", title="Plain", score=70, posted_at=posted, location="Remote")
+        self.add(source_id="b", title="Wanted", score=65, posted_at=posted, location="Hill Valley, WI")
+        orders = server.build_state(self.conn, PROMOTED_CFG)["orders"]
+        self.assertEqual([o["text"] for o in orders if o["kind"] == "New listing"], ["Acme: Wanted", "Acme: Plain"])
+
+    def test_queue_reads_promoted_postings_first_and_keeps_the_score(self):
+        self.add(source_id="a", title="Plain", score=70, location="Remote")
+        self.add(source_id="b", title="Wanted", score=65, location="Hill Valley, WI")
+        self.conn.commit()
+        out = io.StringIO()
+        with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), \
+                mock.patch.object(cli, "load_config", return_value=PROMOTED_CFG), contextlib.redirect_stdout(out):
+            cli.main(["queue"])
+        triage = json.loads(out.getvalue())["to_triage"]
+        self.assertEqual([(j["title"], j["score"], j["rank"], j["promoted"]) for j in triage],
+                         [("Wanted", 65, 75, ["Hill Valley"]), ("Plain", 70, 70, [])])
+
+
+SETTINGS_TOML = """# Top of the file
+[run]
+min_score = 40  # keep this comment
+
+# About promotions
+[promote]
+city_points = 10
+industry_points = 10
+mentions_needed = 3
+cities = [
+  { name = "Springfield" },
+]
+# A comment inside the section
+[[promote.industry]]
+name = "Robotics"
+terms = ['\\brobots?\\b']
+
+# Roles to pursue
+[[track]]
+name = "AI"
+title = ['\\bai\\b']
+
+[dashboard]
+allowed_hosts = ['tower']
+"""
+SETTINGS_FACTS = """# Fact bank
+## Work
+Wrote firmware and C++ control code.
+## Do not use
+- Internal name Bluebird
+## Unsupported, so don't claim without new evidence
+- Reinforcement learning
+"""
+
+
+class SettingsBase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.path = Path(self.tmp.name) / "search.toml"
+        self.path.write_text(SETTINGS_TOML, encoding="utf-8", newline="\n")
+        (Path(self.tmp.name) / "facts.md").write_text(SETTINGS_FACTS, encoding="utf-8")
+        patcher = mock.patch.object(store, "CONFIG_PATH", self.path)
+        patcher.start()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(patcher.stop)
+
+    def form(self, **changes):
+        return {"city_points": 10, "industry_points": 10, "mentions_needed": 3,
+                "cities": [{"name": "Springfield"}], "industry": [{"name": "Robotics", "terms": [r"\brobots?\b"]}], **changes}
+
+    def body(self, **changes):
+        return {"version": settings.view()["version"], "promote": self.form(**changes)}
+
+    def text(self):
+        return self.path.read_bytes().decode("utf-8")
+
+
+class Settings(SettingsBase):
+    def test_a_save_changes_only_the_section(self):
+        settings.save(self.body(cities=[{"name": "Shelbyville", "points": 4}]))
+        text = self.text()
+        before, after = SETTINGS_TOML.split("[promote]")[0], SETTINGS_TOML[SETTINGS_TOML.index("# Roles to pursue"):]
+        self.assertTrue(text.startswith(before))
+        self.assertTrue(text.endswith(after))
+        self.assertIn("min_score = 40  # keep this comment", text)
+        self.assertEqual(store.load_config()["promote"]["cities"], [{"name": "Shelbyville", "points": 4}])
+        self.assertEqual(store.load_config()["track"][0]["name"], "AI")
+        self.assertEqual(store.load_config()["dashboard"]["allowed_hosts"], ["tower"])
+
+    def test_values_read_back_exactly(self):
+        promote = self.form(
+            cities=[{"name": 'Quote " City', "match": r"it's\s+here"}],
+            industry=[{"name": "Medical devices", "points": 6, "terms": [r"\bfda\b", "don't"], "companies": ['Acme "Bio"'],
+                       "wants": [{"name": "C++", "match": r"C\+\+"}, {"name": "Firmware"}]}])
+        settings.save({"version": settings.view()["version"], "promote": promote})
+        self.assertEqual(store.load_config()["promote"], promote)
+
+    def test_saving_twice_changes_nothing_more(self):
+        settings.save(self.body())
+        first = self.text()
+        settings.save(self.body())
+        self.assertEqual(self.text(), first)
+
+    def test_the_earlier_file_is_kept(self):
+        settings.save(self.body(city_points=7))
+        self.assertEqual(self.path.with_name("search.previous.toml").read_bytes().decode("utf-8"), SETTINGS_TOML)
+
+    def test_windows_line_endings_are_kept(self):
+        self.path.write_bytes(SETTINGS_TOML.replace("\n", "\r\n").encode("utf-8"))
+        settings.save(self.body(city_points=7))
+        self.assertNotIn("\n", self.text().replace("\r\n", ""))
+
+    def test_a_section_is_added_if_there_is_none(self):
+        self.path.write_text("[run]\nmin_score = 40\n", encoding="utf-8", newline="\n")
+        settings.save({"version": settings.view()["version"], "promote": self.form()})
+        config = store.load_config()
+        self.assertEqual(config["run"]["min_score"], 40)
+        self.assertEqual(config["promote"]["cities"], [{"name": "Springfield"}])
+
+    def test_bad_input_leaves_the_file_alone(self):
+        cases = {
+            "broken pattern": {"cities": [{"name": "X", "match": "("}]},
+            "broken term": {"industry": [{"name": "X", "terms": ["["]}]},
+            "no name": {"cities": [{"name": "  "}]},
+            "listed twice": {"cities": [{"name": "X"}, {"name": "x"}]},
+            "line break": {"cities": [{"name": "X\n[dashboard]\nallowed_hosts = ['evil.test']"}]},
+            "line break in pattern": {"cities": [{"name": "X", "match": "a\nb"}]},
+            "text for points": {"city_points": "ten"},
+            "boolean points": {"city_points": True},
+            "too many points": {"cities": [{"name": "X", "points": 1000}]},
+            "negative points": {"industry_points": -1},
+            "no mentions": {"mentions_needed": 0},
+            "can never match": {"industry": [{"name": "X"}]},
+            "not a list": {"cities": "Springfield"},
+            "not an entry": {"cities": ["Springfield"]},
+        }
+        for label, changes in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError):
+                    settings.save(self.body(**changes))
+                self.assertEqual(self.text(), SETTINGS_TOML)
+
+    def test_a_name_can_not_reach_another_section(self):
+        name = "x\" ] [dashboard] allowed_hosts = ['evil.test'] #"
+        settings.save(self.body(cities=[{"name": name}]))
+        config = store.load_config()
+        self.assertEqual(config["dashboard"]["allowed_hosts"], ["tower"])
+        self.assertEqual(config["promote"]["cities"][0]["name"], name)
+
+    def test_a_stale_form_is_refused(self):
+        old = self.body(city_points=1)
+        settings.save(self.body(city_points=2))
+        with self.assertRaises(settings.Conflict):
+            settings.save(old)
+        self.assertEqual(store.load_config()["promote"]["city_points"], 2)
+
+    def test_another_section_changing_is_not_a_conflict(self):
+        old = self.body(city_points=1)
+        self.path.write_text(SETTINGS_TOML.replace("min_score = 40", "min_score = 50"), encoding="utf-8", newline="\n")
+        settings.save(old)
+        self.assertEqual(store.load_config()["run"]["min_score"], 50)
+
+    def test_only_the_section_can_be_changed(self):
+        settings.save({**self.body(), "dashboard": {"allowed_hosts": ["evil.test"]}, "guard": {"forbidden": []}})
+        self.assertEqual(store.load_config()["dashboard"]["allowed_hosts"], ["tower"])
+
+    def test_skills_come_from_what_may_be_claimed(self):
+        wants = [{"name": "Firmware"}, {"name": "Control software", "match": r"control code"}, {"name": "Reinforcement learning"},
+                 {"name": "Bluebird"}, {"name": "Photolithography"}]
+        settings.save(self.body(industry=[{"name": "Robotics", "terms": ["robot"], "wants": wants}]))
+        self.assertEqual(settings.view()["skills"]["Robotics"],
+                         {"have": ["Firmware", "Control software"], "gaps": ["Reinforcement learning", "Bluebird", "Photolithography"]})
+
+    def test_wanted_skills_do_not_change_the_ranking(self):
+        job = {"score": 60, "company": "Initech", "title": "Robotics Lead"}
+        plain = {**CFG, "promote": {"industry_points": 10, "industry": [{"name": "Robotics", "terms": ["robotics"]}]}}
+        wanted = {**CFG, "promote": {"industry_points": 10, "industry": [{"name": "Robotics", "terms": ["robotics"], "wants": [{"name": "Firmware"}]}]}}
+        self.assertEqual(score.freshness(job, plain, date(2026, 11, 5))["rank"], score.freshness(job, wanted, date(2026, 11, 5))["rank"])
+
+
+class SettingsInTheDemo(SettingsBase):
+    def test_the_demo_can_not_write_into_the_example(self):
+        body = self.body(city_points=1)
+        with mock.patch.object(store, "IS_EXAMPLE", True), self.assertRaises(ValueError):
+            settings.save(body)
+        self.assertEqual(self.text(), SETTINGS_TOML)
+
+
+class SettingsOverHttp(SettingsBase):
+    def setUp(self):
+        super().setUp()
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+
+    def call(self, method="GET", headers=None, body=None):
+        url = f"http://127.0.0.1:{self.httpd.server_address[1]}/api/settings"
+        request = urllib.request.Request(url, method=method, headers=headers or {}, data=body)
+        try:
+            with urllib.request.urlopen(request, timeout=5) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as err:
+            return err.code, json.loads(err.read())
+
+    def post(self, body, **headers):
+        return self.call("POST", {"Content-Type": "application/json", **headers}, json.dumps(body).encode())
+
+    def test_read_and_save(self):
+        status, data = self.call()
+        self.assertEqual((status, data["promote"]["cities"]), (200, [{"name": "Springfield"}]))
+        status, data = self.post({"version": data["version"], "promote": self.form(city_points=7)})
+        self.assertEqual((status, data["promote"]["city_points"]), (200, 7))
+
+    def test_bad_input_and_stale_forms_get_a_clear_answer(self):
+        version = self.call()[1]["version"]
+        status, data = self.post({"version": version, "promote": self.form(cities=[{"name": "X", "match": "("}])})
+        self.assertEqual(status, 400)
+        self.assertIn("valid pattern", data["error"])
+        self.assertEqual(self.post({"version": "old", "promote": self.form()})[0], 409)
+        self.assertEqual(self.text(), SETTINGS_TOML)
+
+    def test_other_sites_and_hosts_can_not_read_or_save(self):
+        body = {"version": self.call()[1]["version"], "promote": self.form(city_points=1)}
+        self.assertEqual(self.post(body, Origin="https://evil.test")[0], 403)
+        self.assertEqual(self.post(body, Host="evil.test")[0], 403)
+        self.assertEqual(self.call(headers={"Host": "evil.test"})[0], 403)
+        self.assertEqual(self.call("POST", {"Content-Type": "text/plain"}, json.dumps(body).encode())[0], 415)
+        self.assertEqual(self.text(), SETTINGS_TOML)
 
 
 class OlderDatabase(unittest.TestCase):

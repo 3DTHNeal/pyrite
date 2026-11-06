@@ -128,6 +128,7 @@ const COLUMNS = [
 function freshnessPills(job) {
   const pills = [];
   if (job.is_new && !job.applied_at) pills.push(pill("good", "New", `Posted ${daysAgo(job.age_days)} and never reposted`));
+  if (!job.applied_at) for (const name of job.promoted) pills.push(pill("info", name, "A city or industry you asked to rank higher. It raises priority, not the score."));
   if (job.reposts) pills.push(pill(job.reposts > 1 ? "bad" : "warn", `Reposted ${job.reposts}×`, "The same job came back under a new listing, or after being taken down"));
   if (job.redates) pills.push(pill("warn", `Re-dated ${job.redates}×`, "The board moved this listing's posted date forward"));
   if (job.ghost_risk) pills.push(pill("bad", "Possible ghost", `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof.`));
@@ -176,6 +177,7 @@ const RADAR_SORTS = {
 const RADAR_SHOWS = {
   "": () => true,
   new: (j) => j.is_new,
+  promoted: (j) => j.promoted.length,
   clean: (j) => !j.reposts && !j.redates,
   "no-ghost": (j) => !j.ghost_risk,
 };
@@ -199,7 +201,7 @@ function renderRadar() {
   $("radar-count").textContent = rows.length > shown.length ? `Showing ${shown.length} of ${rows.length}` : `${rows.length} postings`;
   fill($("radar"),
     h("thead", {}, h("tr", {},
-      h("th", { class: "num", title: "Score plus points for a recent posting, minus a penalty for each repost" }, "Priority"),
+      h("th", { class: "num", title: "Score plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost" }, "Priority"),
       h("th", { class: "num", title: "Filter score, out of 100" }, "Score"),
       ["Company", "Title", "Location", "Track", "Pay", "Posted", "Signals"].map((c) => h("th", {}, c)))),
     h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
@@ -245,6 +247,152 @@ function renderSources() {
       h("td", {}, r.last_error ? `${r.source_key}: ${r.last_error}` : r.source_key),
       h("td", { class: "num" }, r.last_count),
       h("td", {}, ago(r.last_ok) || "Never")))));
+}
+
+// ---- Settings ----
+
+let settings = null;
+let settingsDirty = false;
+let collectCities = [];
+let collectIndustries = [];
+
+const settingsLines = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
+const settingsNumber = (input) => (input.value.trim() === "" ? null : Number(input.value));
+const onRadar = (name) => (state ? state.jobs.filter((j) => j.status === "new" && j.promoted.includes(name)).length : 0);
+const postingCount = (count) => `${count} posting${count === 1 ? "" : "s"} on the radar`;
+
+function settingsField(label, input, hint) {
+  return h("label", {}, label, input, hint ? h("span", { class: "muted hint" }, hint) : null);
+}
+
+function numberInput(value, placeholder) {
+  return h("input", { type: "number", min: "0", max: "50", step: "1", value: value ?? "", placeholder });
+}
+
+function removeButton(what, row, list, collect) {
+  return h("button", { class: "btn danger", type: "button", "aria-label": `Remove ${what}`, onclick: () => {
+    list.splice(list.indexOf(collect), 1);
+    row.remove();
+    settingsDirty = true;
+  } }, "Remove");
+}
+
+function cityRow(city, body) {
+  const name = h("input", { value: city.name || "", "aria-label": "City name" });
+  const points = numberInput(city.points, "Default");
+  points.setAttribute("aria-label", "Points");
+  const match = h("input", { value: city.match || "", placeholder: "Only if the name isn't enough", "aria-label": "Pattern" });
+  const collect = () => ({ name: name.value, points: settingsNumber(points), match: match.value });
+  const row = h("tr", {}, h("td", {}, name), h("td", {}, points), h("td", {}, match),
+    h("td", { class: "num muted" }, city.name ? onRadar(city.name) : ""), h("td", {}));
+  row.lastChild.append(removeButton("this city", row, collectCities, collect));
+  collectCities.push(collect);
+  body.append(row);
+}
+
+function skillsSummary(match) {
+  if (!match || !(match.have.length + match.gaps.length)) {
+    return h("p", { class: "muted hint" }, "List the skills this industry wants, and saving checks them against your fact bank.");
+  }
+  return h("div", { class: "skills" },
+    h("p", {}, h("strong", {}, `You have ${match.have.length} of ${match.have.length + match.gaps.length}`),
+      h("span", { class: "muted" }, " in profile/facts.md, by word match. It doesn't change the ranking or what a resume may claim.")),
+    h("div", { class: "signals" }, match.have.map((name) => pill("good", name, "Found in your fact bank")),
+      match.gaps.map((name) => pill("muted", name, "Not in your fact bank. If it's true of you, add it to profile/facts.md."))));
+}
+
+function industryCard(industry, body, match) {
+  const name = h("input", { value: industry.name || "" });
+  const points = numberInput(industry.points, "Default");
+  const terms = h("textarea", { rows: "4" });
+  terms.value = (industry.terms || []).join("\n");
+  const companies = h("textarea", { rows: "4" });
+  companies.value = (industry.companies || []).join("\n");
+  const wants = h("textarea", { rows: "4" });
+  wants.value = (industry.wants || []).map((w) => (w.match ? `${w.name}: ${w.match}` : w.name)).join("\n");
+  const collect = () => ({
+    name: name.value,
+    points: settingsNumber(points),
+    terms: settingsLines(terms.value),
+    companies: settingsLines(companies.value),
+    wants: settingsLines(wants.value).map((line) => {
+      const split = line.indexOf(": ");
+      return split < 0 ? { name: line } : { name: line.slice(0, split), match: line.slice(split + 2) };
+    }),
+  });
+  const card = h("div", { class: "panel industry" },
+    h("div", { class: "industry-head" }, settingsField("Industry", name), settingsField("Points", points),
+      h("span", { class: "muted count" }, industry.name ? postingCount(onRadar(industry.name)) : "")),
+    h("div", { class: "industry-lists" },
+      settingsField("Words in a posting", terms, "One per line. These are patterns, so \\b marks a word's edge."),
+      settingsField("Employers", companies, "One per line. These always count."),
+      settingsField("Skills it wants", wants, "One per line. Add \": pattern\" if the name alone won't match your fact bank.")),
+    skillsSummary(match));
+  card.querySelector(".industry-head").append(removeButton("this industry", card, collectIndustries, collect));
+  collectIndustries.push(collect);
+  body.append(card);
+}
+
+function renderSettings() {
+  const promote = settings.promote;
+  collectCities = [];
+  collectIndustries = [];
+  const cityPoints = numberInput(promote.city_points ?? 10);
+  const industryPoints = numberInput(promote.industry_points ?? 10);
+  const mentions = numberInput(promote.mentions_needed ?? 3);
+  $("settings-form").collect = () => ({
+    city_points: settingsNumber(cityPoints),
+    industry_points: settingsNumber(industryPoints),
+    mentions_needed: settingsNumber(mentions),
+    cities: collectCities.map((c) => c()),
+    industry: collectIndustries.map((c) => c()),
+  });
+  const cityBody = h("tbody", {});
+  const industries = h("div", { class: "industries" });
+  fill($("settings-form"),
+    h("div", { class: "panel" },
+      h("h2", {}, "Preferred cities and industries"),
+      h("p", { class: "muted" }, "These change the order on the Radar and in the daily run. They don't change what's kept or tailored, and they can't bring back a posting the filters dropped. Filters and everything else stay in profile/search.toml."),
+      h("div", { class: "settings-defaults" },
+        settingsField("Points for a city", cityPoints),
+        settingsField("Points for an industry", industryPoints),
+        settingsField("Mentions needed", mentions, "How often a posting must use an industry's words. At 2, degree lists count."))),
+    h("div", { class: "panel" },
+      h("h2", {}, "Cities"),
+      h("div", { class: "table-wrap" }, h("table", { class: "grid" },
+        h("thead", {}, h("tr", {}, ["City", "Points", "Pattern", "On the radar", ""].map((c) => h("th", {}, c)))),
+        cityBody)),
+      h("button", { class: "btn add-row", type: "button", onclick: () => { cityRow({}, cityBody); settingsDirty = true; } }, "Add a city")),
+    h("h2", { class: "settings-heading" }, "Industries"),
+    industries,
+    h("button", { class: "btn add-row", type: "button", onclick: () => { industryCard({}, industries); settingsDirty = true; } }, "Add an industry"));
+  (promote.cities || []).forEach((city) => cityRow(city, cityBody));
+  (promote.industry || []).forEach((industry) => industryCard(industry, industries, settings.skills[industry.name]));
+  settingsDirty = false;
+}
+
+async function loadSettings() {
+  try {
+    settings = await api("/api/settings");
+    renderSettings();
+    $("settings-error").textContent = "";
+  } catch (err) {
+    $("settings-error").textContent = err.message;
+  }
+}
+
+async function saveSettings() {
+  $("settings-error").textContent = "";
+  $("settings-status").textContent = "";
+  try {
+    settings = await api("/api/settings", { version: settings.version, promote: $("settings-form").collect() });
+    await refresh();
+    renderSettings();
+    const radar = state.jobs.filter((j) => j.status === "new");
+    $("settings-status").textContent = `Saved. ${radar.filter((j) => j.promoted.length).length} of ${radar.length} postings on the radar match.`;
+  } catch (err) {
+    $("settings-error").textContent = err.message;
+  }
 }
 
 function render() {
@@ -466,7 +614,12 @@ function closeDrawer() {
 document.querySelectorAll(".tabs button").forEach((tab) => tab.addEventListener("click", () => {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b === tab)));
   document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== `view-${tab.dataset.tab}`; });
+  if (tab.dataset.tab === "settings" && !settingsDirty) loadSettings();
 }));
+$("view-settings").addEventListener("input", () => { settingsDirty = true; $("settings-status").textContent = ""; });
+$("settings-save").addEventListener("click", saveSettings);
+$("settings-discard").addEventListener("click", loadSettings);
+window.addEventListener("beforeunload", (e) => { if (settingsDirty) e.preventDefault(); });
 ["radar-search", "radar-track", "radar-place", "radar-show", "radar-sort"].forEach((id) => $(id).addEventListener("input", renderRadar));
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openJobId) closeDrawer(); });

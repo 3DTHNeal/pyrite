@@ -92,7 +92,7 @@ def cmd_queue(args):
         )),
         key=lambda j: (-j["priority"], fit_order.get(j["fit"], 2), -j["rank"]),
     )[:args.limit or run_cfg["tailor_per_day"]]
-    keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "age_days", "reposts", "redates",
+    keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "promoted", "age_days", "reposts", "redates",
             "is_new", "ghost_risk", "ghost_reason", "track", "flags", "fit", "priority", "status", "comp", "url")
     trim = lambda job: {k: job[k] for k in keep}
     last = discover.last_full_sweep(conn)

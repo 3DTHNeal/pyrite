@@ -24,8 +24,8 @@ cover_letters = true
 follow_up_days = 7   # nudge this long after applying
 quiet_days = 30      # flag as probably ghosted after this long
 
-# Priority = filter score + age points - repost penalty. It only decides the order you
-# and the daily run see things in. The filter score still decides what's kept and tailored.
+# Priority = filter score + age points + promotion points - repost penalty. It only decides
+# the order you and the daily run see things in. The filter score still decides what's kept and tailored.
 [freshness]
 new_days = 7                 # posted this recently and never reposted counts as New
 age_points = [[3, 30], [7, 20], [14, 10], [30, 0], [90, -10]]  # [up to this many days old, points]
@@ -39,6 +39,46 @@ came_back_after_days = 2     # a listing gone for less than this was probably a 
 ghost_age_days = 90
 ghost_repost_count = 2       # reposts and re-dates together
 ghost_age_if_reposted = 45   # a shorter limit once it has been reposted or re-dated
+
+# Cities and industries to see first. These add to Priority only, so they take effect the
+# next time the dashboard refreshes, with no rescore. They can't rescue a posting the filters
+# dropped: to accept a city at all, add it under [location] too. These towns already pass
+# as "local", because [location] accepts anywhere in Wisconsin.
+[promote]
+city_points = 10       # Each list counts once, at its best match.
+industry_points = 10
+mentions_needed = 3    # Times an industry's terms must appear in a description. At 2, degree lists and passing mentions count.
+# Matched against the posting's location. The name is matched as a whole word, and `match`
+# replaces that with a pattern. Add `points` to any line to override city_points.
+cities = [
+  { name = "Sunnydale" },
+  { name = "Eagleton", points = 5 },
+  { name = "Hill Valley", match = 'hill valley(?!,?\s*(ca\b|california))' },
+]
+
+# A posting is in an industry if its employer is listed under `companies`, a term is in the
+# employer's name or the title, or the terms appear mentions_needed times in the description.
+# Keep terms specific: "medical" alone would catch most postings' benefits text.
+# `wants` are skills the industry looks for. The Settings tab checks them against facts.md,
+# and they don't change the ranking. Add `points` to any industry to override industry_points.
+[[promote.industry]]
+name = "Robotics"
+terms = ['\brobotics?\b', '\brobots?\b']
+companies = ["Cyberdyne Research", "Hooli Autonomy"]
+wants = [
+  { name = "Firmware" },
+  { name = "C++", match = 'C\+\+' },
+  { name = "Motion planning" },
+]
+
+[[promote.industry]]
+name = "Medical devices"
+terms = ['medical devices?', '\bfda\b']
+companies = ["Umbrella Instruments"]
+
+[[promote.industry]]
+name = "Semiconductors"
+terms = ['\bsemiconductors?\b', '\bwafers?\b', '\blithography\b']
 
 # Roles to pursue. A title must match a track's `title` pattern and not match `exclude_titles`.
 [[track]]

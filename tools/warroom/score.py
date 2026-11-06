@@ -2,6 +2,7 @@
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
 
 FOREIGN = re.compile(
     r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|mexico|brazil|argentina|colombia|"
@@ -36,10 +37,66 @@ def parse_date(value) -> date | None:
         return None
 
 
+def _named(name: str) -> str:
+    """A pattern for a plain name as a whole word, so "Acme" doesn't catch "Acmeville"."""
+    return rf"(?<!\w){re.escape(name)}(?!\w)"
+
+
+@lru_cache(maxsize=20000)
+def _mentions(terms: tuple, text: str) -> int:
+    """Cached because the dashboard ranks every job on every refresh, and descriptions rarely change."""
+    return sum(len(re.findall(term, text, re.I)) for term in terms)
+
+
+def _in_industry(industry: dict, job: dict, mentions_needed: int) -> bool:
+    """Postings have no industry field, so this judges from the employer and the text.
+
+    A passing mention isn't enough: "customers in automotive and aerospace" doesn't make
+    an automotive job, and neither does a degree list. A term in the employer's name or
+    the title is.
+    """
+    company, title = job.get("company") or "", job.get("title") or ""
+    if _any([_named(name) for name in industry.get("companies", [])], company):
+        return True
+    terms = industry.get("terms", [])
+    if _any(terms, f"{company}\n{title}"):
+        return True
+    return _mentions(tuple(terms), job.get("description") or "") >= mentions_needed
+
+
+def promotion(job: dict, cfg: dict) -> tuple[int, list, list]:
+    """Priority points for the cities and industries you named under [promote].
+
+    Returns (points, the names that matched, reasons). Each list counts once, at its best
+    match, so a posting naming five preferred cities doesn't outrank one naming the right one.
+    """
+    rules = cfg.get("promote") or {}
+    points, names, reasons = 0, [], []
+
+    location = job.get("location") or ""
+    cities = [c for c in rules.get("cities", []) if re.search(c.get("match") or _named(c["name"]), location, re.I)]
+    if cities:
+        gained = max(c.get("points", rules.get("city_points", 0)) for c in cities)
+        points += gained
+        names += [c["name"] for c in cities]
+        reasons.append(f"Preferred city {', '.join(c['name'] for c in cities)} {gained:+d}")
+
+    needed = rules.get("mentions_needed", 3)
+    industries = [i for i in rules.get("industry", []) if _in_industry(i, job, needed)]
+    if industries:
+        gained = max(i.get("points", rules.get("industry_points", 0)) for i in industries)
+        points += gained
+        names += [i["name"] for i in industries]
+        reasons.append(f"Preferred industry {', '.join(i['name'] for i in industries)} {gained:+d}")
+
+    return points, names, reasons
+
+
 def freshness(job: dict, cfg: dict, today: date) -> dict:
     """How new a listing is, how often it has come back, and the priority that gives it.
 
     This only orders what you see. Whether a posting is kept stays with the filter score.
+    Pass the whole row, since preferred industries are judged from the description.
     """
     rules = cfg["freshness"]
     # The earliest date on record, so a repost can't make an old job look new.
@@ -56,6 +113,8 @@ def freshness(job: dict, cfg: dict, today: date) -> dict:
     penalty = min(reposts * rules["repost_penalty"] + redates * rules["redate_penalty"], rules["max_penalty"])
     if penalty:
         reasons.append(f"Reposted {reposts}, re-dated {redates} -{penalty}")
+    promoted_points, promoted, promoted_reasons = promotion(job, cfg)
+    reasons += promoted_reasons
 
     ghost = []
     if age is not None and age >= rules["ghost_age_days"]:
@@ -67,7 +126,8 @@ def freshness(job: dict, cfg: dict, today: date) -> dict:
 
     return {
         "age_days": age,
-        "rank": (job.get("score") or 0) + points - penalty,
+        "rank": (job.get("score") or 0) + points - penalty + promoted_points,
+        "promoted": promoted,
         "is_new": age is not None and age <= rules["new_days"] and not changes,
         "ghost_risk": bool(ghost),
         "ghost_reason": ", ".join(ghost),

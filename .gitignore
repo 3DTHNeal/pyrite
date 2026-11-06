@@ -22,3 +22,6 @@ resume.previous.md
 
 # Word's lock files
 ~$*
+
+# search.toml from before the last save on the dashboard's Settings tab
+search.previous.toml

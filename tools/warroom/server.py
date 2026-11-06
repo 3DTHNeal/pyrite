@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 
 from . import refresh
 from . import score as scoring
+from . import settings
 from .discover import last_full_sweep
 from .store import (
     IS_EXAMPLE, REPLY_DISMISSED, ROOT, connect, get_job, job_dict, load_config, log_event, now, possible_replies,
@@ -68,14 +69,16 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     return cursor.lastrowid
 
 
-def _enrich(job: dict, cfg: dict, today: str) -> dict:
+def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> dict:
+    job = job_dict(row, include_description)
     run = cfg["run"]
     job["days_since_applied"] = quiet_days_since(job["applied_at"])
     job["days_in_status"] = quiet_days_since(job["status_changed_at"])
     job["follow_up_due"] = bool(job["next_action_date"] and job["next_action_date"] <= today)
     job["quiet"] = job["status"] == "applied" and (job["days_since_applied"] or 0) >= run["quiet_days"]
     job["url"] = safe_url(job["url"])
-    job.update(scoring.freshness(job, cfg, date.fromisoformat(today)))
+    # The whole row, because priority reads the description even when the page isn't sent it.
+    job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today)))
     return job
 
 
@@ -118,7 +121,7 @@ def _orders(jobs: list[dict]) -> list[dict]:
 def build_state(conn, cfg) -> dict:
     today = date.today().isoformat()
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
-    jobs = [_enrich(job_dict(r), cfg, today) for r in rows]
+    jobs = [_enrich(r, cfg, today) for r in rows]
     replies = possible_replies(conn)
     refreshes = refresh.states(conn)
     for job in jobs:
@@ -173,7 +176,7 @@ def build_state(conn, cfg) -> dict:
 
 
 def job_detail(conn, job_id: int, cfg: dict) -> dict:
-    job = _enrich(job_dict(get_job(conn, job_id), include_description=True), cfg, date.today().isoformat())
+    job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True)
     job["possible_reply"] = possible_replies(conn).get(job_id)
     job["refresh"] = refresh.states(conn).get(job_id)
     job["can_refresh"] = job["status"] in refresh.REFRESHABLE and bool(job["app_folder"])
@@ -276,6 +279,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(build_state(conn, load_config()))
                 finally:
                     conn.close()
+            if path == "/api/settings":
+                return self._json(settings.view())
             match = re.fullmatch(r"/api/job/(\d+)", path)
             if match:
                 conn = connect()
@@ -311,6 +316,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad request"}, 400)
 
         path = urlparse(self.path).path
+        if path == "/api/settings":
+            try:
+                return self._json(settings.save(body))
+            except settings.Conflict as err:
+                return self._json({"error": str(err)}, 409)
+            except ValueError as err:
+                return self._json({"error": str(err)}, 400)
         conn = connect()
         cfg = load_config()
         try:

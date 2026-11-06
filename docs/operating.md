@@ -83,7 +83,7 @@ Nothing ever applies on your behalf. Click **I applied** on the dashboard and it
 
 ## New listings, reposts and possible ghost jobs
 
-The Radar, today's orders and the daily run put the newest listings first, ahead of older ones with a similar score. **Priority** is the filter score plus points for age, minus a penalty for each repost. The weights are under `[freshness]` in `search.toml`. Priority only changes the order, and the filter score still decides what's kept and tailored.
+The Radar, today's orders and the daily run put the newest listings first, ahead of older ones with a similar score. **Priority** is the filter score plus points for age and for a preferred city or industry, minus a penalty for each repost. The weights are under `[freshness]` and `[promote]` in `search.toml`. Priority only changes the order, and the filter score still decides what's kept and tailored.
 
 - **New:** posted in the last 7 days and never reposted.
 - **Reposted:** the same job came back under a new listing, or the same listing came back after being taken down. The same job in another city isn't a repost. Age keeps counting from the earliest date on record, so a repost doesn't look new again.
@@ -92,6 +92,21 @@ The Radar, today's orders and the daily run put the newest listings first, ahead
 - **May be a repost:** a Workday link ending in `-1` or similar, which often means a requisition has more than one posting. It's a hint only and costs no priority.
 
 A board's first sweep sets a baseline, so repost counts stay at zero until a later sweep sees something come back.
+
+## Preferred cities and industries
+
+Open the dashboard's **Settings** tab to choose the cities and industries you want to see first, then click **Save**. A match adds to Priority and shows as a blue tag on the Radar, whose **Preferred city or industry** filter lists only those postings. Open a job to see the points under **Why its priority is**.
+
+The tab edits only `[promote]` in `search.toml`, which you can also edit by hand. A save rewrites that section and its comments, leaves the rest of the file alone, and keeps the earlier file as `search.previous.toml` beside it. Filters, the fact checker's rules and allowed hosts can't be changed from the dashboard, because it has no login. The demo can't save settings.
+
+- **Cities** match the posting's location, as a whole word. Add `match` if the name alone isn't enough, as when another state has a city with the same name.
+- **Industries** have no field on a job board, so they're judged from the posting. It counts if the employer is under `companies`, a term is in the employer's name or the title, or the terms appear at least `mentions_needed` times in the description. One passing mention doesn't count, and terms need to be specific, since "medical" alone would catch most postings' benefits text.
+- **Points** are `city_points` and `industry_points`, and any line can override them with `points`. Each list counts once, at its best match.
+- **Skills it wants** are what an industry looks for. The tab checks them against `facts.md`, skipping its "Do not use" and "Unsupported" sections, and shows what you have and what's missing. It's a word match to help you set the points, so it doesn't change the ranking or what a resume may claim. If a gap is true of you, add it to `facts.md` first.
+
+Promotions change the order and nothing else. They raise no filter score, so a posting below `tailor_min_score` still won't be tailored, and they can't bring back a posting the filters dropped. To accept a new city at all, add it under `[location]` too. The daily run works through its limit in Priority order, so promoted postings do get read first.
+
+Changes apply the next time the dashboard refreshes, and need no `rescore`.
 
 ## The fact checker
 
