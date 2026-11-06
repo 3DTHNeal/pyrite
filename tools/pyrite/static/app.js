@@ -153,6 +153,8 @@ function cardMeta(job) {
   if (job.prep && job.prep.state === "running") meta.push(pill("info", "Writing interview prep"));
   if (job.status === "needs_fix") meta.push(pill("bad", "Failed assay"));
   if (job.changed_since_check && job.changed_since_check.length) meta.push(pill("bad", "Changed since checked", "Its files changed after the assay passed it"));
+  if (job.frozen) meta.push(pill("muted", "Frozen", "Sent, so the documents are the record of what went out: nothing rebuilds or refreshes them"));
+  if (job.changed_after_sending && job.changed_after_sending.length) meta.push(pill("bad", "Changed after sending", `${job.changed_after_sending.join(", ")} no longer match the sent copy`));
   if (job.posting_closed_at) meta.push(pill("bad", "Posting down"));
   if (job.follow_up_due) meta.push(pill("warn", job.next_action === "Follow up" ? "Follow up" : "Next step due", job.next_action));
   if (job.quiet) meta.push(pill("warn", "Gone quiet"));
@@ -768,6 +770,21 @@ function changedBlock(job) {
     recheckButton(job));
 }
 
+// After sending, the folder is a record. Say so, link the sent copies, and shout if the record has drifted.
+function frozenBlock(job) {
+  if (!job.frozen) return null;
+  const changed = job.changed_after_sending || [];
+  const links = (job.sent_files || []).map((file) => h("a", { class: "btn", href: fileHref(file), target: "_blank", rel: "noopener" },
+    `Sent ${file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter|resume|cover-letter)/, "").replace(/_/g, " ")}`));
+  return h("div", { class: changed.length ? "callout bad" : "callout" },
+    h("strong", {}, changed.length ? "Changed after sending" : `Frozen since you applied on ${shortDate(job.applied_at)}`),
+    h("p", {}, changed.length
+      ? `${changed.join(", ")} no longer match the copy kept when you applied. The sent copies below are the record; the files in the folder are not what the company has.`
+      : links.length ? "The copies below are what went out. The folder's documents aren't rebuilt or refreshed any more; a new application gets a new job."
+        : "No copy of the sent documents is on record for this job, so the folder's files may not match what the company has."),
+    links.length ? h("div", { class: "row" }, links) : null);
+}
+
 function stuckBlock(job) {
   if (job.status !== "needs_fix" || !job.fix_limit || job.fix_attempts < job.fix_limit) return null;
   return h("div", { class: "callout" },
@@ -832,7 +849,14 @@ function checkBlock(job) {
   }
   if (result.overlap && result.overlap.pct !== null) {
     const missing = result.overlap.missing.length ? ` Not on the resume: ${result.overlap.missing.join(", ")}.` : "";
-    blocks.push(h("p", { class: "muted" }, `The resume uses ${result.overlap.pct}% of the skill terms in this posting.${missing}`));
+    const pct = result.overlap.pct;
+    const band = pct > 85 ? " That's high enough to read as copied from the posting, which screeners now mark down: aim for 60 to 80%."
+      : pct < 40 ? " Below about 40%, a filter on skills may not pick it up." : "";
+    blocks.push(h("p", { class: "muted" }, `The resume uses ${pct}% of the skill terms in this posting.${missing}${band}`));
+  }
+  if (result.drafter && Object.keys(result.drafter).length) {
+    const versions = [...new Set(Object.values(result.drafter))].sort();
+    blocks.push(h("p", { class: "muted" }, `Documents built by drafter ${versions.join(" and ")}.`));
   }
   return blocks;
 }
@@ -938,7 +962,7 @@ async function openJob(id) {
   const nextDate = h("input", { type: "date", "aria-label": "Next step date" });
   nextDate.value = job.next_action_date || "";
   const href = safeHref(job.url);
-  const pdfs = job.files.filter((f) => f.endsWith(".pdf") || f.endsWith(".docx"));
+  const pdfs = job.files.filter((f) => f.endsWith(".pdf") || f.endsWith(".docx") || f.endsWith(".txt"));
 
   const facts = [["Status", job.status.replace("_", " ")], ["Location", job.location || "Not stated"], ["Pay", job.comp],
     ["Track", job.track], ["Fit", job.fit ? `${capitalized(job.fit)}: ${job.fit_reason}` : ""], ["Found", shortDate(job.first_seen)],
@@ -973,6 +997,7 @@ async function openJob(id) {
       h("strong", {}, "Before you send"),
       h("ul", {}, ["Read it through: you'll be asked about every line.", ...state.before_send].map((item) => h("li", {}, item)))) : null,
     replyBlock(job),
+    frozenBlock(job),
     changedBlock(job),
     stuckBlock(job),
     checkBlock(job),

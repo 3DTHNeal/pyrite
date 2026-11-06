@@ -68,6 +68,10 @@ The check reads file contents, file and branch names, commit messages and the te
 
 Cover letters use the same script with `--letter`, and should fit on one page.
 
+Each build makes three files: the `.docx`, the `.pdf` and a `.txt` for the paste boxes on application sites and LinkedIn. The documents are shaped for the parsers behind applicant tracking systems (one column, standard section names, real bullet characters, nothing in headers or footers), and after the PDF is made its text is read back the way a parser reads it. The build fails if the name, a contact detail, a heading or a date range didn't survive, or if the export produced ligatures that a keyword search can't match. That read-back needs poppler's `pdftotext`, which Git for Windows includes; without it the step is skipped. `docs/resume-playbook.md` has the evidence behind the format and the writing rules, and the table of what each application system does with an upload.
+
+The builder and its writing rules together are the drafter, and they carry a version number (`DRAFTER_VERSION` in `tools/pyrite/checks.py`). Every file built is stamped with it, in the Word document's Version and Keywords properties and the PDF's Keywords, so you can tell which rules a document was written under. `pyrite check` reports the version behind each `.docx` in a folder and warns when it isn't the current one; the dashboard shows the same under the assay result. The playbook's "Drafter versions" table says what changed in each.
+
 ## The dashboard
 
 `tools/pyrite.py serve` runs it at <http://127.0.0.1:8787>. It only listens on this machine. On Windows, double-click `Pyrite.cmd`, which starts the dashboard if it's down and replaces it if it has hung. If another program holds port 8787, it says so and closes nothing. To start it at login, put a shortcut to `.venv\Scripts\pythonw.exe tools\pyrite.py serve` in your Startup folder, with this folder as its working directory.
@@ -117,7 +121,7 @@ The older way is a Claude Code session of your own following `tools/pyrite/daily
 
 Either way, the code holds two lines by itself. Only `pyrite finish` can mark a draft ready, and a draft changed after it passed is flagged on the dashboard.
 
-Nothing ever applies on your behalf. Click **I applied** on the dashboard and it schedules a follow-up reminder for 7 days later. Log what comes back with **Got a reply**, **Interview** or **Rejected** so the numbers stay right. Reply detection points out mail worth checking, but only those buttons change a job's status.
+Nothing ever applies on your behalf. Click **I applied** on the dashboard and it schedules a follow-up reminder for 7 days later. It also freezes the job: a read-only copy of `resume.md`, `cover-letter.md` and the built documents goes into the folder's `sent/`, the job leaves the ready list, and from then on nothing rebuilds, refreshes or re-checks its documents. The job shows **Frozen** with links to the sent copies, and **Changed after sending** if a file in the folder stops matching them. A second application to the same company is a new job with its own folder. For applications made before this existed, `pyrite sent <id> --from <subfolder>` keeps the copy from a subfolder you saved by hand. Log what comes back with **Got a reply**, **Interview** or **Rejected** so the numbers stay right. Reply detection points out mail worth checking, but only those buttons change a job's status.
 
 ## New listings, reposts and possible ghost jobs
 
@@ -146,6 +150,7 @@ The tab edits only `[promote]` in `search.toml`, which you can also edit by hand
 - **Cities** match the posting's location, as a whole word. Add `match` if the name alone isn't enough, as when another state has a city with the same name.
 - **Industries** have no field on a job board, so they're judged from the posting. It counts if the employer is under `companies`, a term is in the employer's name or the title, or the terms appear at least `mentions_needed` times in the description. One passing mention doesn't count, and terms need to be specific, since "medical" alone would catch most postings' benefits text.
 - **Points** are `city_points` and `industry_points`, and any line can override them with `points`. Each list counts once, at its best match.
+- **Tracks can be limited to industries.** A `[[track]]` with `industries = ["Robotics"]` matches only postings in those industries, judged the same way. Use it for a broad title, such as plain "software engineer", that you want only from the employers you care most about.
 - **Skills it wants** are what an industry looks for. The tab checks them against `facts.md`, skipping its "Do not use" and "Unsupported" sections, and shows what you have and what's missing. It's a word match to help you set the points, so it doesn't change the ranking or what a resume may claim. If a gap is true of you, add it to `facts.md` first.
 
 Promotions change the order and nothing else. They raise no filter score, so a posting below `tailor_min_score` still won't be tailored, and they can't bring back a posting the filters dropped. To accept a new city at all, add it under `[location]` too. The daily run works through its limit in Priority order, so promoted postings do get read first.
@@ -166,6 +171,8 @@ The dashboard has no login, so anyone who can open it can change these two files
 ## The assay
 
 The assay is Pyrite's fact checker, named for the test that tells gold from fool's gold. `pyrite finish` won't mark a draft ready unless it passes checks that involve no AI. It blocks confidential terms, unsupported claims, numbers not in the fact bank, changed employers, titles or dates, a changed contact line, outside links and unfilled placeholders, and it enforces the page limits. Resumes are also blocked from naming a specialist term that isn't in your approved sources. If a blocked term is true of you, add it to `approved-terms.txt`. It can't catch a true fact twisted into a false impression, so reading each draft still matters.
+
+It also warns, without blocking, about wording that readers now take as machine-written or empty: em dashes, "spearheaded", "leveraged", "results-driven" and the like, and a cover letter over 350 words. Beside the result, the dashboard shows what share of the posting's skill terms the resume uses, and says so when that share is high enough to read as copied (above about 85%) or too low for a skills filter (below about 40%).
 
 - **What counts as a source.** Your approved sources, minus the "Do not use" and "Unsupported" sections of `facts.md`, which approve nothing. The posting never counts, and neither does its title. A resume that opens a bullet with a tool the posting names, and your sources don't, is blocked.
 - **Numbers.** Digits must appear in your sources. Numbers written as words from eleven up are blocked unless your sources use the same word, so write them as digits.

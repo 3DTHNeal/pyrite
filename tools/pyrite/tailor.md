@@ -22,6 +22,7 @@ One element per line:
 
 ```text
 # Name                         name at the top
+= Headline                     bold line under the name: the title family this job is in
 @ contact line                 the line under the name
 ## Section                     heading with a rule
 ### Company | dates            bold line, dates right-aligned
@@ -31,15 +32,22 @@ One element per line:
 anything else                  plain paragraph
 ```
 
+Section headings stay as the model has them (Summary, Skills, Experience, Education, Certifications, Patents): the parsers behind application sites key on those words.
+
 ## `{folder}/resume.md`
 
-Start from the model resume.
+Start from the model resume. Screening in 2026 is a ranking tool that reads the parsed sections and a recruiter who reads the top third for a few seconds, so:
 
 - **Keep exactly:** the name and contact lines, and every `###` and `####` heading (employers, titles, places, dates).
-- **Reorder and rewrite for the role:** the summary, the skills and the choice and order of bullets. Lead with what this job cares about, in its vocabulary where that's true of the candidate.
-- **Must fit on two pages.** Cut the least relevant bullets to get there.
+- **The top third decides.** The headline names the title family of this job, in words that are true of the candidate. The summary is two or three lines: who they are, one scope statement (team, sites, launches, systems) and one hard number. The posting's three to five must-haves appear above the fold, in its own words where they're true, because the tools that rank resumes can't be relied on to infer them.
+- **Reorder and rewrite for the role:** the skills and the choice and order of bullets. Take the posting's requirements in the order it gives them and lead with the evidence for those.
+- **Skills: 8 to 15 items,** each backed by a bullet below. A block that mirrors the posting is itself a signal of machine writing.
+- **Keep a `Scope:` bullet under each leadership role:** reports, sites, hiring, promotions, and whether the team was inherited or built.
+- **Every bullet must survive a follow-up question:** a named system or tool, a size, a date and a result only the candidate could know, with its basis labeled ("in simulation", "four rounds per arm"). Cut any bullet that could belong to anyone.
+- **Use roughly 60 to 80% of the posting's skill terms,** in natural sentences. Above that it reads as copied and some screeners mark it down; the dashboard shows the figure.
+- **Must fit on two pages.** Cut the least relevant bullets to get there. 20 to 30 bullets in all.
 - **Write numbers as digits,** exactly as the fact bank has them.
-- **Voice:** plain, specific and measured. No hype words, no em dashes.
+- **Voice:** plain verbs (built, cut, shipped, ran, fixed), varied sentence openings, no em dashes, and none of "spearheaded, leveraged, orchestrated, honed, streamlined, results-driven". The checker warns on these. Describe AI work as what was shipped, with the tool named and the result measured; "AI-native" as a self-description is filler unless the posting uses it.
 
 Don't name a skill, tool or product that `profile/facts.md`, `profile/approved-terms.txt` or the model resume doesn't already use, since the checker will block it.
 

@@ -110,7 +110,7 @@ This project runs on my real job search, and it has to be public without showing
 python -W ignore::ResourceWarning -m unittest discover -s tools/tests
 ```
 
-Building `.docx` and `.pdf` files also needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word.
+Building the `.docx`, `.pdf` and paste-ready `.txt` files also needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
 
 ## Limits
 

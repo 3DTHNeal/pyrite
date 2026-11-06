@@ -29,9 +29,9 @@ def _watchlist(cfg: dict) -> list[tuple]:
     return out
 
 
-def _is_candidate(title: str, location: str, cfg: dict, workplace: str = "") -> bool:
+def _is_candidate(title: str, location: str, cfg: dict, workplace: str = "", company: str = "") -> bool:
     """Worth the slower call for a full description?"""
-    if not scoring.match_track(title, cfg):
+    if not scoring.match_track(title, cfg, {"company": company}):
         return False
     if scoring.MULTI_LOCATION.match(location):
         return True
@@ -81,7 +81,7 @@ def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: floa
                 title, listed = hit.get("title", ""), hit.get("locationsText", "")
                 # Some sites list a remote role under a city and say it's remote only in this field.
                 workplace = str(hit.get("remoteType") or "").lower()
-                if not _is_candidate(title, listed, cfg, workplace):
+                if not _is_candidate(title, listed, cfg, workplace, company):
                     result["postings"].append(sources.Posting(source_key, path, company, title, listed, workplace))
                 elif time.monotonic() < deadline:
                     try:
@@ -99,7 +99,7 @@ def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: floa
         for posting in postings:
             if posting.source_id in known or posting.source_id in rejected:
                 continue
-            if posting.description or not _is_candidate(posting.title, posting.location, cfg):
+            if posting.description or not _is_candidate(posting.title, posting.location, cfg, company=company):
                 result["postings"].append(posting)
             elif kind == "greenhouse" and time.monotonic() < deadline:
                 try:
@@ -290,7 +290,7 @@ def _fill_in(conn, row, cfg: dict) -> None:
     if row["score"]:
         return
     verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"],
-                               {**cfg, "run": {**cfg["run"], "min_score": 0}})
+                               {**cfg, "run": {**cfg["run"], "min_score": 0}}, row["company"])
     if verdict.keep:
         conn.execute(
             "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",
@@ -398,7 +398,7 @@ def rescore(conn=None, cfg=None) -> dict:
         "SELECT * FROM jobs WHERE status = 'new' AND source_key NOT IN ('seed', 'manual')"
     ).fetchall()
     for row in rows:
-        verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg)
+        verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"])
         if verdict.keep:
             conn.execute(
                 "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",
@@ -424,7 +424,7 @@ def _ingest(conn, posting, cfg, stats, ts, key, started, baseline):
     if _attach_to_existing(conn, posting, ts, key, cfg):
         return
 
-    verdict = scoring.evaluate(posting.title, posting.location, posting.workplace, posting.description, cfg)
+    verdict = scoring.evaluate(posting.title, posting.location, posting.workplace, posting.description, cfg, posting.company)
     if not verdict.keep:
         stats["rejected"][verdict.reason] += 1
         conn.execute(

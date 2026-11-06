@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -113,6 +114,22 @@ class FactChecker(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(any("Degree isn't on this resume" in w for w in warnings))
 
+    def test_wording_that_reads_as_machine_written_is_warned_not_blocked(self):
+        draft = RESUME + "\n- Spearheaded a results-driven effort — leveraged synergies.\n"
+        errors, warnings = checks.check_text(draft, "resume", CFG, SOURCES, "Acme", "Principal Engineer")
+        self.assertEqual(errors, [])
+        self.assertTrue(any("em dash" in w for w in warnings), warnings)
+        self.assertTrue(any("spearheaded" in w and "leveraged" in w and "results-driven" in w for w in warnings), warnings)
+        _, warnings = checks.check_text(RESUME, "resume", CFG, SOURCES, "Acme", "Principal Engineer")
+        self.assertEqual(warnings, [])
+
+    def test_long_letter_is_warned(self):
+        padding = "\n" + " ".join(["I built the bench and ran it on every merge."] * 40) + "\n"
+        _, warnings = checks.check_text(LETTER + padding, "letter", CFG, SOURCES, *LETTER_ROLE)
+        self.assertTrue(any("words" in w and "350" in w for w in warnings), warnings)
+        _, warnings = checks.check_text(LETTER, "letter", CFG, SOURCES, *LETTER_ROLE)
+        self.assertFalse(any("words" in w for w in warnings), warnings)
+
     def test_letter_date_can_be_any_day(self):
         errors, _ = checks.check_text(LETTER.replace("November 2, 2026", "December 17, 2026"), "letter", CFG, SOURCES, *LETTER_ROLE)
         self.assertEqual(errors, [])
@@ -169,6 +186,92 @@ class FactChecker(unittest.TestCase):
             self.assertTrue(any("Kubernetes" in e for e in report["errors"]), report["errors"])
 
 
+class Builder(unittest.TestCase):
+    """The documents a parser sees: plain text for paste boxes, and a PDF read back the way an ATS reads it."""
+
+    def setUp(self):
+        import build_resume
+        self.build = build_resume
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.folder = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_plain_text_keeps_the_content_and_drops_the_markup(self):
+        out = self.folder / "resume.txt"
+        self.build.build_txt(MODEL / "resume.md", out)
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("ALEX RIVERA\nPrincipal Firmware Engineer | Motor Control", text)
+        self.assertIn("Madison, WI | (555) 010-0142 | alex.rivera@example.com", text)
+        self.assertIn("\nSKILLS\n• Firmware: C++", text)
+        self.assertIn("Northbridge Robotics (Jun 2017 – Oct 2026)\nPrincipal Firmware Engineer, Madison, WI (Jan 2023 – Oct 2026)", text)
+        self.assertNotIn("**", text)
+        self.assertNotIn("#", text)
+
+    def test_plain_text_letter_is_only_the_letter(self):
+        out = self.folder / "letter.txt"
+        self.build.build_txt(MODEL / "cover-letter.md", out, letter=True)
+        text = out.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("Dear Hiring Manager,\n\nI am applying"), text[:60])
+        self.assertNotIn("November 2, 2026", text)
+        self.assertNotIn("alex.rivera@example.com", text)
+        self.assertTrue(text.rstrip().endswith("Alex Rivera"))
+
+    def test_docx_has_real_bullets_headings_and_fresh_metadata(self):
+        import zipfile
+        out = self.folder / "resume.docx"
+        self.build.build_docx(MODEL / "resume.md", out, author="Alex Rivera")
+        with zipfile.ZipFile(out) as z:
+            document = z.read("word/document.xml").decode("utf-8")
+            core = z.read("docProps/core.xml").decode("utf-8")
+        self.assertIn("•", document)
+        self.assertNotIn("ListBullet", document)
+        self.assertEqual(document.count('w:val="Heading1"'), 5)
+        self.assertIn("Motor Control, Simulation and AI-Assisted Development", document)
+        self.assertIn("Madison, WI | (555) 010-0142", document)
+        for tag in ("<w:tbl>", "<w:txbxContent>", "w:headerReference", "w:footerReference"):
+            self.assertNotIn(tag, document)
+        self.assertNotIn("python-docx", core)
+        self.assertIn("<dc:creator>Alex Rivera</dc:creator>", core)
+        self.assertIn(f"<cp:version>{checks.DRAFTER_VERSION}</cp:version>", core)
+        self.assertIn(f"<cp:keywords>pyrite drafter {checks.DRAFTER_VERSION}</cp:keywords>", core)
+        self.assertIn(f"<dcterms:created xsi:type=\"dcterms:W3CDTF\">{date.today().isoformat()}", core)
+        self.assertEqual(checks.drafter_versions(self.folder), {"resume.docx": checks.DRAFTER_VERSION})
+
+    def test_files_from_an_older_drafter_are_named(self):
+        import zipfile
+        old = self.folder / "old.docx"
+        self.build.build_docx(MODEL / "resume.md", old, author="Alex Rivera")
+        with zipfile.ZipFile(old) as z:
+            parts = {name: z.read(name) for name in z.namelist()}
+        parts["docProps/core.xml"] = re.sub(rb"<cp:version>[^<]*</cp:version>", b"", parts["docProps/core.xml"])
+        with zipfile.ZipFile(old, "w") as z:
+            for name, data in parts.items():
+                z.writestr(name, data)
+        self.assertEqual(checks.drafter_versions(self.folder), {"old.docx": "1"})
+        shutil.copy(MODEL / "resume.md", self.folder / "resume.md")
+        report = checks.check_application(self.folder, CFG, "Acme Robotics", "Principal Robotics Software Engineer")
+        self.assertEqual(report["drafter"], {"old.docx": "1"})
+        self.assertTrue(any("old.docx was built by drafter 1" in w for w in report["warnings"]), report["warnings"])
+
+    def test_pdf_lint_reports_what_a_parser_would_miss(self):
+        pdf = self.folder / "resume.pdf"
+        pdf.write_bytes(b"%PDF-1.7\n")
+        self.build.build_txt(MODEL / "resume.md", self.folder / "clean.txt")
+        clean = (self.folder / "clean.txt").read_text(encoding="utf-8")
+        with mock.patch.object(self.build, "pdf_text", return_value=clean):
+            self.assertEqual(self.build.lint_pdf(MODEL / "resume.md", pdf), [])
+        broken = clean.replace("(555) 010-0142", "[NULL]").replace("Jan 2023 – Oct 2026", "").replace("firmware", "ﬁrmware")
+        with mock.patch.object(self.build, "pdf_text", return_value=broken):
+            problems = self.build.lint_pdf(MODEL / "resume.md", pdf)
+        found = " ".join(problems)
+        self.assertIn("ligatures", found)
+        self.assertIn("'(555) 010-0142'", found)
+        self.assertIn("'Jan 2023 – Oct 2026'", found)
+        self.assertNotIn("Alex Rivera", found)
+        with mock.patch.object(self.build, "pdf_text", return_value=None):
+            self.assertEqual(self.build.lint_pdf(MODEL / "resume.md", pdf), [])
+
+
 class Filtering(unittest.TestCase):
     def test_locations(self):
         cases = {
@@ -216,6 +319,19 @@ class Filtering(unittest.TestCase):
         for title in unwanted:
             with self.subTest(title):
                 self.assertIsNone(score.match_track(title, CFG))
+
+    def test_a_track_can_be_limited_to_industries(self):
+        cfg = {**CFG, "track": CFG["track"] + [
+            {"name": "Software at robotics companies", "title": [r"\bsoftware\b"], "needs_level": True, "industries": ["Robotics"]},
+        ]}
+        title = "Senior Software Engineer"
+        self.assertIsNone(score.match_track(title, cfg))  # no employer known
+        self.assertIsNone(score.match_track(title, cfg, {"company": "Initech"}))
+        self.assertEqual(score.match_track(title, cfg, {"company": "Cyberdyne Research"})[0], "Software at robotics companies")
+        self.assertIsNotNone(score.match_track(title, cfg, {"company": "Initech", "description": "robots " * 3}))
+        self.assertIsNone(score.match_track("Software Engineer", cfg, {"company": "Cyberdyne Research"}))  # still needs a level
+        self.assertTrue(score.evaluate(title, "Remote - US", "", "python", cfg, company="Cyberdyne Research").keep)
+        self.assertFalse(score.evaluate(title, "Remote - US", "", "python", cfg, company="Initech").keep)
 
     def test_exclusions_match_word_starts_only(self):
         # "hr" must not exclude "Three" or "Shrink"; "intern" must not exclude "Internal".
@@ -1586,7 +1702,7 @@ class ClaudeRun(Base):
         (self.folder / "notes.md").write_text("old notes", encoding="utf-8")
         self.job = self.add(status="ready", app_folder=self.rel, description="A posting.")
         self.conn.commit()
-        for target, name in ((refresh, "ROOT"), (prep, "ROOT"), (cli, "ROOT"), (server, "ROOT")):
+        for target, name in ((refresh, "ROOT"), (prep, "ROOT"), (cli, "ROOT"), (server, "ROOT"), (store, "ROOT")):
             patcher = mock.patch.object(target, name, self.root)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -2138,6 +2254,34 @@ class Gate(ClaudeRun):
         (self.folder / "resume.md").write_text(self.draft, encoding="utf-8")
         (self.folder / "cover-letter.md").write_text("A letter nobody checked.", encoding="utf-8")
         self.assertEqual(self.detail()["changed_since_check"], ["cover-letter.md"])
+
+    def test_applying_freezes_the_documents_and_keeps_a_sent_copy(self):
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+        server.apply_action(self.conn, self.job, {"action": "status", "status": "applied"}, CFG)
+        detail = self.detail()
+        self.assertEqual(detail["status"], "applied")
+        self.assertTrue(detail["frozen"])
+        self.assertEqual(detail["changed_after_sending"], [])
+        sent = self.folder / store.SENT_FOLDER
+        self.assertEqual((sent / "resume.md").read_text(encoding="utf-8"), self.draft)
+        self.assertFalse(os.access(sent / "resume.md", os.W_OK))
+        self.assertIn(f"{store.get_job(self.conn, self.job)['app_folder']}/sent/resume.md", detail["sent_files"])
+        self.assertEqual(server.build_state(self.conn, CFG)["stats"]["ready"], 0)
+        # Nothing rebuilds, refreshes or re-checks a sent job.
+        report = cli.finish_job(self.conn, CFG, self.job)
+        self.assertFalse(report["ok"])
+        self.assertIn("frozen", report["errors"][0])
+        self.assertFalse(detail["can_refresh"])
+        self.assertFalse(detail["can_recheck"])
+        with self.assertRaises(ValueError):
+            server.apply_action(self.conn, self.job, {"action": "recheck"}, CFG)
+        # A later edit to the folder is flagged against the sent copy, which itself is left alone.
+        (self.folder / "resume.md").write_text(self.draft + "\n- Changed after sending.\n", encoding="utf-8")
+        self.assertEqual(self.detail()["changed_after_sending"], ["resume.md"])
+        store.set_status(self.conn, self.job, "responded")
+        store.set_status(self.conn, self.job, "applied")
+        self.assertEqual((sent / "resume.md").read_text(encoding="utf-8"), self.draft)
+        self.assertEqual(self.detail()["changed_after_sending"], ["resume.md"])
 
     def test_checking_again_clears_the_flag_or_blocks_the_draft(self):
         cli.finish_job(self.conn, CFG, self.job)

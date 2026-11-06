@@ -60,15 +60,17 @@ That creates the folder, saves `posting.md` and prints the path. Write these thr
 Start from the model resume named in `run-notes.md`. Check `tools/build_resume.py` for the syntax. Then:
 
 - **Keep exactly:** the name and contact lines, and every `###` and `####` heading (employers, titles, places, dates).
-- **Reorder and rewrite for the role:** the summary, the skills and the choice and order of bullets. Lead with what this job cares about, in its vocabulary where that's truthful. `run-notes.md` says what to emphasize for each track.
+- **The top third decides.** The `=` headline names the title family of this job, in words that are true of the candidate. The summary is two or three lines with one scope statement and one hard number, and the posting's three to five must-haves appear above the fold in its own words where they're true.
+- **Reorder and rewrite for the role:** the skills (8 to 15 items, each backed by a bullet) and the choice and order of bullets. Lead with what this job cares about, in its vocabulary where that's truthful, using roughly 60 to 80% of its skill terms. `run-notes.md` says what to emphasize for each track.
+- **Keep a `Scope:` bullet under each leadership role,** and make every bullet one that survives a follow-up question, with the basis of each number labeled.
 - **Must fit on two pages.** Cut the least relevant bullets to get there.
 - **Word results as the facts allow.** The "Do not use" and "Unsupported" sections of `facts.md` are absolute, and nothing in them counts as an approved word or number.
 - **Write numbers as digits.** The checker compares them with the fact bank, and blocks ones spelled out such as "forty".
-- **Voice:** plain, specific and measured. No hype words, no em dashes.
+- **Voice:** plain verbs, no em dashes, none of "spearheaded, leveraged, orchestrated, honed, streamlined, results-driven". `docs/resume-playbook.md` has the evidence behind all of this.
 
 ### `cover-letter.md`
 
-Follow the model letter: same header, today's date, one page. Say why this job, give two or three concrete pieces of evidence, and name the one or two gaps that matter most, in a sentence or two. A gap goes in a letter only if `facts.md` confirms it or it follows from the dates on the resume. Never state a negative just because the record is silent, since the candidate may have done the thing. If the posting accepts something the candidate has (Python among several listed languages, say), the others aren't a gap. Refer only to things the posting actually says about the company.
+Follow the model letter: same header, today's date, 220 to 320 words in three or four short paragraphs. Open by naming the role and one thing only this company could receive, give two or three concrete pieces of evidence with numbers, bridge the one or two gaps that matter most in a sentence each, and close with the problem the candidate would want to own and a low-friction ask. A gap goes in a letter only if `facts.md` confirms it or it follows from the dates on the resume. Never state a negative just because the record is silent, since the candidate may have done the thing. If the posting accepts something the candidate has (Python among several listed languages, say), the others aren't a gap. Refer only to things the posting actually says about the company.
 
 Word a gap so the sentence plainly denies it: "I have not worked under that standard", or "the posting lists it as a plus, and I have not done it". The checker blocks a sentence that names an unsupported claim without such a denial, and a stray negative later in the sentence ("with no delays") doesn't count as one.
 

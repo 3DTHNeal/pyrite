@@ -86,6 +86,9 @@ name = "Semiconductors"
 terms = ['\bsemiconductors?\b', '\bwafers?\b', '\blithography\b']
 
 # Roles to pursue. A title must match a track's `title` pattern and not match `exclude_titles`.
+# Add `industries = ["Robotics"]` to a track to apply it only to postings in those industries,
+# judged the same way [promote] judges them. That lets a broad title such as "software engineer"
+# through at the employers you care most about without opening it up everywhere.
 [[track]]
 name = "AI systems"
 title = ['\b(ai|ml|a\.i\.|machine learning|llm|genai|gen ai|agents?|agentic|ai/ml|ml/ai|applied ai|inference)\b', '\bdeveloper (productivity|experience|tools)\b', '\b(engineering|developer) (productivity|acceleration)\b']

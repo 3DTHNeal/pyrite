@@ -35,12 +35,26 @@ NUMBER_WORD = re.compile(
     r"sixty|seventy|eighty|ninety|hundreds?|thousands?|millions?|billions?|dozens?)\b",
     re.I,
 )
+# The drafter is the builder plus the writing rules it enforces. Bump this when either changes in a way
+# that shows in the documents, and say what changed under "Drafter versions" in docs/resume-playbook.md.
+# Every .docx and .pdf carries its drafter version, so a folder's files can be told apart from older ones.
+DRAFTER_VERSION = "2"
+# Wording that recruiters and screening tools now read as machine-written or empty. Warned, never blocked.
+CLICHE = re.compile(
+    r"\b(?:spearhead(?:ed|ing|s)?|leverag(?:ed|ing|es)?|orchestrat(?:ed|ing|es)?|honed|streamlin(?:ed|ing|es)?|"
+    r"results[- ]driven|results[- ]oriented|synerg\w*|passionate|dynamic|proven track record|thought leader|"
+    r"self[- ]starter|go[- ]getter|detail[- ]oriented|fast[- ]paced|cutting[- ]edge|best[- ]in[- ]class|"
+    r"I am (?:excited|thrilled) to apply)\b",
+    re.I,
+)
+EM_DASH = "—"
+LETTER_WORDS_MAX = 350  # a letter longer than this is the one readers say they stop reading
 ORDINARY_CAPS = {
     "january", "february", "march", "april", "may", "june", "july", "august", "september",
     "october", "november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep",
     "sept", "oct", "nov", "dec", "monday", "tuesday", "wednesday", "thursday", "friday",
     "i", "dear", "sincerely", "hiring", "manager", "team", "summary",
-    "experience", "skills", "education", "patent", "certifications", "core", "selected",
+    "experience", "skills", "education", "patent", "patents", "certifications", "core", "selected", "scope",
     "leadership", "ai", "us", "u.s", "ml", "and", "the", "of",
 }
 
@@ -259,7 +273,23 @@ def check_text(
             errors.append(message + fix)
         else:
             warnings.append(message)
+    warnings += wording_warnings(body, kind, label)
     return errors, warnings
+
+
+def wording_warnings(body: str, kind: str, label: str) -> list[str]:
+    """Signs of generic or machine-written prose, and a letter that runs long. Read them; none blocks a draft."""
+    warnings = []
+    if EM_DASH in body:
+        warnings.append(f"{label} uses an em dash, which readers now take as a sign of unedited AI text. Use a comma, colon or full stop.")
+    cliches = sorted({m.group(0).lower() for m in CLICHE.finditer(body)})
+    if cliches:
+        warnings.append(f"{label} uses wording that reads as filler: {', '.join(cliches)}. Say what was built, cut or shipped instead.")
+    if kind == "letter":
+        words = len(WORD.findall(body))
+        if words > LETTER_WORDS_MAX:
+            warnings.append(f"Cover letter runs {words} words; keep it under {LETTER_WORDS_MAX}, three or four short paragraphs.")
+    return warnings
 
 
 def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: str = "", posting: str = "") -> tuple[list[str], list[str]]:
@@ -334,6 +364,22 @@ def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+def drafter_versions(folder: Path) -> dict[str, str]:
+    """Which drafter built each .docx in the folder. Files from before versioning read as "1"."""
+    import zipfile
+    versions = {}
+    for docx in sorted(folder.glob("*.docx")):
+        try:
+            with zipfile.ZipFile(docx) as z:
+                core = z.read("docProps/core.xml").decode("utf-8", "replace")
+        except (zipfile.BadZipFile, KeyError, OSError):
+            versions[docx.name] = "unknown"
+            continue
+        match = re.search(r"<cp:version>([^<]*)</cp:version>", core)
+        versions[docx.name] = match.group(1).strip() if match and match.group(1).strip() else "1"
+    return versions
+
+
 def fingerprints(folder: Path) -> dict[str, str]:
     """A hash of each file a passing check covered: the two sources and the documents built from them."""
     covered = [p for p in sorted(folder.iterdir()) if p.name in ("resume.md", "cover-letter.md") or p.suffix in (".pdf", ".docx")]
@@ -403,5 +449,10 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
         elif pages > limit:
             errors.append(f"{pdf.name} is {pages} pages; the limit is {limit}.")
 
+    drafter = drafter_versions(folder)
+    for name, version in drafter.items():
+        if version != DRAFTER_VERSION:
+            warnings.append(f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format.")
+
     overlap = keyword_overlap(resume, description, cfg) if description else None
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap}
+    return {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}

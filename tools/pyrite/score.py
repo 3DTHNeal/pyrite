@@ -170,8 +170,20 @@ def classify_location(location: str, workplace: str, cfg: dict) -> str:
     return "unknown" if loc_cfg.get("accept_relocation") else "out"
 
 
-def match_track(title: str, cfg: dict) -> tuple[str, int] | None:
-    """Return (track name, seniority points) for an eligible title, else None."""
+def _in_any_industry(names: list, job: dict, cfg: dict) -> bool:
+    """Whether the job is in one of the named [[promote.industry]] entries."""
+    rules = cfg.get("promote", {})
+    needed = rules.get("mentions_needed", 3)
+    return any(_in_industry(i, job, needed) for i in rules.get("industry", []) if i["name"] in names)
+
+
+def match_track(title: str, cfg: dict, job: dict | None = None) -> tuple[str, int] | None:
+    """Return (track name, seniority points) for an eligible title, else None.
+
+    A track with `industries` applies only to postings in one of those industries, judged
+    the way promotion judges them: from the employer, the title and the description. `job`
+    carries the employer and description; without it, such a track is skipped.
+    """
     scoring = cfg["scoring"]
     if _any([rf"\b(?:{p})\b" for p in scoring["exclude_titles"]], title):
         return None
@@ -182,12 +194,14 @@ def match_track(title: str, cfg: dict) -> tuple[str, int] | None:
         if _any(track["title"], title):
             if track.get("needs_level") and not (top or mid):
                 continue
+            if track.get("industries") and not (job and _in_any_industry(track["industries"], {**job, "title": title}, cfg)):
+                continue
             return track["name"], level_points
     return None
 
 
-def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict) -> Verdict:
-    matched = match_track(title, cfg)
+def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict, company: str = "") -> Verdict:
+    matched = match_track(title, cfg, {"company": company, "description": description})
     if not matched:
         return Verdict(False, "title")
     track, level_points = matched

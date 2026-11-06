@@ -208,7 +208,7 @@ def _build(source: Path, name: str, letter: bool, author: str, paper: str = "let
 
 
 def _collect_files(folder: Path) -> list[str]:
-    wanted = [p for p in sorted(folder.iterdir()) if p.suffix in (".pdf", ".docx", ".md")]
+    wanted = [p for p in sorted(folder.iterdir()) if p.suffix in (".pdf", ".docx", ".txt", ".md")]
     # Forward slashes on every system, since the dashboard builds its document links from these.
     return [p.relative_to(ROOT).as_posix() for p in wanted]
 
@@ -227,6 +227,12 @@ def cmd_finish(args):
 def finish_job(conn, cfg: dict, job_id: int) -> dict:
     job = get_job(conn, job_id)
     folder = ROOT / job["app_folder"]
+
+    if job["applied_at"]:
+        # Sent documents are a record. Rebuilding them would replace what the company has with something else.
+        return {"ok": False, "warnings": [], "overlap": None, "errors": [
+            f"Applied on {job['applied_at'][:10]}, so this job's documents are frozen and won't be rebuilt. "
+            "A new application is a new job with its own folder."]}
 
     # Check the text first: nothing confidential should be built into a .docx, even briefly.
     report = checks.check_application(folder, cfg, job["company"], job["title"], job["description"])
@@ -346,6 +352,19 @@ def cmd_check(args):
     _print_json(report)
     if not report["ok"]:
         sys.exit(1)
+
+
+def cmd_sent(args):
+    conn = connect()
+    job = get_job(conn, args.id)
+    if not job["applied_at"]:
+        sys.exit(f"Job {args.id} hasn't been applied to, so there's nothing sent to keep.")
+    source = (ROOT / job["app_folder"] / args.source) if args.source else None
+    if source and not source.is_dir():
+        sys.exit(f"No folder {source}.")
+    kept = store.freeze_sent(conn, args.id, source)
+    conn.commit()
+    print(f"{len(kept)} files on record in {job['app_folder']}/{store.SENT_FOLDER}/: {', '.join(sorted(kept)) or 'none'}")
 
 
 def cmd_status(args):
@@ -509,6 +528,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--company", default="")
     p.add_argument("--title", default="")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("sent", help="keep a read-only copy of what was sent for a job you've applied to, if none exists yet")
+    p.add_argument("id", type=int)
+    p.add_argument("--from", dest="source", default="", help="a subfolder of the job's folder to copy from, for applications made before this existed")
+    p.set_defaults(func=cmd_sent)
 
     p = sub.add_parser("status", help="move a job to a status. Ready and needs_fix come only from `finish`")
     p.add_argument("id", type=int)

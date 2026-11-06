@@ -4,7 +4,7 @@
 ## Summary
 Staff-level firmware engineer. This draft is deliberately wrong, to show what the assay stops. Every problem below is something an AI drafting tool could plausibly write.
 
-## Core skills
+## Skills
 - **Firmware:** C++, FreeRTOS, CAN, Kubernetes
 
 ## Experience

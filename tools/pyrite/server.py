@@ -21,8 +21,8 @@ from . import settings
 from .cli import finish_job
 from .discover import last_full_sweep
 from .store import (
-    DEFAULT_FIX_ATTEMPTS, IS_EXAMPLE, REPLY_DISMISSED, ROOT, TAILOR_REQUESTED, connect, fix_attempts, get_job, job_dict,
-    load_config, log_event, now, possible_replies, quiet_days_since, set_status,
+    DEFAULT_FIX_ATTEMPTS, IS_EXAMPLE, REPLY_DISMISSED, ROOT, TAILOR_REQUESTED, changed_after_sending, connect, fix_attempts,
+    get_job, job_dict, load_config, log_event, now, possible_replies, quiet_days_since, sent_copies, set_status,
 )
 
 STATIC = Path(__file__).parent / "static"
@@ -32,6 +32,7 @@ MIME = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".md": "text/plain; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
 }
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -62,7 +63,7 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     ).fetchone()
     if existing:
         return existing["id"]
-    verdict = scoring.evaluate(title, location, "", description, {**cfg, "run": {**cfg["run"], "min_score": 0}})
+    verdict = scoring.evaluate(title, location, "", description, {**cfg, "run": {**cfg["run"], "min_score": 0}}, company)
     ts = now()
     cursor = conn.execute(
         """INSERT INTO jobs (source_key, source_id, company, title, location, location_kind, url, description, comp,
@@ -85,6 +86,11 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> di
     job["quiet"] = job["status"] == "applied" and (job["days_since_applied"] or 0) >= run["quiet_days"]
     job["url"] = safe_url(job["url"])
     job["changed_since_check"] = _changed_since_check(job)
+    # Once sent, the documents are a record, not a draft: nothing rebuilds or refreshes them.
+    job["frozen"] = bool(job["applied_at"])
+    job["changed_after_sending"] = changed_after_sending(row) if job["frozen"] else []
+    job["sent_files"] = ([p.relative_to(ROOT).as_posix() for p in sent_copies(ROOT / job["app_folder"])]
+                         if job["frozen"] and job["app_folder"] else [])
     # The whole row, because priority reads the description even when the page isn't sent it.
     job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today)))
     return job

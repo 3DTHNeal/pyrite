@@ -25,9 +25,9 @@ TRIAGE_INSTRUCTIONS = Path(__file__).parent / "triage.md"
 TAILOR_INSTRUCTIONS = Path(__file__).parent / "tailor.md"
 LETTER_SECTION = """## `{folder}/cover-letter.md`
 
-Follow the model letter: same header, today's date, one page. Say why this job, give two or three concrete pieces of evidence, and name the one or two gaps that matter most, in a sentence or two. A gap goes in a letter only if `facts.md` confirms it or it follows from the dates on the resume. Never state a negative just because the record is silent, since the candidate may have done the thing. Refer only to things the posting actually says about the company.
+Follow the model letter: same header, today's date, 220 to 320 words in three or four short paragraphs. Half of recruiters never read a letter and most hiring managers do, so write for the hiring manager: open by naming the role and one thing only this company could receive, give two or three concrete pieces of evidence with numbers, bridge the one or two gaps that matter most in a sentence each with no apology, and close with the problem the candidate would want to own and a low-friction ask. No "I am excited to apply". A gap goes in a letter only if `facts.md` confirms it or it follows from the dates on the resume. Never state a negative just because the record is silent, since the candidate may have done the thing. Refer only to things the posting actually says about the company.
 
-Word a gap so the sentence plainly denies it: "I have not worked under that standard", or "the posting lists it as a plus, and I have not done it". The checker blocks a sentence that names an unsupported claim without such a denial.
+Word a gap so the sentence plainly denies it: "I have not worked under that standard", or "the posting lists it as a plus, and I have not done it". The checker blocks a sentence that names an unsupported claim without such a denial, and warns above 350 words.
 
 """
 REASON_LIMIT = 400

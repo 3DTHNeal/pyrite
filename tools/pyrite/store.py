@@ -206,7 +206,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 def _migrate(conn) -> None:
     """Bring an older database up to date. Its listing history starts from what it already knows."""
-    if "reposts" in {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "sent_files" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN sent_files TEXT")
+        conn.commit()
+    if "reposts" in columns:
         return
     conn.execute("BEGIN IMMEDIATE")
     if "reposts" in {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}:
@@ -225,6 +229,73 @@ def _migrate(conn) -> None:
            WHERE source_key NOT IN ('seed', 'manual')"""
     )
     conn.commit()
+
+
+SENT_FOLDER = "sent"
+SENT_SUFFIXES = (".md", ".docx", ".pdf", ".txt")
+
+
+def sent_copies(folder: Path) -> list[Path]:
+    """The documents kept as the record of what was sent, if a copy was made."""
+    sent = folder / SENT_FOLDER
+    return sorted(p for p in sent.iterdir() if p.is_file()) if sent.is_dir() else []
+
+
+def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]:
+    """Keep a copy of what was sent, and record its fingerprints so later changes to the folder show.
+
+    Copies resume.md, cover-letter.md and the built documents into the folder's `sent/`, read-only, the
+    first time a job is marked applied. A copy that already exists is left alone: the first application
+    is the one that was sent, and a second application is a new job. `source` names another folder to
+    copy from, for applications made before this existed. The fictional example is never written to.
+    """
+    import hashlib
+    import shutil
+    import stat
+
+    job = get_job(conn, job_id)
+    if IS_EXAMPLE or not job["app_folder"] or not (ROOT / job["app_folder"]).is_dir():
+        return {}
+    folder = ROOT / job["app_folder"]
+    sent = folder / SENT_FOLDER
+    if sent_copies(folder):
+        return json.loads(job["sent_files"] or "{}")
+    source = source or folder
+    if not source.is_dir():
+        return {}
+    wanted = [p for p in sorted(source.iterdir()) if p.is_file() and p.suffix in SENT_SUFFIXES
+              and (p.suffix != ".md" or p.name in ("resume.md", "cover-letter.md"))]
+    if not wanted:
+        return {}
+    sent.mkdir(exist_ok=True)
+    fingerprints = {}
+    for path in wanted:
+        copy = sent / path.name
+        shutil.copyfile(path, copy)
+        os.chmod(copy, stat.S_IREAD)
+        fingerprints[path.name] = hashlib.sha256(copy.read_bytes()).hexdigest()
+    conn.execute("UPDATE jobs SET sent_files = ? WHERE id = ?", (json.dumps(fingerprints), job_id))
+    log_event(conn, job_id, "sent_copy", f"Kept a read-only copy of {len(fingerprints)} sent files in {SENT_FOLDER}/")
+    return fingerprints
+
+
+def changed_after_sending(job) -> list[str]:
+    """Files in the folder that no longer match the sent copy. Empty when nothing was recorded."""
+    import hashlib
+
+    recorded = json.loads(job["sent_files"] or "{}") if "sent_files" in job.keys() else {}
+    if not recorded or not job["app_folder"]:
+        return []
+    folder = ROOT / job["app_folder"]
+    changed = []
+    for name, digest in recorded.items():
+        try:
+            current = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+        except OSError:
+            current = None
+        if current != digest:
+            changed.append(name)
+    return sorted(changed)
 
 
 def record_listing(conn, job_id: int, source_key: str, source_id: str, location: str, posted_at: str | None, ts: str) -> None:
@@ -285,6 +356,9 @@ def set_status(conn, job_id: int, status: str, note: str = "", follow_up_days: i
     assignments = ", ".join(f"{key} = ?" for key in fields)
     conn.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", (*fields.values(), job_id))
     log_event(conn, job_id, status, note)
+    if status == "applied" and not job["applied_at"]:
+        # From here on the documents are the record of what was sent, so keep a copy and freeze the draft.
+        freeze_sent(conn, job_id)
 
 
 def possible_replies(conn) -> dict[int, dict]:
