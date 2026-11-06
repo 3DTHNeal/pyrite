@@ -1,0 +1,18 @@
+#!/bin/sh
+# Blocks a push if anything personal is in any commit. Turn it on once per clone:
+#   git config core.hooksPath .githooks
+#   git config warroom.denylist /path/to/your/workspace/profile/public-denylist.txt
+# With a denylist configured, a missing file blocks the push rather than skipping the check.
+root=$(git rev-parse --show-toplevel)
+python="$root/.venv/Scripts/python.exe"
+[ -x "$python" ] || python="$root/.venv/bin/python"
+[ -x "$python" ] || python=python3
+denylist=$(git config warroom.denylist)
+if [ -n "$denylist" ]; then
+    if [ ! -f "$denylist" ]; then
+        echo "Push blocked: the denylist $denylist is missing." >&2
+        exit 1
+    fi
+    exec "$python" "$root/tools/check_public.py" --denylist "$denylist"
+fi
+exec "$python" "$root/tools/check_public.py"

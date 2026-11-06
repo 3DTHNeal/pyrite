@@ -1,0 +1,12 @@
+[Unit]
+Description=Job search war room: sweep job boards for new postings
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The workspace comes from .warroom-home in this folder, or set Environment=WARROOM_HOME=...
+WorkingDirectory=%h/war-room
+ExecStart=/usr/bin/python3 tools/wr.py discover
+# The leading - means trouble reading mail never fails the sweep. It shows on the dashboard instead.
+ExecStart=-/usr/bin/python3 tools/wr.py inbox
+Nice=10

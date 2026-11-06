@@ -1,0 +1,11 @@
+[Unit]
+Description=Sweep job boards each morning, before the daily Claude run
+
+[Timer]
+OnCalendar=*-*-* 05:15:00
+RandomizedDelaySec=10m
+# If the machine was off at 5:15, sweep as soon as it's back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

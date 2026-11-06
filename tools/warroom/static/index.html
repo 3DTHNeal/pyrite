@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>War Room</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- Hidden by style.css. Without the server the stylesheet can't load, so only then does this show. -->
+<p class="not-served">This is only the dashboard's template, so it can't load any data. <a href="http://127.0.0.1:8787/">Open the War Room at http://127.0.0.1:8787</a></p>
+<header class="masthead">
+  <div class="brand">
+    <h1>War Room</h1>
+    <p id="demo-tag" class="demo-tag" hidden>Demo: a fictional candidate and made-up companies</p>
+    <p id="sweep" class="sweep" aria-live="polite">Loading…</p>
+  </div>
+  <button id="add-open" class="btn primary" type="button">Add a posting</button>
+</header>
+
+<main>
+  <section id="kpis" class="kpis" aria-label="Key numbers"></section>
+
+  <section class="command">
+    <div class="panel orders">
+      <h2>Today's orders</h2>
+      <div id="briefing" class="briefing"></div>
+      <ol id="orders" class="order-list"></ol>
+    </div>
+    <div class="panel funnel-panel">
+      <h2>Funnel</h2>
+      <div id="funnel" class="funnel"></div>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button role="tab" data-tab="pipeline" aria-selected="true">Pipeline</button>
+    <button role="tab" data-tab="radar" aria-selected="false">Radar</button>
+    <button role="tab" data-tab="archive" aria-selected="false">Closed out</button>
+    <button role="tab" data-tab="sources" aria-selected="false">Sources</button>
+  </nav>
+
+  <section id="view-pipeline" class="view"><div id="board" class="board"></div></section>
+
+  <section id="view-radar" class="view" hidden>
+    <div class="filters">
+      <input id="radar-search" type="search" placeholder="Search company or title" aria-label="Search postings">
+      <select id="radar-track" aria-label="Filter by track"></select>
+      <select id="radar-place" aria-label="Filter by location">
+        <option value="">Any location</option>
+        <option value="local">Local</option>
+        <option value="remote">Remote</option>
+        <option value="unknown">Unclear</option>
+      </select>
+      <select id="radar-show" aria-label="Filter by freshness">
+        <option value="">All listings</option>
+        <option value="new">New only</option>
+        <option value="clean">Never reposted</option>
+        <option value="no-ghost">Hide possible ghosts</option>
+      </select>
+      <select id="radar-sort" aria-label="Sort postings">
+        <option value="priority">Sort by priority</option>
+        <option value="newest">Sort by newest</option>
+        <option value="score">Sort by score</option>
+      </select>
+      <span id="radar-count" class="muted"></span>
+    </div>
+    <p class="muted radar-note">Priority is the score, plus points for a recent posting, minus a penalty for each repost. Repost counts begin with the first sweep.</p>
+    <div class="table-wrap"><table id="radar" class="grid"></table></div>
+  </section>
+
+  <section id="view-archive" class="view" hidden>
+    <div class="table-wrap"><table id="archive" class="grid"></table></div>
+  </section>
+
+  <section id="view-sources" class="view" hidden>
+    <div class="panel manual">
+      <h2>Check these by hand</h2>
+      <p class="muted">These have no public feed, so the sweep can't see them.</p>
+      <ul id="manual-list" class="manual-list"></ul>
+    </div>
+    <p id="source-summary" class="muted"></p>
+    <div class="table-wrap"><table id="sources" class="grid"></table></div>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden aria-label="Job details" tabindex="-1"></aside>
+<div id="scrim" class="scrim" hidden></div>
+
+<dialog id="add-dialog" class="dialog">
+  <h2>Add a posting</h2>
+  <p class="muted">For anything the watchlist misses, such as a LinkedIn or referral lead. It goes to the front of the next run. Paste the description so the resume can be tailored to it.</p>
+  <label>Company <input id="add-company" required></label>
+  <label>Title <input id="add-title" required></label>
+  <label>Link <input id="add-url" type="url" placeholder="https://"></label>
+  <label>Location <input id="add-location"></label>
+  <label>Description <textarea id="add-description" rows="8"></textarea></label>
+  <p id="add-error" class="error" role="alert"></p>
+  <div class="row end">
+    <button id="add-cancel" class="btn" type="button">Cancel</button>
+    <button id="add-save" class="btn primary" type="button">Add</button>
+  </div>
+</dialog>
+<script src="/static/app.js"></script>
+</body>
+</html>

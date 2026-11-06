@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "war-room-demo",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["tools/wr.py", "demo", "--port", "8788"],
+      "port": 8788
+    }
+  ]
+}

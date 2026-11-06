@@ -1,0 +1,12 @@
+[Unit]
+Description=Job search war room dashboard (localhost only)
+
+[Service]
+# The workspace comes from .warroom-home in this folder, or set Environment=WARROOM_HOME=...
+WorkingDirectory=%h/war-room
+ExecStart=/usr/bin/python3 tools/wr.py serve --port 8787
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

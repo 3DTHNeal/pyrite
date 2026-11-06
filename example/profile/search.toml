@@ -1,0 +1,165 @@
+# What the war room looks for. This is the fictional candidate's search: yours lives in
+# your own workspace. Run `wr discover --fresh` after changing filters so previously
+# rejected postings get another look.
+
+[candidate]
+name = "Alex Rivera"
+
+[location]
+# A posting is "local" if its location matches any of these (case-insensitive).
+local = [
+  'madison', 'sun prairie', 'middleton', 'verona', 'waunakee', 'wisconsin', 'rockford,?\s*(il|illinois)',
+]
+# Also local: the state abbreviation, matched case-sensitively.
+local_exact = [', WI\b', '\bWI, US', '\bUS-WI\b', 'Remote\s*[-–]\s*WI\b']
+accept_remote = true      # US remote roles count
+accept_relocation = false # onsite roles elsewhere are dropped
+
+[run]
+triage_per_day = 20  # postings Claude reads and judges each morning
+tailor_per_day = 5   # resumes written each morning
+min_score = 40       # below this a posting isn't stored at all
+tailor_min_score = 55
+cover_letters = true
+follow_up_days = 7   # nudge this long after applying
+quiet_days = 30      # flag as probably ghosted after this long
+
+# Priority = filter score + age points - repost penalty. It only decides the order you
+# and the daily run see things in. The filter score still decides what's kept and tailored.
+[freshness]
+new_days = 7                 # posted this recently and never reposted counts as New
+age_points = [[3, 30], [7, 20], [14, 10], [30, 0], [90, -10]]  # [up to this many days old, points]
+older_points = -20           # anything older than the last row above
+repost_penalty = 15          # each time the same job came back under a new listing
+redate_penalty = 10          # each time a board moved a listing's posted date forward
+max_penalty = 45
+redate_tolerance_days = 2    # board dates are approximate, so smaller moves aren't counted
+came_back_after_days = 2     # a listing gone for less than this was probably a board hiccup
+# "Possible ghost" means any one of these. It's a prompt to look closer, not proof.
+ghost_age_days = 90
+ghost_repost_count = 2       # reposts and re-dates together
+ghost_age_if_reposted = 45   # a shorter limit once it has been reposted or re-dated
+
+# Roles to pursue. A title must match a track's `title` pattern and not match `exclude_titles`.
+[[track]]
+name = "AI systems"
+title = ['\b(ai|ml|a\.i\.|machine learning|llm|genai|gen ai|agents?|agentic|ai/ml|ml/ai|applied ai|inference)\b', '\bdeveloper (productivity|experience|tools)\b', '\b(engineering|developer) (productivity|acceleration)\b']
+needs_level = true
+
+[[track]]
+name = "Embedded, controls and simulation"
+title = ['\b(embedded|firmware|controls?|control systems?|robotics?|autonomy|simulation|digital twin|sim-to-real|motion|mechatronics|machine software|hil|hardware[- ]in[- ]the[- ]loop)\b']
+needs_level = true
+
+[[track]]
+name = "Engineering leadership"
+title = ['\b(director|head|vp|vice president|senior manager|sr\.? manager)\b.*\b(engineering|software|firmware|embedded|controls|systems|ai|ml)\b', '\b(engineering|software|firmware|embedded|controls|systems)\b.*\b(manager|director|head)\b', '\bmanager,?\s+(of\s+)?(software|firmware|embedded|engineering|controls|ai|ml)\b']
+needs_level = false
+
+[[track]]
+name = "Technical program and product"
+title = ['\btechnical program manager\b', '\btpm\b', '\b(hardware|software|firmware|technical|engineering|systems|ai|robotics)\b.*\b(program|product) manager\b', '\b(program|product) manager\b.*\b(hardware|software|firmware|technical|engineering|systems|ai|robotics)\b', '\bgroup product manager\b']
+needs_level = false
+
+[scoring]
+# needs_level tracks must also have one of these in the title.
+level_top = ['principal', 'staff', 'distinguished', 'architect', 'director', 'head', 'vp', 'vice president', 'manager']
+level_mid = ['senior', 'sr', 'lead']
+# Whole words or phrases, so "intern" doesn't catch "Internal". Use \w* to catch endings.
+exclude_titles = [
+  'interns?', 'internship', 'co-?op', 'apprentice\w*', 'new grad\w*', 'junior', 'associate (engineer|software|product)',
+  'sales', 'account (executive|manager)', 'accounts?', 'accounting', 'marketing', 'recruit\w*', 'talent', 'counsel', 'attorney', 'legal',
+  'finance', 'financial', 'tax', 'payroll', 'people partner', 'hr', 'human resources',
+  'customer success', 'customer support', 'support engineer', 'solutions? (engineer|architect|consultant)',
+  'forward deployed', 'field service', 'service technician', 'technicians?', 'technologist',
+  'mechanical engineer', 'manufacturing engineer', 'process engineer', 'chemist', 'physicist',
+  'research scientist', 'data entry', 'facilities', 'security guard', 'procurement', 'supply chain',
+  'analysts?', 'writer', 'editor', 'designer', 'nurse', 'clinical', 'pharmac\w*', 'retail', 'store', 'merchandis\w*',
+  'gtm', 'go-to-market', 'crm', 'delivery lead', 'cost management', 'capacity', 'field', 'regional', 'analytics',
+  'data scientist', 'reporting', 'deployment manager', 'device development', 'partner\w*', 'alliances', 'enablement',
+  'community', 'developer relations', 'devrel', 'advocate', 'evangelist', 'business development', 'payments?',
+]
+# Points for terms in the posting, each counted once, capped at 40 in total.
+keywords = [
+  ['embedded', 6], ['firmware', 6], ['control (system|software|loop|theory)s?', 6], ['controls', 4],
+  ['simulation', 5], ['sim-to-real', 7], ['digital twin', 6], ['hardware-in-the-loop|\bhil\b', 4],
+  ['calibration', 3], ['pid\b|\bpi control', 4],
+  ['llm|large language model', 5], ['agentic|multi-agent|ai agents?|coding (assistant|agent)s?', 7],
+  ['claude|copilot', 5], ['evaluation|evals\b|benchmark', 3], ['machine learning', 2],
+  ['\bc\+\+', 4], ['python', 3], ['ci/cd|continuous (delivery|integration)', 2],
+  ['robot', 4], ['motion control', 5], ['actuator|motor|sensor', 3], ['hardware', 3],
+  ['cross-functional', 1], ['manag\w+ (a |the )?(team|engineers)', 2], ['technical (leadership|direction|strategy)', 2],
+]
+# Flagged on the card and docked points. Not grounds to drop: you decide.
+flags = [
+  ['Clearance or citizenship', 'security clearance|\bts/sci\b|top secret|active clearance|must be (a )?u\.?s\.? citizen', 8],
+  ['PhD required', 'ph\.?d\.?\s+(is\s+)?required|requires? a ph\.?d', 10],
+  ['Relocation expected', 'must (relocate|be willing to relocate)|relocation (is )?required', 10],
+]
+
+# What the fact checker blocks in a resume or cover letter.
+# These restate the "Do not use" and "Unsupported" sections of facts.md.
+[guard]
+forbidden = ['Bluebird', 'Falconer', '\bhive\b', 'SkyLift']
+# Blocked unless the same sentence plainly disclaims it ("I have not...").
+unsupported = [
+  'ISO 26262', 'safety[- ]certifi\w+',
+  '(replay|reproduc)\w*[^.]{0,40}field failures',
+  '\d+(\.\d+)?\s*%[^.]{0,60}(uptime|field defect)',
+  '(uptime|field defect)[^.]{0,60}\d+(\.\d+)?\s*%',
+]
+disclaimers = ['\bnot\b', '\bnever\b', '\bno\b', "n't\b", '\bwithout\b', '\byet to\b']
+# Sources of truth. Numbers, job headings and specialist terms must appear in these.
+approved_sources = [
+  'profile/facts.md',
+  'profile/approved-terms.txt',
+  'applications/2026-11-acme-principal-robotics-software-engineer/resume.md',
+  'applications/2026-11-acme-principal-robotics-software-engineer/cover-letter.md',
+]
+heading_source = 'applications/2026-11-acme-principal-robotics-software-engineer/resume.md'
+max_resume_pages = 2
+max_letter_pages = 1
+# Capitalized words the checker shouldn't question, such as your own region.
+ordinary_words = ['wisconsin', 'madison']
+# Warns, without blocking, when something you always want on a resume is missing.
+expected_on_resume = [{ text = "University of Wisconsin", label = "Degree" }]
+
+[workday]
+# Searched on every Workday site. Results still go through the filters above.
+queries = ['principal engineer', 'firmware embedded', 'software engineering manager']
+max_pages = 2
+
+[dashboard]
+# Extra names the dashboard answers to besides localhost, such as a private VPN name.
+# Never add a public name, because the dashboard has no login of its own.
+allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']
+# Extra reminders shown on a draft that's ready to send.
+before_send = ["Check that anything you cite from a past employer is yours to share."]
+
+[inbox]
+# How far back `wr inbox` reads mail. Only mail since you applied can match.
+lookback_days = 14
+
+# Mail from a domain matching the company's name is matched already. List employers
+# here only when their mail comes from some other domain.
+[inbox.domains]
+"Hooli Autonomy" = ["hooli-mail.example"]
+
+# Employers worth watching with no public feed. The dashboard's Sources tab lists these as a reminder.
+[[manual_check]]
+name = "LinkedIn"
+url = "https://www.linkedin.com/jobs/"
+why = "Its terms forbid automated collection, so this stays manual"
+
+# Company watchlist, checked with `wr sources`. Add any company whose careers page is on one of these:
+#   Greenhouse boards.greenhouse.io/<board>  Lever jobs.lever.co/<board>
+#   Ashby jobs.ashbyhq.com/<board>           Workday <tenant>.<wdN>.myworkdayjobs.com/<site>
+[watch.greenhouse]
+anthropic = "Anthropic"
+
+[watch.lever]
+
+[watch.ashby]
+
+[watch.workday]
+# acme = { name = "Acme", wd = "wd1", site = "External" }

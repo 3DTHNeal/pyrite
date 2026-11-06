@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Private data never lives in this repository. These patterns are a second line of
+# defense: tools/check_public.py is the first, and it also reads the git history.
+/profile/
+/applications/
+/archive/
+/data/
+/.warroom-home
+*.db
+*.db-shm
+*.db-wal
+imap.env
+
+# The demo's database is rebuilt by `wr demo`.
+/example/data/
+
+# Word's lock files
+~$*

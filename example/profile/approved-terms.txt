@@ -1,0 +1,7 @@
+# True of the candidate, but not named elsewhere in the fact bank. One per line.
+CAN
+RTOS
+FreeRTOS
+ROS
+Git
+GitHub
