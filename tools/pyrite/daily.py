@@ -206,3 +206,47 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
     conn.execute("INSERT INTO briefings (ts, body) VALUES (?, ?)", (now(), text))
     conn.commit()
     return text
+
+
+BATCH_LIMIT = 1000  # a batch takes everything that's waiting, not the daily share
+
+
+def tailor_batch(conn, cfg: dict, report=lambda text: None, claude: str | None = None) -> str:
+    """Write every draft waiting under Being tailored, stretch jobs included, and say how it went.
+
+    The Tailor these now button. It judges nothing and leaves no briefing: the drafts land as ready
+    or needs_fix like any other, and the summary returned is what the dashboard shows beside the button.
+    """
+    claude = claude or find_claude()
+    if not claude:
+        raise ClaudeFailed("Claude Code wasn't found on this PC.")
+    deadline = time.monotonic() + TIME_LIMIT_MINUTES * 60
+    found = queue(conn, cfg, limit=BATCH_LIMIT)
+    drafts = found["to_tailor"]
+    stuck = len(found["stuck"])
+    skipped = f" {stuck} stuck draft{'s' if stuck != 1 else ''} left alone: use Tailor this one first to retry one." if stuck else ""
+    if not drafts:
+        return "Nothing is waiting to be tailored." + skipped
+    ready, blocked, left = [], [], 0
+    for index, job in enumerate(drafts, start=1):
+        if time.monotonic() > deadline:
+            left += 1
+            continue
+        name = f"{job['company']} ({job['title']})"
+        report(f"Tailoring {index} of {len(drafts)}: {job['company']}")
+        try:
+            done = tailor(conn, cfg, job["id"], claude, deadline)
+        except NotSignedIn:
+            raise
+        except ClaudeFailed:
+            done = False
+        if done:
+            ready.append(name)
+        elif get_job(conn, job["id"])["status"] == "needs_fix":
+            blocked.append(name)
+    said = f"Tailored {len(drafts) - left} of {len(drafts)} waiting draft{'s' if len(drafts) != 1 else ''}: {len(ready)} ready"
+    if blocked:
+        said += f", {len(blocked)} blocked by the assay ({', '.join(blocked)})"
+    if left:
+        said += f", {left} not reached before the time limit"
+    return said + "." + skipped

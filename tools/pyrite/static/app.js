@@ -122,7 +122,7 @@ function renderFunnel() {
 // ---- Pipeline ----
 
 const COLUMNS = [
-  { title: "Being tailored", statuses: ["shortlisted", "needs_fix"], hint: "Claude writes these on the next run" },
+  { title: "Being tailored", statuses: ["shortlisted", "needs_fix"], hint: "Claude writes these on the next run, or now with the button", batch: true },
   { title: "Nuggets", statuses: ["ready"], hint: "Read, then apply on the company's site" },
   { title: "Applied", statuses: ["applied"], hint: "Waiting to hear" },
   { title: "Heard back", statuses: ["responded"] },
@@ -168,9 +168,15 @@ function cardMeta(job) {
 function renderBoard() {
   fill($("board"), COLUMNS.map((col) => {
     const jobs = state.jobs.filter((j) => col.statuses.includes(j.status));
+    const task = (state.tasks || {}).tailor;
+    const busy = Boolean(task && task.state === "running");
     return h("div", { class: "column" },
       h("h3", {}, col.title, h("span", {}, jobs.length)),
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
+      col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
+        id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo,
+        title: "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
+        onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
       h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id) },
         h("span", { class: "co" }, job.company), h("span", { class: "ti" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
   }));
@@ -673,6 +679,8 @@ async function loadFacts() {
 const RUNS = {
   sweep: { button: "run-sweep", idle: "Pan now", busy: "Panning…", name: "Pan" },
   claude: { button: "run-claude", idle: "Run Claude now", busy: "Claude is working…", name: "Claude run" },
+  // Its button sits in the Being tailored column, so renderBoard draws it and renderRuns only reports on it.
+  tailor: { button: "run-tailor", idle: "Tailor these now", busy: "Tailoring…", name: "Tailoring batch" },
 };
 const RUN_RESULT_SHOWN_FOR = 30 * 60e3;
 let runWatch = null;
@@ -686,8 +694,11 @@ function renderRuns() {
     const task = tasks[kind];
     const busy = Boolean(task && task.state === "running");
     running = running || busy;
-    $(run.button).disabled = busy;
-    $(run.button).textContent = busy ? run.busy : run.idle;
+    const button = $(run.button);
+    if (button) {
+      button.disabled = busy;
+      button.textContent = busy ? run.busy : run.idle;
+    }
     if (!task) continue;
     const ended = task.finished_at || task.started_at;
     if (busy) lines.push(h("span", {}, `${run.name}, started ${ago(task.started_at)}: ${task.detail}`));
@@ -703,8 +714,11 @@ function renderRuns() {
 }
 
 async function startRun(kind) {
-  const question = "Have Claude judge the new postings and tailor the best ones now?\n\nIt can take a while and uses your Claude plan. Each draft still has to pass the assay.";
-  if (kind === "claude" && !window.confirm(question)) return;
+  const questions = {
+    claude: "Have Claude judge the new postings and tailor the best ones now?\n\nIt can take a while and uses your Claude plan. Each draft still has to pass the assay.",
+    tailor: "Have Claude write every draft under Being tailored now, stretch jobs included?\n\nIt uses your Claude plan. Each draft still has to pass the assay.",
+  };
+  if (questions[kind] && !window.confirm(questions[kind])) return;
   runError = "";
   try {
     await api("/api/run", { kind });

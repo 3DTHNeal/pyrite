@@ -2665,6 +2665,37 @@ class RunsYouStart(Base):
         self.assertEqual(self.state(tasks.SWEEP)["state"], "failed")
         tasks.begin(self.conn, tasks.SWEEP)
 
+    def test_a_tailoring_batch_writes_the_waiting_drafts_and_says_how_it_went(self):
+        with mock.patch.object(daily, "tailor_batch", return_value="Tailored 2 of 2 waiting drafts: 2 ready.") as batch:
+            task = tasks.begin(self.conn, tasks.TAILOR)
+            self.assertEqual(self.state(tasks.TAILOR)["state"], "running")
+            self.assertTrue(tasks.run(self.conn, CFG, task))
+        batch.assert_called_once()
+        self.assertEqual(self.state(tasks.TAILOR)["detail"], "Tailored 2 of 2 waiting drafts: 2 ready.")
+
+    def test_the_batch_takes_every_waiting_draft_including_stretch(self):
+        good = self.add(source_id="good", status="shortlisted", fit="good", score=70, title="Good one")
+        stretch = self.add(source_id="stretch", status="shortlisted", fit="stretch", score=70, title="Stretch one")
+        self.add(source_id="low", status="shortlisted", fit="good", score=10, title="Below the line")
+        self.add(source_id="ready", status="ready", fit="good", score=70, title="Already written")
+        self.conn.commit()
+        tailored = []
+        with mock.patch.object(daily, "tailor", side_effect=lambda conn, cfg, job_id, claude, deadline: tailored.append(job_id) or True), \
+                mock.patch.object(daily, "find_claude", return_value="claude"):
+            said = daily.tailor_batch(self.conn, CFG)
+        self.assertEqual(sorted(tailored), sorted([good, stretch]))
+        self.assertEqual(said, "Tailored 2 of 2 waiting drafts: 2 ready.")
+
+    def test_a_batch_and_a_claude_run_never_write_drafts_at_the_same_time(self):
+        tasks.begin(self.conn, tasks.CLAUDE)
+        with self.assertRaisesRegex(ValueError, "already going"):
+            tasks.begin(self.conn, tasks.TAILOR)
+        self.conn.execute("UPDATE tasks SET finished_at = updated_at, ok = 1")
+        tasks.begin(self.conn, tasks.TAILOR)
+        with self.assertRaisesRegex(ValueError, "already going"):
+            tasks.begin(self.conn, tasks.CLAUDE)
+        tasks.begin(self.conn, tasks.SWEEP)  # A pan only reads the boards, so it can run alongside.
+
     def test_a_sweep_started_by_the_timer_blocks_the_button(self):
         self.conn.execute("INSERT INTO runs (started_at) VALUES (?)", (store.now(),))
         with self.assertRaisesRegex(ValueError, "already going"):

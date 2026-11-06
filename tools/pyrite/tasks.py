@@ -1,7 +1,8 @@
-"""Runs you start yourself, from the dashboard or the command line: a sweep, or the Claude run.
+"""Runs you start yourself, from the dashboard or the command line: a sweep, the Claude run, or a tailoring batch.
 
 Each runs in its own process, one of each kind at a time, and reports its progress through the
-`tasks` table so the dashboard can show it.
+`tasks` table so the dashboard can show it. The Claude run and the tailoring batch both write
+drafts, so only one of those two goes at a time.
 """
 from datetime import datetime, timezone
 
@@ -9,10 +10,11 @@ from . import claude_code, discover, inbox
 from .claude_code import find_claude, sign_in_help
 from .store import IS_EXAMPLE, ROOT, now
 
-SWEEP, CLAUDE = "sweep", "claude"
-LABELS = {SWEEP: "pan", CLAUDE: "Claude run"}
+SWEEP, CLAUDE, TAILOR = "sweep", "claude", "tailor"
+LABELS = {SWEEP: "pan", CLAUDE: "Claude run", TAILOR: "tailoring batch"}
+WRITERS = (CLAUDE, TAILOR)  # both write drafts, so they take turns
 # With no word from a run for this long it must have died, for instance when the PC went to sleep or restarted.
-STALE_MINUTES = {SWEEP: 60, CLAUDE: 25}
+STALE_MINUTES = {SWEEP: 60, CLAUDE: 25, TAILOR: 25}
 DIED = "The run stopped without finishing."
 
 
@@ -47,9 +49,16 @@ def refusal(conn, kind: str) -> str | None:
     if IS_EXAMPLE:
         if kind == SWEEP:
             return "The demo doesn't read real job boards. In your own workspace, this pans them and checks your mail."
+        if kind == TAILOR:
+            return "The demo doesn't run Claude. In your own workspace, this writes every draft waiting under Being tailored."
         return "The demo doesn't run Claude. In your own workspace, this judges new postings and tailors resumes."
-    if latest(conn).get(kind, {}).get("state") == "running" or (kind == SWEEP and _scheduled_sweep_running(conn)):
+    running = {name for name, run in latest(conn).items() if run["state"] == "running"}
+    if kind in running or (kind == SWEEP and _scheduled_sweep_running(conn)):
         return f"A {LABELS[kind]} is already going."
+    if kind in WRITERS:
+        for other in WRITERS:
+            if other != kind and other in running:
+                return f"A {LABELS[other]} is already going, and both write drafts, so this waits for it."
     return None
 
 
@@ -86,7 +95,7 @@ def start(conn, kind: str) -> None:
     problem = refusal(conn, kind)
     if problem:
         raise ValueError(problem)
-    if kind == CLAUDE:
+    if kind in WRITERS:
         claude = find_claude()
         if not claude:
             raise ValueError("Claude Code wasn't found on this PC, so the run can't start.")
@@ -128,7 +137,8 @@ def run(conn, cfg: dict, task_id: int) -> bool:
         else:
             from . import daily  # Here, because daily needs cli and cli offers this module's commands.
 
-            said = daily.run(conn, cfg, lambda text: progress(conn, task_id, text))
+            work = daily.tailor_batch if kind == TAILOR else daily.run
+            said = work(conn, cfg, lambda text: progress(conn, task_id, text))
     except Exception as err:  # Anything uncaught would leave the dashboard saying "running" until it went stale.
         conn.rollback()
         _finish(conn, task_id, False, f"{err}" if str(err) else type(err).__name__)

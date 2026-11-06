@@ -96,7 +96,9 @@ Two buttons at the top start a run without waiting for the schedule:
 - **Pan now** reads the job boards and checks mail, as the morning pan does. It uses no AI.
 - **Run Claude now** judges the new postings and tailors the best, as the daily run does. It uses your Claude plan, so it asks first.
 
-Each runs in the background, shows its progress beside the buttons, and refuses to start while one of its kind is already going. The demo starts neither.
+A third, **Tailor these now**, sits in the **Being tailored** column of the Claims board. It has Claude write every draft waiting there, stretch jobs included, without judging new postings and without the daily run's limit, and its result shows beside the buttons at the top. It uses your Claude plan, so it asks first. A draft that has used up its fix attempts is left alone; **Tailor this one first** on that job gives it another go.
+
+Each runs in the background, shows its progress beside the buttons, and refuses to start while one of its kind is already going. The Claude run and the tailoring batch also refuse to start while the other is going, since both write drafts. The demo starts none of them.
 
 ## The schedule
 
