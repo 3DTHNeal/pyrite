@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from . import refresh
 from . import score as scoring
 from .discover import last_full_sweep
 from .store import (
@@ -119,10 +120,12 @@ def build_state(conn, cfg) -> dict:
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
     jobs = [_enrich(job_dict(r), cfg, today) for r in rows]
     replies = possible_replies(conn)
+    refreshes = refresh.states(conn)
     for job in jobs:
         job["possible_reply"] = replies.get(job["id"])
+        job["refresh"] = refreshes.get(job["id"])
 
-    applied = [j for j in jobs if j["applied_at"]]
+    applied =[j for j in jobs if j["applied_at"]]
     heard = [j for j in applied if j["response_at"]]
     days_to_reply = [
         (datetime.fromisoformat(j["response_at"]) - datetime.fromisoformat(j["applied_at"])).days
@@ -172,7 +175,9 @@ def build_state(conn, cfg) -> dict:
 def job_detail(conn, job_id: int, cfg: dict) -> dict:
     job = _enrich(job_dict(get_job(conn, job_id), include_description=True), cfg, date.today().isoformat())
     job["possible_reply"] = possible_replies(conn).get(job_id)
-    job["events"] = [dict(r) for r in conn.execute(
+    job["refresh"] = refresh.states(conn).get(job_id)
+    job["can_refresh"] = job["status"] in refresh.REFRESHABLE and bool(job["app_folder"])
+    job["events"] =[dict(r) for r in conn.execute(
         "SELECT ts, kind, detail FROM events WHERE job_id = ? ORDER BY id DESC", (job_id,)
     )]
     job["notes_md"] = ""
@@ -199,6 +204,8 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         conn.execute("UPDATE jobs SET priority = 1 WHERE id = ?", (job_id,))
         if job["status"] in ("new", "passed", "closed"):
             set_status(conn, job_id, "shortlisted", "You asked for this one next", follow_up)
+    elif action == "refresh_resume":
+        refresh.start(conn, job_id)
     elif action == "reopen":
         target = "applied" if job["applied_at"] else "ready" if job["ready_at"] else "shortlisted"
         set_status(conn, job_id, target, "Reopened", follow_up)

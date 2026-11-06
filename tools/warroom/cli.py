@@ -134,6 +134,17 @@ def cmd_triage(args):
     print(f"{args.id} {job['company']} - {job['title']}: {args.fit}")
 
 
+def write_posting(folder: Path, job, overwrite: bool = True) -> None:
+    path = folder / "posting.md"
+    if overwrite or not path.exists():
+        path.write_text(
+            f"# {job['company']}: {job['title']}\n\n"
+            f"- **Link:** {job['url']}\n- **Location:** {job['location']}\n- **Saved:** {date.today()}\n\n"
+            f"{job['description']}\n",
+            encoding="utf-8",
+        )
+
+
 def cmd_folder(args):
     """Create the application folder for a job and save a copy of the posting, since postings vanish."""
     conn = connect()
@@ -149,12 +160,7 @@ def cmd_folder(args):
         folder = ROOT / "applications" / f"{base}-{suffix}"
         suffix += 1
     folder.mkdir(parents=True)
-    (folder / "posting.md").write_text(
-        f"# {job['company']}: {job['title']}\n\n"
-        f"- **Link:** {job['url']}\n- **Location:** {job['location']}\n- **Saved:** {date.today()}\n\n"
-        f"{job['description']}\n",
-        encoding="utf-8",
-    )
+    write_posting(folder, job)
     rel = folder.relative_to(ROOT).as_posix()
     conn.execute("UPDATE jobs SET app_folder = ? WHERE id = ?", (rel, args.id))
     conn.commit()
@@ -177,10 +183,16 @@ def _collect_files(folder: Path) -> list[str]:
 def cmd_finish(args):
     """Build the documents, run the fact checker, and only then mark a job ready."""
     conn = connect()
-    cfg = load_config()
-    job = get_job(conn, args.id)
-    if not job["app_folder"]:
+    if not get_job(conn, args.id)["app_folder"]:
         sys.exit("No application folder. Run `wr folder <id>` first.")
+    report = finish_job(conn, load_config(), args.id)
+    _print_json(report)
+    if not report["ok"]:
+        sys.exit(1)
+
+
+def finish_job(conn, cfg: dict, job_id: int) -> dict:
+    job = get_job(conn, job_id)
     folder = ROOT / job["app_folder"]
 
     # Check the text first: nothing confidential should be built into a .docx, even briefly.
@@ -201,16 +213,31 @@ def cmd_finish(args):
 
     conn.execute(
         "UPDATE jobs SET check_result = ?, files = ? WHERE id = ?",
-        (json.dumps(report), json.dumps(_collect_files(folder)), args.id),
+        (json.dumps(report), json.dumps(_collect_files(folder)), job_id),
     )
     if report["ok"]:
         if job["status"] in ("new", "shortlisted", "needs_fix"):
-            set_status(conn, args.id, "ready", "Tailored and passed the fact checker")
+            set_status(conn, job_id, "ready", "Tailored and passed the fact checker")
     elif job["status"] in ("new", "shortlisted", "needs_fix"):
-        set_status(conn, args.id, "needs_fix", "; ".join(report["errors"])[:500])
+        set_status(conn, job_id, "needs_fix", "; ".join(report["errors"])[:500])
     conn.commit()
-    _print_json(report)
-    if not report["ok"]:
+    return report
+
+
+def cmd_refresh(args):
+    """Have Claude rewrite a draft resume. The dashboard's button runs this in the background with --worker."""
+    from . import refresh
+
+    conn = connect()
+    if not args.worker:
+        try:
+            refresh.begin(conn, args.id)
+        except ValueError as err:
+            sys.exit(str(err))
+    ok = refresh.run(conn, load_config(), args.id)
+    latest = refresh.states(conn)[args.id]
+    print(latest["detail"])
+    if not ok:
         sys.exit(1)
 
 
@@ -362,6 +389,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("finish", help="build documents, run the fact checker, mark ready")
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_finish)
+
+    p = sub.add_parser("refresh", help="have Claude rewrite a draft resume, kept only if it passes the fact checker")
+    p.add_argument("id", type=int)
+    p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_refresh)
 
     p = sub.add_parser("check", help="run the fact checker on any folder")
     p.add_argument("folder")

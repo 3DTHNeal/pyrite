@@ -4,6 +4,7 @@
 const $ = (id) => document.getElementById(id);
 let state = null;
 let openJobId = null;
+let refreshWatch = null;
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -142,6 +143,7 @@ function cardMeta(job) {
   if (job.priority) meta.push(pill("info", "Your pick", "You asked for this one next"));
   if (job.score) meta.push(h("span", { class: "score", title: "Filter score, out of 100" }, `Score ${job.score}`));
   if (job.fit) meta.push(pill(FIT_TONE[job.fit] || "muted", job.fit === "skip" ? "Skip" : `${capitalized(job.fit)} fit`, job.fit_reason));
+  if (job.refresh && job.refresh.state === "running") meta.push(pill("info", "Refreshing resume"));
   if (job.status === "needs_fix") meta.push(pill("bad", "Failed checks"));
   if (job.posting_closed_at) meta.push(pill("bad", "Posting down"));
   if (job.follow_up_due) meta.push(pill("warn", job.next_action === "Follow up" ? "Follow up" : "Next step due", job.next_action));
@@ -335,6 +337,54 @@ function checkBlock(job) {
   return blocks;
 }
 
+const refreshing = (job) => Boolean(job.refresh && job.refresh.state === "running");
+
+async function startRefresh(job) {
+  const question = "Have Claude rewrite this resume from the posting and your fact bank?\n\nIt takes a few minutes and uses your Claude plan. The new version only replaces this one if it passes the fact checker.";
+  if (!window.confirm(question)) return;
+  try {
+    await act(job.id, { action: "refresh_resume" });
+  } catch (err) {
+    fill($("refresh-error"), h("div", { class: "callout bad" }, h("strong", {}, "Couldn't refresh this resume"), h("p", {}, err.message)));
+  }
+}
+
+function refreshButton(job) {
+  if (!job.can_refresh) return null;
+  return h("button", { class: "btn", type: "button", disabled: refreshing(job), onclick: () => startRefresh(job) },
+    refreshing(job) ? "Refreshing resume…" : "Refresh resume");
+}
+
+function refreshBlock(job) {
+  const result = job.refresh;
+  if (!result) return null;
+  if (result.state === "running") {
+    return h("div", { class: "callout" }, h("strong", {}, "Claude is rewriting this resume"),
+      h("p", {}, "This usually takes a few minutes, and you can close this panel meanwhile. The current version stays until the new one passes the fact checker."));
+  }
+  if (result.state === "failed") {
+    return h("div", { class: "callout bad" }, h("strong", {}, `Last refresh failed, ${ago(result.at)}`), h("p", {}, result.detail));
+  }
+  return h("div", { class: "callout" }, h("strong", {}, `Resume refreshed ${ago(result.at)}`), h("p", {}, result.detail),
+    h("p", { class: "muted" }, "Read it through before you send it. The version before this one is in resume.previous.md in its folder."));
+}
+
+// Reopening would wipe anything being typed in the panel, so only do it once the result is in.
+async function watchRefresh(id) {
+  if (openJobId !== id) return;
+  try {
+    const job = await api(`/api/job/${id}`);
+    if (!refreshing(job)) {
+      await refresh();
+      if (openJobId === id) await openJob(id);
+      return;
+    }
+  } catch (err) {
+    // The dashboard may be restarting, so keep waiting.
+  }
+  refreshWatch = setTimeout(() => watchRefresh(id), 5000);
+}
+
 async function openJob(id) {
   let job;
   try {
@@ -343,6 +393,8 @@ async function openJob(id) {
     return;
   }
   openJobId = id;
+  clearTimeout(refreshWatch);
+  if (refreshing(job)) refreshWatch = setTimeout(() => watchRefresh(id), 5000);
   const noteEl = h("input", { placeholder: "Add a note to this update (optional)", "aria-label": "Note for this update", style: "width:100%" });
   const notesEl = h("textarea", { rows: 3, "aria-label": "Your notes" });
   notesEl.value = job.notes || "";
@@ -370,7 +422,10 @@ async function openJob(id) {
     h("div", { class: "row" },
       href ? h("a", { class: "btn", href, target: "_blank", rel: "noopener noreferrer" }, "Open posting") : null,
       pdfs.map((file) => h("a", { class: "btn", href: `/files/${file.split("/").map(encodeURIComponent).join("/")}`, target: "_blank", rel: "noopener" }, file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " "))),
+      refreshButton(job),
     ),
+    h("div", { id: "refresh-error" }),
+    refreshBlock(job),
     job.posting_closed_at ? h("div", { class: "callout bad" }, `This posting came down around ${shortDate(job.posting_closed_at)}.`) : null,
     job.ghost_risk ? h("div", { class: "callout bad" }, h("strong", {}, "Possible ghost job"),
       h("p", {}, `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof: some companies keep real openings up all year. Consider asking a recruiter whether it's actively being filled.`)) : null,

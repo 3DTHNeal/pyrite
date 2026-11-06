@@ -97,6 +97,10 @@ A board's first sweep sets a baseline, so repost counts stay at zero until a lat
 
 `wr finish` won't mark a draft ready unless it passes checks that involve no AI. It blocks confidential terms, unsupported claims, numbers not in the fact bank, changed employers, titles or dates, a changed contact line, outside links and unfilled placeholders, and it enforces the page limits. Resumes are also blocked from naming a specialist term that isn't in your approved sources. If a blocked term is true of you, add it to `approved-terms.txt`. It can't catch a true fact twisted into a false impression, so reading each draft still matters.
 
+## Refreshing a resume
+
+**Refresh resume** on a draft you haven't sent has Claude Code rewrite it for that posting, in the background. The fact checker and the build run afterward, and any errors go back to Claude, up to three tries. If it still fails, the earlier draft and its documents are restored. While it runs, the previous draft is kept as `resume.previous.md` in the job's folder. It needs Claude Code installed and signed in. The demo refuses this, since a real run would spend your usage and overwrite the sample draft.
+
 ## Reply detection
 
 `wr inbox` runs after each morning sweep. It reads the sender, subject and date of recent Gmail messages and compares them with every active job you've applied to. A match appears as **Possible reply** on the job's card, in the to-do list and on its timeline. Message bodies are never downloaded.

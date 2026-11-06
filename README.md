@@ -74,6 +74,8 @@ The split is deliberate. Everything that can be a rule is a rule, which keeps it
 
 **The AI has a narrow lane.** The daily run can write only inside the one application folder it's given, and it changes job state only through the `wr` command. It can't apply, send mail or fetch a URL. The [rules](tools/warroom/daily_run.md) are plain to read, and the fact checker doesn't depend on the model following them.
 
+**Rewriting on request doesn't widen that lane.** The dashboard's Refresh resume button starts a Claude Code run in [`refresh.py`](tools/warroom/refresh.py). That run reads a posting from the internet, so it gets no shell and no web access, and it can edit only that draft's resume and notes. It can't run the fact checker either. The checker runs after it stops, and if the rewrite still fails after three tries, the earlier draft goes back.
+
 **Failing loudly beats going quiet.** A dead job board or a broken mail login shows up as failing on the dashboard rather than looking like a quiet day. An empty feed never marks every job closed, because that's more likely an outage than every opening filling at once.
 
 **Reply detection can't corrupt the numbers.** [`inbox.py`](tools/warroom/inbox.py) opens the mailbox read-only and requests only sender, subject and date, so message bodies never reach this machine's database. A match adds a note to a job's timeline and never changes its status. Sender names can be forged, so lookalikes such as `acme.evil.example` are refused, and the tests use a fake server that raises an error on any write.

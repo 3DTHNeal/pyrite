@@ -17,5 +17,8 @@ imap.env
 # The demo's database is rebuilt by `wr demo`.
 /example/data/
 
+# The draft from before a dashboard refresh
+resume.previous.md
+
 # Word's lock files
 ~$*
