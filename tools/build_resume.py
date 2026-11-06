@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -27,12 +28,15 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-from warroom.checks import _pages
+from pyrite.checks import _pages
 
 FONT = "Arial"  # LibreOffice renders this with the metric-compatible Liberation Sans
 NAVY = RGBColor(0x1F, 0x3A, 0x5F)
 BODY_PT = 10
-CONTENT_WIDTH = Inches(7.1)
+SIDE_MARGIN = 0.7
+# Width and height in inches.
+PAPER = {"letter": (8.5, 11), "a4": (8.27, 11.69)}
+EXPORT_TIMEOUT_SECONDS = 120
 
 
 def style_run(run, size=BODY_PT, bold=False, italic=False, color=None):
@@ -70,16 +74,18 @@ def bottom_rule(par):
     par._p.get_or_add_pPr().append(borders)
 
 
-def right_tab(par):
-    par.paragraph_format.tab_stops.add_tab_stop(CONTENT_WIDTH, WD_TAB_ALIGNMENT.RIGHT)
+def right_tab(par, width):
+    par.paragraph_format.tab_stops.add_tab_stop(width, WD_TAB_ALIGNMENT.RIGHT)
 
 
-def build_docx(source: Path, out: Path, letter: bool = False, author: str = ""):
+def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", paper: str = "letter"):
     paragraph_gap = 9 if letter else 1
     doc = Document()
     sec = doc.sections[0]
-    sec.page_width, sec.page_height = Inches(8.5), Inches(11)
-    sec.left_margin = sec.right_margin = Inches(0.7)
+    page_width, page_height = PAPER[paper]
+    sec.page_width, sec.page_height = Inches(page_width), Inches(page_height)
+    sec.left_margin = sec.right_margin = Inches(SIDE_MARGIN)
+    content_width = Inches(page_width - 2 * SIDE_MARGIN)
     sec.top_margin = Inches(0.55)
     sec.bottom_margin = Inches(0.5)
 
@@ -96,14 +102,14 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = ""):
             role, place, *dates = [p.strip() for p in line[5:].split("|")]
             spacing(par, before=3, after=1)
             par.paragraph_format.keep_with_next = True
-            right_tab(par)
+            right_tab(par, content_width)
             style_run(par.add_run(role), bold=True)
             style_run(par.add_run(f" | {place}" + (f"\t{dates[0]}" if dates else "")))
         elif line.startswith("### "):
             company, dates = [p.strip() for p in line[4:].split("|")]
             spacing(par, before=4, after=0)
             par.paragraph_format.keep_with_next = True
-            right_tab(par)
+            right_tab(par, content_width)
             style_run(par.add_run(f"{company}\t{dates}"), bold=True)
         elif line.startswith("## "):
             spacing(par, before=7, after=2)
@@ -139,12 +145,13 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = ""):
 
 
 def export_pdf(docx: Path):
-    """Use LibreOffice if it's installed, otherwise Word."""
+    """Use LibreOffice if it's installed, otherwise Word. Either is stopped if it hangs, as Word does behind a dialog nobody can see."""
     if shutil.which("soffice"):
         subprocess.run(
             ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(docx.parent), str(docx)],
             check=True,
             stdout=subprocess.DEVNULL,
+            timeout=EXPORT_TIMEOUT_SECONDS,
         )
         return
     # 17 is Word's PDF format, and 0 closes without saving. Paths arrive as environment variables to avoid quoting them.
@@ -158,7 +165,8 @@ def export_pdf(docx: Path):
     } finally { $word.Quit() }
     """
     env = {**os.environ, "WR_DOCX": str(docx.resolve()), "WR_PDF": str(docx.resolve().with_suffix(".pdf"))}
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True, env=env, stdout=subprocess.DEVNULL)
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True, env=env, stdout=subprocess.DEVNULL,
+                   timeout=EXPORT_TIMEOUT_SECONDS)
 
 
 def main():
@@ -167,11 +175,16 @@ def main():
     ap.add_argument("--name", required=True, help="output file name, without extension")
     ap.add_argument("--letter", action="store_true", help="space plain paragraphs for a cover letter")
     ap.add_argument("--author", default="", help="author recorded in the document's properties")
+    ap.add_argument("--paper", choices=sorted(PAPER), default="letter", help="page size")
     args = ap.parse_args()
 
     out_docx = args.source.parent / f"{args.name}.docx"
-    build_docx(args.source, out_docx, letter=args.letter, author=args.author)
-    export_pdf(out_docx)
+    build_docx(args.source, out_docx, letter=args.letter, author=args.author, paper=args.paper)
+    try:
+        export_pdf(out_docx)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"Making the PDF took over {EXPORT_TIMEOUT_SECONDS // 60} minutes, so it was stopped. "
+                 "If Word did this, open Word once and close any dialog it shows.")
     out_pdf = out_docx.with_suffix(".pdf")
     print(f"{out_pdf} ({_pages(out_pdf) or 'unknown'} pages)")
 

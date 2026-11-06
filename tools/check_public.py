@@ -18,10 +18,13 @@ Findings print the term, so keep this output out of public CI logs: only the bui
 layer runs there. Exit status is 1 if anything is found.
 """
 import argparse
+import functools
 import io
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 import zlib
 from pathlib import Path
@@ -30,14 +33,18 @@ REPO = Path(__file__).resolve().parents[1]
 
 # Private files belong in the workspace. Anything under example/ is fictional and allowed.
 FORBIDDEN_PATH = re.compile(
-    r"^(profile|applications|archive|data)/|(^|/)\.warroom-home$|\.db(-shm|-wal)?$|(^|/)imap\.env$|(^|/)\.env$"
+    r"^(profile|applications|archive|data)/|(^|/)\.pyrite-home$|\.db(-shm|-wal)?$|(^|/)imap\.env$|(^|/)\.env$"
 )
 # Binary files can't be read reliably, so only these places may hold them.
 BINARY_SUFFIXES = {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".xlsx", ".pptx", ".db", ".sqlite"}
 BINARY_ALLOWED = re.compile(r"^(example/applications/|docs/screenshots/)")
 
-PHONE = re.compile(r"(?<![\d.])(?:\(\d{3}\)\s?|\b\d{3}[-.])\d{3}[-.]\d{4}\b")
-FICTIONAL_PHONE = re.compile(r"555")
+# North American numbers, written with dashes, dots or spaces, and anything written with a country code.
+PHONE = re.compile(r"(?<![\d.])(?:\(\d{3}\)\s?|\b\d{3}[-. ])\d{3}[-. ]\d{4}\b")
+INTERNATIONAL_PHONE = re.compile(r"(?<![\w+])\+\d[\d ().-]{7,18}\d\b")
+UNREADABLE_PDF = "PDF whose pages can't be read here, so nothing vouches for them. Install poppler's pdftotext, or pypdf"
+PDF_UTF16_STRING = re.compile(rb"\(\xfe\xff((?:[^()\\]|\\.)*)\)")
+PDF_UTF16_HEX = re.compile(rb"<\s*FEFF([0-9A-Fa-f\s]+)>")
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})")
 PERSONAL_EMAIL_DOMAIN = re.compile(r"^(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|proton|protonmail|aol)\.", re.I)
 TAILNET = re.compile(r"\b[a-z0-9-]+\.(tail[0-9a-f]{4,}|[a-z0-9-]+)\.ts\.net\b", re.I)
@@ -55,7 +62,14 @@ def builtin_findings(text: str) -> list[str]:
     """Personal data recognizable without knowing whose it is."""
     found = []
     for match in PHONE.finditer(text):
-        if not FICTIONAL_PHONE.search(match.group(0)):
+        digits = re.sub(r"\D", "", match.group(0))
+        # 555 as the area code or the exchange marks a number as made up. Elsewhere in a number it means nothing.
+        if "555" not in (digits[:3], digits[3:6]):
+            found.append(f"phone number {match.group(0)}")
+    for match in INTERNATIONAL_PHONE.finditer(text):
+        digits = re.sub(r"\D", "", match.group(0))
+        north_american = len(digits) == 11 and digits.startswith("1")  # Already judged above.
+        if 9 <= len(digits) <= 15 and not north_american:
             found.append(f"phone number {match.group(0)}")
     for match in EMAIL.finditer(text):
         domain = match.group(1)
@@ -106,6 +120,65 @@ def png_metadata(blob: bytes) -> str:
     return "\n".join(parts)
 
 
+@functools.lru_cache(maxsize=1)
+def _pdftotext() -> str | None:
+    """poppler's pdftotext, from PATH or from beside git: Git for Windows ships it, though not on PATH outside Git Bash."""
+    found = shutil.which("pdftotext")
+    if found:
+        return found
+    try:
+        exec_path = Path(subprocess.run(["git", "--exec-path"], capture_output=True, text=True, check=True).stdout.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    candidate = exec_path.parents[1] / "bin" / "pdftotext.exe"
+    return str(candidate) if candidate.exists() else None
+
+
+def pdf_text(blob: bytes) -> str | None:
+    """The words on a PDF's pages, or None if nothing here can read them.
+
+    A PDF stores its text as glyph codes, so inflating its streams finds nothing readable.
+    This needs a real reader: pypdf if it's installed, and otherwise pdftotext.
+    """
+    try:
+        import pypdf
+    except ImportError:
+        pypdf = None
+    if pypdf:
+        try:
+            return "\n".join(page.extract_text() or "" for page in pypdf.PdfReader(io.BytesIO(blob)).pages)
+        except Exception:
+            return None
+    tool = _pdftotext()
+    if not tool:
+        return None
+    with tempfile.TemporaryDirectory() as folder:
+        source = Path(folder) / "blob.pdf"
+        source.write_bytes(blob)
+        try:
+            out = subprocess.run([tool, "-enc", "UTF-8", str(source), "-"], capture_output=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return out.stdout.decode("utf-8", "replace") if out.returncode == 0 else None
+
+
+def pdf_metadata(blob: bytes) -> str:
+    """A PDF's author, title and the like, which Word writes as UTF-16 and a plain read can't see."""
+    parts = []
+    for match in PDF_UTF16_STRING.finditer(blob):
+        raw = re.sub(rb"\\([0-7]{1,3})", lambda m: bytes([int(m.group(1), 8) & 0xFF]), match.group(1))
+        parts.append(re.sub(rb"\\(.)", rb"\1", raw, flags=re.S).decode("utf-16-be", "replace"))
+    for match in PDF_UTF16_HEX.finditer(blob):
+        digits = re.sub(rb"\s", b"", match.group(1))
+        parts.append(bytes.fromhex(digits[:len(digits) // 4 * 4].decode()).decode("utf-16-be", "replace"))
+    return "\n".join(parts)
+
+
+def looks_binary(blob: bytes) -> bool:
+    """The test git itself uses: text has no NUL bytes near its start."""
+    return b"\0" in blob[:8000]
+
+
 def readable_text(path: str, blob: bytes) -> str:
     """The text of a blob, including what's inside documents, since a .docx is a zip and a PDF deflates its streams.
 
@@ -128,6 +201,7 @@ def readable_text(path: str, blob: bytes) -> str:
                 parts.append(zlib.decompress(stream).decode("latin-1"))
             except zlib.error:
                 pass
+        parts.append(pdf_metadata(blob))
     return "\n".join(parts)
 
 
@@ -135,46 +209,71 @@ def scan_blob(path: str, blob: bytes, denylist: list[re.Pattern]) -> list[str]:
     found = []
     if FORBIDDEN_PATH.search(path):
         found.append("private path")
-    if Path(path).suffix.lower() in BINARY_SUFFIXES and not BINARY_ALLOWED.search(path):
+    suffix = Path(path).suffix.lower()
+    # By content as well as by name, so a database or an archive under some other extension doesn't pass as text.
+    if (suffix in BINARY_SUFFIXES or looks_binary(blob)) and not BINARY_ALLOWED.search(path):
         found.append("binary file outside example/ and docs/screenshots/")
     text = readable_text(path, blob)
+    if suffix == ".pdf":
+        pages = pdf_text(blob)
+        if pages is None:
+            found.append(UNREADABLE_PDF)
+        else:
+            # Once as laid out, and once on one line, so a name broken across lines is still found.
+            text += "\n" + pages + "\n" + re.sub(r"\s+", " ", pages)
     # This file and its tests name these patterns in order to catch them.
     if path not in ("tools/check_public.py", "tools/tests/test_check_public.py"):
         found += builtin_findings(text)
+        found += [f"{finding}, in the file's path" for finding in builtin_findings(path)]
     found += denylist_findings(text, denylist)
+    # A folder named after an employer publishes the name as surely as a file that mentions it.
+    found += [f"{finding}, in the file's path" for finding in denylist_findings(path, denylist)]
     return found
+
+
+def ref_findings(names: list[str], denylist: list[re.Pattern]) -> list[str]:
+    """Branch and tag names are published with a push, like everything else."""
+    text = "\n".join(names)
+    return [f"branch or tag name: {finding}" for finding in builtin_findings(text) + denylist_findings(text, denylist)]
 
 
 def _git(*args: str, data: bytes | None = None) -> bytes:
     return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, check=True, input=data).stdout
 
 
-def tree_entries() -> dict[str, str]:
-    """Every (path, blob) ever committed, plus what's staged. Maps blob id to one path it had."""
-    seen: dict[str, str] = {}
+def tree_entries() -> dict[str, set[str]]:
+    """Everything ever committed, plus what's staged. Maps each blob id to every path it has had.
+
+    Every path, because the same content can sit at an allowed path in one commit and a private one in another.
+    """
+    seen: dict[str, set[str]] = {}
     has_commits = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode == 0
     commits = _git("rev-list", "--all").decode().split() if has_commits else []
     for commit in commits:
         for line in _git("ls-tree", "-r", "-z", commit).decode("utf-8", "replace").split("\0"):
             if line:
                 meta, path = line.split("\t", 1)
-                seen.setdefault(meta.split()[2], path)
+                seen.setdefault(meta.split()[2], set()).add(path)
     for line in _git("ls-files", "-s", "-z").decode("utf-8", "replace").split("\0"):
         if line:
             meta, path = line.split("\t", 1)
-            seen.setdefault(meta.split()[1], path)
+            seen.setdefault(meta.split()[1], set()).add(path)
     return seen
 
 
 def scan_repository(denylist: list[re.Pattern]) -> list[str]:
-    problems = []
-    for blob_id, path in sorted(tree_entries().items(), key=lambda item: item[1]):
+    problems = set()
+    for blob_id, paths in tree_entries().items():
         blob = _git("cat-file", "blob", blob_id)
-        problems += [f"{path}: {finding}" for finding in scan_blob(path, blob, denylist)]
-    # Commit messages and identities are published too.
+        for path in paths:
+            problems |= {f"{path}: {finding}" for finding in scan_blob(path, blob, denylist)}
+    problems = sorted(problems)
+    # Commit messages, identities and the names of branches and tags are published too.
     if subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode == 0:
         log = _git("log", "--all", "--format=%h %an <%ae> %cn <%ce>%n%B").decode("utf-8", "replace")
         problems += [f"commit log: {finding}" for finding in builtin_findings(log) + denylist_findings(log, denylist)]
+    refs = _git("for-each-ref", "--format=%(refname)").decode("utf-8", "replace").split()
+    problems += ref_findings(refs, denylist)
     return problems
 
 

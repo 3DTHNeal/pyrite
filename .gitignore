@@ -8,13 +8,13 @@ __pycache__/
 /applications/
 /archive/
 /data/
-/.warroom-home
+/.pyrite-home
 *.db
 *.db-shm
 *.db-wal
 imap.env
 
-# The demo's database is rebuilt by `wr demo`.
+# The demo's database is rebuilt by `pyrite demo`.
 /example/data/
 
 # The draft from before a dashboard refresh
@@ -25,3 +25,7 @@ resume.previous.md
 
 # search.toml from before the last save on the dashboard's Settings tab
 search.previous.toml
+
+# The fact bank and approved terms from before the last save on the dashboard's Facts tab
+facts.previous.md
+approved-terms.previous.txt

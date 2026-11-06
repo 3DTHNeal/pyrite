@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 from .sources import INVISIBLE_TEXT
 from .store import ACTIVE, REPLY_DETECTED, log_event, now
 
-CREDENTIALS_PATH = Path.home() / ".config" / "warroom" / "imap.env"
+CREDENTIALS_PATH = Path.home() / ".config" / "pyrite" / "imap.env"
 SOURCE_KEY = "inbox:imap"
 DEFAULT_HOST = "imap.gmail.com"
 # All Mail, so a reply you read and archived before the morning scan still counts.
@@ -260,6 +260,22 @@ def _select(client, folder: str) -> bool:
     return typ == "OK"
 
 
+def _all_mail_folder(client) -> str | None:
+    """The folder the server flags \\All, whatever it's called. Listing folders reads nothing and changes nothing."""
+    try:
+        typ, rows = client.list()
+    except (imaplib.IMAP4.error, OSError):
+        return None
+    if typ != "OK":
+        return None
+    for row in rows or []:
+        line = row.decode("utf-8", "replace") if isinstance(row, bytes) else str(row)
+        match = re.match(r'\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL)\s+(?P<name>.+)$', line)
+        if match and "\\All" in match.group("flags").split():
+            return match.group("name").strip().strip('"')
+    return None
+
+
 def read_messages(client, since: datetime, own_address: str) -> list[Message]:
     typ, data = client.uid("SEARCH", "SINCE", since.strftime("%d-%b-%Y"))
     if typ != "OK":
@@ -287,9 +303,16 @@ def _read_mailbox(creds: Credentials, jobs: list, cfg: dict, client_factory) -> 
             raise imaplib.IMAP4.error("Login refused.")
         folder = creds.folder or DEFAULT_FOLDER
         if not _select(client, folder):
-            if creds.folder or not _select(client, FALLBACK_FOLDER):
+            if creds.folder:
                 raise imaplib.IMAP4.error(f"Couldn't open the folder {folder}.")
-            folder = FALLBACK_FOLDER
+            # Gmail names All Mail in the account's language, so look for the folder flagged as it.
+            named = _all_mail_folder(client)
+            if named and _select(client, named):
+                folder = named
+            elif _select(client, FALLBACK_FOLDER):
+                folder = FALLBACK_FOLDER
+            else:
+                raise imaplib.IMAP4.error(f"Couldn't open the folder {folder}.")
         if not jobs:
             return [], folder  # Still logged in above, so setup can be tested before the first application.
         days = cfg.get("inbox", {}).get("lookback_days", DEFAULT_LOOKBACK_DAYS)

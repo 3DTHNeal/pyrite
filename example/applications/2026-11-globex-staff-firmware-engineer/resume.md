@@ -2,7 +2,7 @@
 @ Madison, WI · (555) 010-0142 · alex.rivera@example.com · linkedin.com/in/alex-rivera-example
 
 ## Summary
-Staff-level firmware engineer. This draft is deliberately wrong, to show what the fact checker stops. Every problem below is something an AI drafting tool could plausibly write.
+Staff-level firmware engineer. This draft is deliberately wrong, to show what the assay stops. Every problem below is something an AI drafting tool could plausibly write.
 
 ## Core skills
 - **Firmware:** C++, FreeRTOS, CAN, Kubernetes

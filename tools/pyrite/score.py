@@ -10,7 +10,11 @@ FOREIGN = re.compile(
     r"italy|netherlands|amsterdam|sweden|stockholm|switzerland|zurich|poland|warsaw|romania|czech|prague|"
     r"israel|tel aviv|india|bengaluru|bangalore|hyderabad|karnataka|pune|chennai|china|shanghai|beijing|"
     r"shenzhen|taiwan|taipei|hsinchu|japan|tokyo|korea|seoul|singapore|malaysia|penang|kuala lumpur|philippines|"
-    r"vietnam|thailand|indonesia|australia|sydney|melbourne|new zealand|emea|apac|latam|europe|asia)\b",
+    r"vietnam|thailand|indonesia|australia|sydney|melbourne|new zealand|emea|apac|latam|europe|asia|"
+    r"portugal|lisbon|denmark|copenhagen|norway|oslo|finland|helsinki|austria|belgium|brussels|luxembourg|greece|"
+    r"hungary|budapest|bulgaria|serbia|croatia|slovakia|slovenia|ukraine|estonia|latvia|lithuania|scotland|"
+    r"turkey|istanbul|uae|united arab emirates|dubai|saudi arabia|egypt|south africa|nigeria|kenya|chile|"
+    r"costa rica|uruguay|pakistan|bangladesh|sri lanka|hong kong)\b",
     re.I,
 )
 US_MARKER = re.compile(r"\b(united states|u\.s\.a?\.?|usa|us)\b|\bremote\s*[-,:(]?\s*us\b", re.I)
@@ -151,6 +155,12 @@ def classify_location(location: str, workplace: str, cfg: dict) -> str:
 
     is_remote = workplace.lower() == "remote" or bool(REMOTE.search(text))
     if is_remote and loc_cfg.get("accept_remote", True):
+        home, elsewhere = loc_cfg.get("remote_home"), loc_cfg.get("remote_elsewhere")
+        if home is not None or elsewhere is not None:
+            # Your own lists replace the built-in ones, which assume you're in the US.
+            if _any(home or [], text):
+                return "remote"
+            return "out" if _any(elsewhere or [], text) else "remote"
         if US_MARKER.search(text):
             return "remote"
         return "out" if FOREIGN.search(text) or STATE_LIMITED.search(text) else "remote"

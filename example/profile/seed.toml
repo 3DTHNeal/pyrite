@@ -1,4 +1,4 @@
-# Applications made before the war room existed. `wr seed` imports these, and it's safe to re-run.
+# Applications made before Pyrite existed. `pyrite seed` imports these, and it's safe to re-run.
 
 [[application]]
 company = "Acme Robotics"
@@ -6,7 +6,7 @@ title = "Principal Robotics Software Engineer"
 location = "Madison, WI"
 url = "https://careers.acme-robotics.example/jobs/1042"
 folder = "applications/2026-11-acme-principal-robotics-software-engineer"
-note = "Drafted before the war room existed."
+note = "Drafted before Pyrite existed."
 applied_on = "2026-11-02"
 
 [[application]]

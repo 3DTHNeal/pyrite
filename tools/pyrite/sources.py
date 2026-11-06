@@ -8,6 +8,7 @@ light listing, full descriptions are fetched only for postings that pass the fil
 """
 import gzip
 import html
+import http.client
 import json
 import re
 import time
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) job-search-warroom/1.0"
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) job-search-pyrite/1.0"
 TIMEOUT = 60  # Per socket read, so slow but steady downloads still finish.
 COMP = re.compile(
     r"(?:US)?\$\s?\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?\s*(?:-|–|—|to)\s*(?:US)?\$?\s?\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?(?:\s*(?:USD|per year|annually))?"
@@ -123,7 +124,8 @@ def _request(url: str, payload: dict | None = None, retries: int = 3) -> dict | 
         except urllib.error.HTTPError as err:
             if err.code not in (429, 500, 502, 503, 504) or attempt == retries:
                 raise
-        except (urllib.error.URLError, TimeoutError):
+        except (OSError, http.client.HTTPException):
+            # A refused, reset or half-finished connection, not only a failed lookup.
             if attempt == retries:
                 raise
         time.sleep(2 * (attempt + 1))
@@ -269,7 +271,7 @@ def is_workday_closed(spec: dict, path: str) -> bool | None:
         info = _request(f"{api}{path}", retries=1)
     except urllib.error.HTTPError as err:
         return True if err.code in (404, 410) else None
-    except (urllib.error.URLError, TimeoutError, ValueError):
+    except (OSError, http.client.HTTPException, ValueError):
         return None
     return "jobPostingInfo" not in info
 

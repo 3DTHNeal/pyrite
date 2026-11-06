@@ -25,7 +25,7 @@ Lines starting `~` are subheadings inside a role.
 - **Must fit on two pages.** Cut the least relevant bullets to get there.
 - **Voice:** plain, specific and measured. No hype words, no em dashes.
 
-Don't name a capitalized skill, tool or product that `profile/facts.md`, `profile/approved-terms.txt` or the model resume doesn't already use, since the checker will block it.
+Don't name a skill, tool or product that `profile/facts.md`, `profile/approved-terms.txt` or the model resume doesn't already use, since the checker will block it. The posting naming it, even in its title, doesn't make it the candidate's. Write numbers as digits, exactly as the fact bank has them.
 
 ## When you're done
 

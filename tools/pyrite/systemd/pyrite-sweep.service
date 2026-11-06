@@ -1,0 +1,12 @@
+[Unit]
+Description=Pyrite: sweep job boards for new postings
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The workspace comes from .pyrite-home in this folder, or set Environment=PYRITE_HOME=...
+WorkingDirectory=%h/pyrite
+ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py discover
+# The leading - means trouble reading mail never fails the sweep. It shows on the dashboard instead.
+ExecStart=-%h/pyrite/.venv/bin/python tools/pyrite.py inbox
+Nice=10

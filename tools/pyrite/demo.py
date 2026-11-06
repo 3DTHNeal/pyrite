@@ -65,7 +65,7 @@ SOURCES = [
 ]
 BRIEFING = (
     "Four new postings overnight. Two resumes are ready: send Initech Controls first, since it's local and matches "
-    "your management years. The Globex draft is blocked by the fact checker and needs a rewrite. Umbrella Instruments' "
+    "your management years. The Globex draft is blocked by the assay and needs a rewrite. Umbrella Instruments' "
     "board is failing. Acme Robotics may have replied, so check your mail."
 )
 
@@ -75,7 +75,7 @@ def _stamp(days_ago: float) -> str:
 
 
 def _clear(conn) -> None:
-    for table in ("events", "listings", "jobs", "rejected", "source_status", "runs", "briefings"):
+    for table in ("events", "listings", "claude_runs", "tasks", "jobs", "rejected", "source_status", "runs", "briefings"):
         conn.execute(f"DELETE FROM {table}")
 
 
@@ -139,5 +139,16 @@ def load(conn, cfg: dict) -> str:
              "new": 4, "rejected": {"title": 301, "location": 88, "score": 7}, "closed": 0, "new_ids": []}
     conn.execute("INSERT INTO runs (started_at, finished_at, stats) VALUES (?, ?, ?)", (_stamp(0.21), now_stamp, json.dumps(stats)))
     conn.execute("INSERT INTO briefings (ts, body) VALUES (?, ?)", (_stamp(0.1), BRIEFING))
+    # A few Claude runs, so the usage table on the Sources tab has something to show.
+    for company, kind, days_ago, ok, seconds, turns, tokens_in, tokens_out, cost in (
+        ("Initech Controls", "refresh", 2, 1, 212, 14, 286_000, 5_100, 0.61),
+        ("Globex Automation", "refresh", 3, 0, 547, 31, 702_000, 12_400, 1.48),
+        ("Contoso Machines", "prep", 9, 1, 164, 11, 241_000, 3_900, 0.52),
+    ):
+        conn.execute(
+            """INSERT INTO claude_runs (job_id, ts, kind, ok, seconds, turns, input_tokens, output_tokens, cost_usd)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ids[company], _stamp(days_ago), kind, ok, seconds, turns, tokens_in, tokens_out, cost),
+        )
     conn.commit()
     return f"Loaded {len(JOBS)} fictional jobs into {ROOT / 'data'}."

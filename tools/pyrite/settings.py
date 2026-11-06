@@ -1,8 +1,9 @@
 """Edits the [promote] section of search.toml for the dashboard's Settings tab.
 
-Only this section can change from the browser. The dashboard has no login, so the fact
-checker's rules, the filters and the allowed hosts stay out of its reach. A save rewrites
-this one block and proves that everything else in the file still reads the same.
+Only this section of search.toml can change from the browser. The dashboard has no login, so
+the patterns under [guard], the filters and the allowed hosts stay out of its reach. A save
+rewrites this one block and proves that everything else in the file still reads the same.
+The candidate's own facts are a separate matter, handled in facts.py.
 """
 import hashlib
 import json
@@ -12,7 +13,7 @@ import threading
 import time
 import tomllib
 
-from . import score, store
+from . import checks, score, store
 
 MAX_NAME = 80
 MAX_PATTERN = 300
@@ -42,8 +43,7 @@ def _claimable_facts() -> str:
     path = store.CONFIG_PATH.with_name("facts.md")
     if not path.exists():
         return ""
-    sections = re.split(r"(?m)^(?=## )", path.read_text(encoding="utf-8"))
-    return "\n".join(s for s in sections if not re.match(r"## (do not use|unsupported)", s, re.I))
+    return checks.claimable(path.read_text(encoding="utf-8"))
 
 
 def skills(promote: dict) -> dict:
@@ -258,18 +258,18 @@ def _write(path, text: str) -> None:
         except PermissionError:
             if attempt == 9:
                 temporary.unlink(missing_ok=True)
-                raise ValueError("search.toml is busy, so nothing was saved. Try again.") from None
+                raise ValueError(f"{path.name} is busy, so nothing was saved. Try again.") from None
             time.sleep(0.1)
 
 
 def save(body: dict) -> dict:
     if store.IS_EXAMPLE:
-        raise ValueError("This is the demo, so settings can't be saved. Point WARROOM_HOME at your own workspace to change them.")
+        raise ValueError("This is the demo, so settings can't be saved. Point PYRITE_HOME at your own workspace to change them.")
     with _lock:
         text = _read()
         current = tomllib.loads(text)
         if body.get("version") != _version(current.get("promote")):
-            raise Conflict("These settings changed after you opened them, so nothing was saved. Discard your changes to see the latest.")
+            raise Conflict("These settings changed after you opened them, so nothing was saved. Reload Settings to see the latest.")
         promote = validate(body.get("promote"))
         updated = _replace_section(text, render(promote))
         parsed = tomllib.loads(updated)

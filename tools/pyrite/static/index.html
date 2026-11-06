@@ -3,19 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>War Room</title>
+<title>Pyrite</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <!-- Hidden by style.css. Without the server the stylesheet can't load, so only then does this show. -->
-<p class="not-served">This is only the dashboard's template, so it can't load any data. <a href="http://127.0.0.1:8787/">Open the War Room at http://127.0.0.1:8787</a></p>
+<p class="not-served">This is only the dashboard's template, so it can't load any data. <a href="http://127.0.0.1:8787/">Open Pyrite at http://127.0.0.1:8787</a></p>
 <header class="masthead">
   <div class="brand">
-    <h1>War Room</h1>
+    <h1>Pyrite</h1>
     <p id="demo-tag" class="demo-tag" hidden>Demo: a fictional candidate and made-up companies</p>
     <p id="sweep" class="sweep" aria-live="polite">Loading…</p>
+    <p id="runs" class="sweep runs" aria-live="polite"></p>
   </div>
-  <button id="add-open" class="btn primary" type="button">Add a posting</button>
+  <div class="masthead-actions">
+    <button id="run-sweep" class="btn" type="button" title="Read the job boards and check mail now. No AI.">Pan now</button>
+    <button id="run-claude" class="btn" type="button" title="Judge new postings and tailor the best now. Uses your Claude plan.">Run Claude now</button>
+    <button id="add-open" class="btn primary" type="button">Add a posting</button>
+  </div>
 </header>
 
 <main>
@@ -23,21 +28,22 @@
 
   <section class="command">
     <div class="panel orders">
-      <h2>Today's orders</h2>
+      <h2>Sluice</h2>
       <div id="briefing" class="briefing"></div>
       <ol id="orders" class="order-list"></ol>
     </div>
     <div class="panel funnel-panel">
-      <h2>Funnel</h2>
+      <h2>Yield</h2>
       <div id="funnel" class="funnel"></div>
     </div>
   </section>
 
   <nav class="tabs" role="tablist" aria-label="Views">
-    <button role="tab" data-tab="pipeline" aria-selected="true">Pipeline</button>
-    <button role="tab" data-tab="radar" aria-selected="false">Radar</button>
-    <button role="tab" data-tab="archive" aria-selected="false">Closed out</button>
-    <button role="tab" data-tab="sources" aria-selected="false">Sources</button>
+    <button role="tab" data-tab="pipeline" aria-selected="true">Claims</button>
+    <button role="tab" data-tab="radar" aria-selected="false">Prospects</button>
+    <button role="tab" data-tab="archive" aria-selected="false">Tailings</button>
+    <button role="tab" data-tab="sources" aria-selected="false">Veins</button>
+    <button role="tab" data-tab="facts" aria-selected="false">Facts</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
 
@@ -67,7 +73,7 @@
       </select>
       <span id="radar-count" class="muted"></span>
     </div>
-    <p class="muted radar-note">Priority is the score, plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost. Repost counts begin with the first sweep.</p>
+    <p class="muted radar-note">Priority is the score, plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost. Repost counts begin with the first pan.</p>
     <div class="table-wrap"><table id="radar" class="grid"></table></div>
   </section>
 
@@ -78,20 +84,25 @@
   <section id="view-sources" class="view" hidden>
     <div class="panel manual">
       <h2>Check these by hand</h2>
-      <p class="muted">These have no public feed, so the sweep can't see them.</p>
+      <p class="muted">These have no public feed, so a pan can't see them.</p>
       <ul id="manual-list" class="manual-list"></ul>
     </div>
     <p id="source-summary" class="muted"></p>
     <div class="table-wrap"><table id="sources" class="grid"></table></div>
+    <div class="panel usage">
+      <h2>Claude usage</h2>
+      <p id="usage-summary" class="muted"></p>
+      <div id="usage-wrap" class="table-wrap" hidden><table id="usage" class="grid"></table></div>
+    </div>
+  </section>
+
+  <section id="view-facts" class="view facts-tab" hidden>
+    <div id="facts-view"></div>
+    <p id="facts-error" class="error" role="alert"></p>
   </section>
 
   <section id="view-settings" class="view settings" hidden>
     <div id="settings-form"></div>
-    <div class="settings-actions">
-      <button id="settings-save" class="btn primary" type="button">Save</button>
-      <button id="settings-discard" class="btn" type="button">Discard changes</button>
-      <span id="settings-status" class="muted" role="status"></span>
-    </div>
     <p id="settings-error" class="error" role="alert"></p>
   </section>
 </main>

@@ -1,5 +1,5 @@
-# What the war room looks for. This is the fictional candidate's search: yours lives in
-# your own workspace. Run `wr discover --fresh` after changing filters so previously
+# What Pyrite looks for. This is the fictional candidate's search: yours lives in
+# your own workspace. Run `pyrite discover --fresh` after changing filters so previously
 # rejected postings get another look.
 
 [candidate]
@@ -14,6 +14,10 @@ local = [
 local_exact = [', WI\b', '\bWI, US', '\bUS-WI\b', 'Remote\s*[-–]\s*WI\b']
 accept_remote = true      # US remote roles count
 accept_relocation = false # onsite roles elsewhere are dropped
+# A remote role's location is read with built-in lists that assume you're in the US: "Remote - US"
+# passes and "Remote - Germany" doesn't. Elsewhere, set both of these and they replace those lists.
+# remote_home = ['\buk\b', 'united kingdom', '\bemea\b']    # a remote role naming one of these is open to you
+# remote_elsewhere = ['\bus\b', 'united states', 'canada']  # one naming these, and none of yours, is not
 
 [run]
 triage_per_day = 20  # postings Claude reads and judges each morning
@@ -23,6 +27,7 @@ tailor_min_score = 55
 cover_letters = true
 follow_up_days = 7   # nudge this long after applying
 quiet_days = 30      # flag as probably ghosted after this long
+fix_attempts = 6     # failed assays before the daily run stops retrying a draft, until you ask for it again
 
 # Priority = filter score + age points + promotion points - repost penalty. It only decides
 # the order you and the daily run see things in. The filter score still decides what's kept and tailored.
@@ -137,11 +142,15 @@ flags = [
   ['Relocation expected', 'must (relocate|be willing to relocate)|relocation (is )?required', 10],
 ]
 
-# What the fact checker blocks in a resume or cover letter.
-# These restate the "Do not use" and "Unsupported" sections of facts.md.
+# What the assay, Pyrite's fact checker, blocks in a resume or cover letter.
+# These restate the "Do not use" and "Unsupported" sections of facts.md. Keep them in step with it:
+# the assay reads nothing from those two sections, so a term listed only there isn't blocked by
+# name. It just can't be used as an approved word or number.
 [guard]
 forbidden = ['Bluebird', 'Falconer', '\bhive\b', 'SkyLift']
-# Blocked unless the same sentence plainly disclaims it ("I have not...").
+# Blocked unless the sentence denies it: with one of `disclaimers` before the claim ("I have not
+# led..."), or in the first person after it ("...is listed as a plus, and I have not done it").
+# A negative that only happens to follow, as in "led it with no delays", denies nothing.
 unsupported = [
   'ISO 26262', 'safety[- ]certifi\w+',
   '(replay|reproduc)\w*[^.]{0,40}field failures',
@@ -159,10 +168,13 @@ approved_sources = [
 heading_source = 'applications/2026-11-acme-principal-robotics-software-engineer/resume.md'
 max_resume_pages = 2
 max_letter_pages = 1
-# Capitalized words the checker shouldn't question, such as your own region.
+# Capitalized words the assay shouldn't question, such as your own region.
 ordinary_words = ['wisconsin', 'madison']
 # Warns, without blocking, when something you always want on a resume is missing.
 expected_on_resume = [{ text = "University of Wisconsin", label = "Degree" }]
+
+[documents]
+paper = "letter"  # or "a4"
 
 [workday]
 # Searched on every Workday site. Results still go through the filters above.
@@ -177,7 +189,7 @@ allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']
 before_send = ["Check that anything you cite from a past employer is yours to share."]
 
 [inbox]
-# How far back `wr inbox` reads mail. Only mail since you applied can match.
+# How far back `pyrite inbox` reads mail. Only mail since you applied can match.
 lookback_days = 14
 
 # Mail from a domain matching the company's name is matched already. List employers
@@ -185,13 +197,13 @@ lookback_days = 14
 [inbox.domains]
 "Hooli Autonomy" = ["hooli-mail.example"]
 
-# Employers worth watching with no public feed. The dashboard's Sources tab lists these as a reminder.
+# Employers worth watching with no public feed. The dashboard's Veins tab lists these as a reminder.
 [[manual_check]]
 name = "LinkedIn"
 url = "https://www.linkedin.com/jobs/"
 why = "Its terms forbid automated collection, so this stays manual"
 
-# Company watchlist, checked with `wr sources`. Add any company whose careers page is on one of these:
+# Company watchlist, checked with `pyrite sources`. Add any company whose careers page is on one of these:
 #   Greenhouse boards.greenhouse.io/<board>  Lever jobs.lever.co/<board>
 #   Ashby jobs.ashbyhq.com/<board>           Workday <tenant>.<wdN>.myworkdayjobs.com/<site>
 [watch.greenhouse]

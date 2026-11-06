@@ -9,30 +9,40 @@ from pathlib import Path
 CODE_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_ROOT = (CODE_ROOT / "example").resolve()
 # A one-line, git-ignored file holding the path to your private workspace.
-HOME_POINTER = CODE_ROOT / ".warroom-home"
+HOME_POINTER = CODE_ROOT / ".pyrite-home"
+
+
+def _read_pointer(path: Path) -> str:
+    """The path in the pointer file, however it was saved. PowerShell's `>` writes UTF-16, and some editors add a byte-order mark."""
+    raw = path.read_bytes()
+    encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    try:
+        return raw.decode(encoding).strip().strip('"')
+    except UnicodeError:
+        raise SystemExit(f"Can't read {path}. Save it as plain text holding one line: the path to your workspace.") from None
 
 
 def find_workspace() -> Path:
-    """Where the data lives: WARROOM_HOME, then .warroom-home, then the fictional example.
+    """Where the data lives: PYRITE_HOME, then .pyrite-home, then the fictional example.
 
     The code and the data are separate on purpose, so that nothing personal can be
     committed from this repository. A workspace that was named but can't be found
     stops here, because an empty database would look exactly like a lost one.
     """
-    chosen = os.environ.get("WARROOM_HOME", "").strip()
+    chosen = os.environ.get("PYRITE_HOME", "").strip()
     if not chosen and HOME_POINTER.exists():
-        chosen = HOME_POINTER.read_text(encoding="utf-8").strip()
+        chosen = _read_pointer(HOME_POINTER)
     if not chosen:
         return EXAMPLE_ROOT
     workspace = Path(chosen).expanduser().resolve()
     if not workspace.is_dir():
-        raise SystemExit(f"The war room workspace doesn't exist: {workspace}")
+        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}")
     return workspace
 
 
 ROOT = find_workspace()
 IS_EXAMPLE = ROOT == EXAMPLE_ROOT
-DB_PATH = ROOT / "data" / "warroom.db"
+DB_PATH = ROOT / "data" / "pyrite.db"
 CONFIG_PATH = ROOT / "profile" / "search.toml"
 
 # Discovery -> tailoring -> your application -> what came back.
@@ -42,6 +52,12 @@ STATUSES = (
     "rejected", "ghosted", "withdrawn", "passed", "closed",
 )
 ACTIVE = ("new", "shortlisted", "needs_fix", "ready", "applied", "responded", "interviewing", "offer")
+# Only the fact checker's verdict puts a job in these, through `pyrite finish`. No command or button sets them by hand.
+CHECKER_ONLY = ("ready", "needs_fix")
+# Logged when you ask for a job to be tailored next, which also gives a blocked draft a fresh set of tries.
+TAILOR_REQUESTED = "tailor_requested"
+# Failed tries at a draft before the daily run stops retrying it. `fix_attempts` under [run] overrides this.
+DEFAULT_FIX_ATTEMPTS = 6
 # Event kinds for mail that might be a reply. Neither one changes a job's status.
 REPLY_DETECTED = "reply_detected"
 REPLY_DISMISSED = "reply_dismissed"
@@ -138,6 +154,27 @@ CREATE TABLE IF NOT EXISTS briefings (
     id INTEGER PRIMARY KEY,
     ts TEXT NOT NULL,
     body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS claude_runs (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER REFERENCES jobs (id),
+    ts TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ok INTEGER NOT NULL DEFAULT 1,
+    seconds REAL DEFAULT 0,
+    turns INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_usd REAL
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    ok INTEGER,
+    detail TEXT DEFAULT ''
 );
 """
 
@@ -266,6 +303,18 @@ def possible_replies(conn) -> dict[int, dict]:
         count = flags.get(row["job_id"], {}).get("count", 0) + 1
         flags[row["job_id"]] = {"detail": row["detail"], "count": count}
     return flags
+
+
+def fix_attempts(conn) -> dict[int, int]:
+    """How many times each blocked draft has failed the fact checker since you last asked for it, by job."""
+    rows = conn.execute(
+        """SELECT e.job_id, COUNT(*) AS tries FROM events AS e JOIN jobs AS j ON j.id = e.job_id
+           WHERE j.status = 'needs_fix' AND e.kind = 'needs_fix' AND e.id > COALESCE(
+               (SELECT MAX(id) FROM events WHERE job_id = e.job_id AND kind = ?), 0)
+           GROUP BY e.job_id""",
+        (TAILOR_REQUESTED,),
+    ).fetchall()
+    return {row["job_id"]: row["tries"] for row in rows}
 
 
 def job_dict(row: sqlite3.Row, include_description: bool = False) -> dict:

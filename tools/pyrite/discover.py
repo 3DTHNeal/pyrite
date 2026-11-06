@@ -29,22 +29,42 @@ def _watchlist(cfg: dict) -> list[tuple]:
     return out
 
 
-def _is_candidate(title: str, location: str, cfg: dict) -> bool:
+def _is_candidate(title: str, location: str, cfg: dict, workplace: str = "") -> bool:
     """Worth the slower call for a full description?"""
     if not scoring.match_track(title, cfg):
         return False
     if scoring.MULTI_LOCATION.match(location):
         return True
-    return scoring.classify_location(location, "", cfg) != "out"
+    return scoring.classify_location(location, workplace, cfg) != "out"
 
 
-def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: float) -> dict:
+def _probe_workday(spec: dict, open_ids: list, hits: dict, deadline: float) -> tuple[list, list]:
+    """Ask Workday about each tracked posting its search left out. Returns the paths that are gone, and those still up.
+
+    This runs with the other network calls, before anything is saved, so a slow board never
+    holds the database. A posting it couldn't ask about is in neither list and stays as it was.
+    """
+    closed, live = [], []
+    for path in open_ids:
+        if path in hits or time.monotonic() > deadline:
+            continue
+        try:
+            gone = sources.is_workday_closed(spec, path)
+        except Exception:
+            continue
+        if gone is not None:
+            (closed if gone else live).append(path)
+    return closed, live
+
+
+def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: float, open_ids: list | None = None) -> dict:
     kind, ident, spec = item
     source_key = f"{kind}:{ident}"
     company = spec["name"] if kind == "workday" else spec
-    result = {"source_key": source_key, "company": company, "postings": [], "seen": [], "dates": {}, "error": "", "complete": True}
+    result = {"source_key": source_key, "company": company, "postings": [], "seen": [], "dates": {}, "error": "", "complete": True,
+              "closed": [], "live": []}
     if time.monotonic() > deadline:
-        result["error"] = "Not reached before the sweep's time limit."
+        result["error"] = "Not reached before the pan's time limit."
         return result
     try:
         if kind == "workday":
@@ -59,13 +79,16 @@ def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: floa
                 if path in known or path in rejected:
                     continue
                 title, listed = hit.get("title", ""), hit.get("locationsText", "")
-                if not _is_candidate(title, listed, cfg):
-                    result["postings"].append(sources.Posting(source_key, path, company, title, listed))
+                # Some sites list a remote role under a city and say it's remote only in this field.
+                workplace = str(hit.get("remoteType") or "").lower()
+                if not _is_candidate(title, listed, cfg, workplace):
+                    result["postings"].append(sources.Posting(source_key, path, company, title, listed, workplace))
                 elif time.monotonic() < deadline:
                     try:
                         result["postings"].append(sources.workday_detail(spec, company, path))
                     except Exception:
                         pass  # Retried on the next sweep, since it was never recorded as rejected.
+            result["closed"], result["live"] = _probe_workday(spec, open_ids or [], hits, deadline)
             return result
 
         postings = sources.FEEDS[kind](ident, company)
@@ -108,6 +131,13 @@ def run(only: str | None = None, fresh: bool = False, conn=None, cfg=None, max_m
     for row in conn.execute("SELECT source_key, source_id FROM rejected"):
         rejected.setdefault(row["source_key"], set()).add(row["source_id"])
 
+    # Postings each source should still have up. Workday is asked about the ones its search doesn't return.
+    open_ids: dict[str, list] = {}
+    for row in conn.execute(
+        f"SELECT source_key, source_id FROM jobs WHERE posting_closed_at IS NULL AND status IN ({','.join('?' * len(ACTIVE))})", ACTIVE
+    ):
+        open_ids.setdefault(row["source_key"], []).append(row["source_id"])
+
     items = _watchlist(cfg)
     if only:
         items = [item for item in items if only.lower() in f"{item[0]}:{item[1]}".lower()]
@@ -125,11 +155,17 @@ def run(only: str | None = None, fresh: bool = False, conn=None, cfg=None, max_m
                 known.get(f"{item[0]}:{item[1]}", set()),
                 rejected.get(f"{item[0]}:{item[1]}", set()),
                 deadline,
+                open_ids.get(f"{item[0]}:{item[1]}", []),
             )
             for item in items
         ]
         for future in as_completed(futures):
-            _save_result(conn, future.result(), cfg, started, stats)
+            result = future.result()
+            try:
+                _save_result(conn, result, cfg, started, stats)
+            except Exception as err:  # One board's bad data mustn't cost the sweep every board after it.
+                conn.rollback()
+                _save_result(conn, {**result, "error": f"Couldn't be saved. {type(err).__name__}: {err}"[:300]}, cfg, started, stats)
 
     conn.execute(
         "UPDATE runs SET finished_at = ?, stats = ? WHERE id = ?",
@@ -168,6 +204,11 @@ def _save_result(conn, result, cfg, started, stats):
     )
     for source_id in result["seen"]:
         _mark_seen(conn, key, source_id, ts, cfg, stats)
+    # A posting Workday confirmed is up counts as seen, though its search didn't return it. Otherwise
+    # the same job turning up in another city would look like a repost of one that had gone.
+    for source_id in result.get("live", []):
+        conn.execute("UPDATE listings SET last_seen = ? WHERE source_key = ? AND source_id = ?", (ts, key, source_id))
+        conn.execute("UPDATE jobs SET last_seen = ? WHERE source_key = ? AND source_id = ?", (ts, key, source_id))
     _note_redates(conn, result, cfg, ts, stats)
 
     for posting in result["postings"]:
@@ -287,18 +328,31 @@ def _attach_to_existing(conn, posting, ts, key, cfg) -> bool:
     return False
 
 
+def _same_text(one: str, other: str) -> bool:
+    """Whether two descriptions share nearly all their vocabulary. With one of them empty there's nothing to compare."""
+    words, others = set(re.findall(r"\w+", one.lower())), set(re.findall(r"\w+", other.lower()))
+    if not words or not others:
+        return True
+    return len(words & others) / len(words | others) >= NEAR_TWIN_OVERLAP
+
+
+def _exact_twin(conn, posting, fingerprint: str):
+    """A job with the same opening text. The fingerprint reads only the first 600 characters, which many
+    employers fill with the same paragraph about themselves, so the rest of the text has to agree too."""
+    for row in conn.execute("SELECT * FROM jobs WHERE dedupe_key = ?", (fingerprint,)).fetchall():
+        if _same_text(posting.description, row["description"]):
+            return row
+    return None
+
+
 def _near_twin(conn, posting, started: str):
     """Reposts often come back lightly edited. A job that's still listed doesn't count, since two live ones may be two openings."""
-    words = set(re.findall(r"\w+", posting.description.lower()))
-    if not words:
+    if not posting.description.strip():
         return None
     for row in conn.execute(
         "SELECT * FROM jobs WHERE company = ? AND last_seen < ? AND description != ''", (posting.company, started)
     ).fetchall():
-        if _norm_title(row["title"]) != _norm_title(posting.title):
-            continue
-        other = set(re.findall(r"\w+", row["description"].lower()))
-        if len(words & other) / len(words | other) >= NEAR_TWIN_OVERLAP:
+        if _norm_title(row["title"]) == _norm_title(posting.title) and _same_text(posting.description, row["description"]):
             return row
     return None
 
@@ -327,7 +381,9 @@ def last_full_sweep(conn):
     """The latest sweep of every source. A retry of one board doesn't count as a fresh look."""
     for row in conn.execute("SELECT * FROM runs WHERE finished_at IS NOT NULL ORDER BY id DESC"):
         stats = json.loads(row["stats"])
-        if not stats.get("partial") and stats.get("sources", 0) > 1:
+        # Runs from before sweeps recorded `partial` are told apart by size, as they were then.
+        partial = stats["partial"] if "partial" in stats else stats.get("sources", 0) <= 1
+        if not partial:
             return {**dict(row), "stats": stats}
     return None
 
@@ -378,7 +434,7 @@ def _ingest(conn, posting, cfg, stats, ts, key, started, baseline):
         return
 
     fingerprint = dedupe_key(posting.company, posting.title, posting.description)
-    twin = conn.execute("SELECT * FROM jobs WHERE dedupe_key = ?", (fingerprint,)).fetchone()
+    twin = _exact_twin(conn, posting, fingerprint)
     if not twin and not baseline:
         twin = _near_twin(conn, posting, started)
     if twin:
@@ -419,9 +475,9 @@ def _close_missing(conn, result, cfg, started, stats, ts):
             return
         gone = list(open_jobs)
     else:
-        tenant = key.split(":", 1)[1]
-        spec = {**cfg["watch"]["workday"][tenant], "tenant": tenant}
-        gone = [job for job in open_jobs if sources.is_workday_closed(spec, job["source_id"]) is True]
+        # Only what the board itself confirmed is gone. That was asked before saving began.
+        confirmed = set(result.get("closed", []))
+        gone = [job for job in open_jobs if job["source_id"] in confirmed]
 
     for job in gone:
         conn.execute("UPDATE jobs SET posting_closed_at = ? WHERE id = ?", (ts, job["id"]))

@@ -1,0 +1,13 @@
+[Unit]
+Description=Pyrite dashboard (localhost only)
+
+[Service]
+# The workspace comes from .pyrite-home in this folder, or set Environment=PYRITE_HOME=...
+WorkingDirectory=%h/pyrite
+# The .venv that docs/operating.md has you create, so building documents works from the dashboard too.
+ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py serve --port 8787
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
