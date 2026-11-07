@@ -138,8 +138,27 @@ def degree_candidates(degree: str) -> list[str]:
     return list(dict.fromkeys(o for o in out if o))
 
 
+# The standard questions tenants word in ways that share few words with the sheet's: the page's wording, then the
+# sheet row it is. Sponsorship comes before work authorization, since tenants ask it as "require support to obtain
+# authorization to work", which also reads as the authorization question.
+INTENTS = (
+    # "Require relocation assistance to work there" is a different question, and is left to the word match.
+    (re.compile(r"sponsor|\bvisa\b|immigration|^(?!.*relocat).*(?:require|need)\w*\b.{0,60}\b(?:support|assistance|help)\b.{0,60}\b(?:authori[sz]|work|employment|status)", re.I | re.S),
+     re.compile(r"sponsor", re.I)),
+    (re.compile(r"(?:authori[sz]ed|eligible|permitted|entitled|legally able)\b.{0,20}\bto work|right to work|work authori[sz]ation", re.I),
+     re.compile(r"authori[sz]ed to work|eligible to work|right to work", re.I)),
+    (re.compile(r"non.?compete|non.?solicit|restrictive covenant", re.I), re.compile(r"non.?compete|non.?solicit", re.I)),
+    (re.compile(r"(?:willing|open|able|prepared)\b.{0,30}\brelocat", re.I), re.compile(r"relocat", re.I)),
+)
+
+
 def match_question(label: str, questions: dict[str, str]) -> tuple[str, str] | None:
-    """The sheet row for a question on the page, by the words they share."""
+    """The sheet row for a question on the page: a standard question by what it asks, else by the words they share."""
+    for asked, row in INTENTS:
+        if asked.search(label):
+            found = next(((q, a) for q, a in questions.items() if row.search(q)), None)
+            if found:
+                return found
     def words(text: str) -> set[str]:
         return {_stem(w) for w in re.findall(r"[a-z0-9']+", text.lower()) if w not in STOP}
     asked = words(label)
@@ -270,6 +289,13 @@ def _options(page):
     return page.locator('[role="option"]:not([aria-label*="press delete" i]):visible')
 
 
+def _says_none(page) -> bool:
+    """Whether a search on show says it found nothing. Only a message in view counts: one left in a closed list from an
+    earlier search, such as a skill with no entry, would otherwise end the next search before its answer arrives."""
+    found = page.get_by_text(re.compile(r"^No Items", re.I))
+    return any(found.nth(i).is_visible() for i in range(found.count()))
+
+
 def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS_MS):
     """Wait for a search to answer. Returns the picker's already-chosen entry, an exact match for one of `names`, or neither
     once the list has settled.
@@ -293,7 +319,7 @@ def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS
             return None, exact
         # Settled means a fresh, non-empty list that stopped changing, or Workday saying there's nothing. An empty list
         # is only the old one cleared while the new one loads.
-        if (fresh and shown and shown == last) or page.get_by_text(re.compile(r"^No Items", re.I)).count() or time.monotonic() > deadline:
+        if (fresh and shown and shown == last) or _says_none(page) or time.monotonic() > deadline:
             return None, None
         last = shown
         page.wait_for_timeout(400)
@@ -338,6 +364,10 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
             page.wait_for_timeout(300)
             report.filled.append(f"{what}: {name}")
             return name
+        near = _same_name(page, wanted)
+        if near:
+            report.filled.append(f"{what}: {near}")
+            return near
     shown = [t.strip() for t in _options(page).all_inner_texts() if t.strip() and "press delete" not in t.lower()][:8]
     if must and shown:
         _options(page).first.click()
@@ -352,6 +382,25 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
     else:
         report.skipped.append(f"{what}: no entry called {wanted[0]!r}{offered}")
         box.fill("")
+        page.keyboard.press("Escape")  # A search left open reads as a pick still to finish.
+    return ""
+
+
+def _same(text: str) -> str:
+    """A name reduced to its words, so spellings of one name compare equal: "Test-Driven Development" and "Test Driven
+    Development (TDD)", "Electrical & Computer Engineering Technologies" and "Electrical and Computer Engineering Technology"."""
+    text = re.sub(r"\([^)]*\)", " ", (text or "").lower()).replace("&", " and ")
+    return " ".join(_stem(w) for w in re.findall(r"[a-z0-9+#]+", text))
+
+
+def _same_name(page, wanted: list[str]) -> str:
+    """Click the result that is one of the wanted names in other spelling, if the list shows one. Returns its text."""
+    targets = {_same(w) for w in wanted} - {""}
+    for i, text in enumerate(_texts(_options(page))):
+        if _same(text) in targets:
+            _options(page).nth(i).click()
+            page.wait_for_timeout(300)
+            return text.strip()
     return ""
 
 
@@ -403,17 +452,28 @@ def _takes_any_text(page, box, name: str) -> bool:
     """Whether a box is plain text rather than one of Workday's lookups: no picker markings, and typing a name then
     pressing Enter brings up no list at all. The name is left typed in a plain box, which is all it needs."""
     if box.get_attribute("data-automation-id") == "searchBox" or box.get_attribute("role") == "combobox" \
-            or box.get_attribute("aria-autocomplete") is not None or box.get_attribute("aria-haspopup") is not None:
+            or box.get_attribute("aria-autocomplete") is not None or box.get_attribute("aria-haspopup") is not None \
+            or re.search(r"select|prompt|multi", box.get_attribute("data-uxi-widget-type") or "", re.I):
+        return False
+    # Workday's lookups carry their markings on the field around the box too: a prompt icon, a container for picks.
+    holder = box.locator("xpath=ancestor::*[starts-with(@data-automation-id,'formField-')][1]")
+    if holder.count() and holder.locator(LOOKUP_MARKS).count():
         return False
     before = set(_texts(_options(page)))
     box.fill(name)
     box.press("Enter")
-    deadline = time.monotonic() + 2 * GRACE_MS / 1000
+    # A tenant's lookup can take seconds to answer, and a slow answer mistaken for none leaves a name typed but never picked.
+    deadline = time.monotonic() + RESULTS_MS / 2000
     while time.monotonic() < deadline:
         page.wait_for_timeout(300)
-        if set(_texts(_options(page))) != before or page.get_by_text(re.compile(r"^No Items", re.I)).count():
+        if set(_texts(_options(page))) != before or _says_none(page) \
+                or page.locator('[data-automation-id="promptOption"]:visible').count():
             return False
     return (box.input_value() or "").strip() == name
+
+
+LOOKUP_MARKS = ('[data-automation-id="promptIcon"], [data-automation-id="multiselectInputContainer"], [data-automation-id="multiSelectContainer"], '
+                '[data-automation-id="selectedItemList"], [data-uxi-widget-type="multiselect"], [data-uxi-widget-type="selectinput"]')
 
 
 def _already_picked(page, selector) -> bool:
@@ -579,12 +639,20 @@ def _education_details(page, block: str, entry: dict, report: Report, what: str)
     degree = _in_block(page, block, ["degree", "degreeType"], "button")
     if degree is not None and _is_unset(degree) and entry.get("degree"):
         choose(page, degree, degree_candidates(entry["degree"]) + entry.get("degree_alternatives", []), report, f"{what} degree")
+    elif degree is not None and entry.get("degree"):
+        report.filled.append(f"{what} degree: {degree.inner_text().strip()} (already set, left as is)")
+    elif entry.get("degree"):
+        report.skipped.append(f"{what} degree: no degree dropdown found in this entry")
     field = _in_block(page, block, ["fieldOfStudy", "fieldsOfStudy", "major"])
-    if field is not None and entry.get("field") and not _already_picked(page, field):
-        if _takes_any_text(page, field, entry["field"]):
-            report.filled.append(f"{what} field of study: {entry['field']} (typed)")
+    if field is not None and entry.get("field"):
+        # Workday's field of study is always a pick from the tenant's list, never free text. A name typed and not
+        # picked looks filled but is dropped on save, so a field the list lacks is cleared and reported instead.
+        if _already_picked(page, field):
+            report.filled.append(f"{what} field of study: already set, left as is")
         else:
-            pick_search(page, field, [entry["field"]] + entry.get("field_alternatives", []), report, f"{what} field of study", keep_text=True)
+            pick_search(page, field, [entry["field"]] + entry.get("field_alternatives", []), report, f"{what} field of study")
+    elif field is None and entry.get("field"):
+        report.skipped.append(f"{what} field of study: no field-of-study box found in this entry")
     gpa = _in_block(page, block, ["gradeAverage", "gpa"])
     if gpa is not None and entry.get("gpa"):
         gpa.fill(entry["gpa"])
@@ -716,25 +784,38 @@ def answer_radio(page, question_pattern: str, value: str, report: Report, what: 
     return False
 
 
-# What tenants call the employer's own site in their "how did you hear about us" list, and what to accept among results.
+# Each source a "how did you hear about us" answer can name: the searches to try, the entries to accept among the
+# results, and the categories of a tenant's tree to look in. The company-site pattern is narrow on purpose: a loose
+# "career" or "company" takes "Career Fair" or "Company Event", which are different answers.
 SOURCE_TERMS = {
-    "company site": (["Company Website", "Company Careers Site", "Careers Site", "Career Site", "Careers Page", "Corporate Website", "Website", "Careers",
-                      "Employer Website", "Direct"],
-                     re.compile(r"career|website|web site|company|corporate|employer|\.com|direct", re.I)),
-    "linkedin": (["LinkedIn"], re.compile(r"linkedin", re.I)),
-    "indeed": (["Indeed"], re.compile(r"indeed", re.I)),
-    "glassdoor": (["Glassdoor"], re.compile(r"glassdoor", re.I)),
-    "ziprecruiter": (["ZipRecruiter"], re.compile(r"ziprecruiter", re.I)),
-    "dice": (["Dice"], re.compile(r"\bdice\b", re.I)),
+    "company site": (["Company Website", "Company Careers Site", "Careers Site", "Career Site", "Careers Page", "Corporate Website",
+                      "Employer Website", "Website", "Careers"],
+                     re.compile(r"(?:company|corporate|employer|careers?)(?:'s)?\s*(?:web\s*site|site|page|portal)|^\s*(?:company\s+)?web\s*site\s*$|^\s*careers?\s*$", re.I),
+                     re.compile(r"company|career|website|online|internet", re.I)),
+    "linkedin": (["LinkedIn"], re.compile(r"linked\s*in", re.I), re.compile(r"social|job board|online|internet|website|media", re.I)),
+    "indeed": (["Indeed"], re.compile(r"indeed", re.I), re.compile(r"job board|online|internet|website", re.I)),
+    "glassdoor": (["Glassdoor"], re.compile(r"glassdoor", re.I), re.compile(r"job board|online|internet|website", re.I)),
+    "ziprecruiter": (["ZipRecruiter"], re.compile(r"zip\s*recruiter", re.I), re.compile(r"job board|online|internet|website", re.I)),
+    "dice": (["Dice"], re.compile(r"\bdice\b", re.I), re.compile(r"job board|online|internet|website", re.I)),
 }
+# Entries that are never the answer for a source above, whatever words they share with it.
+_NOT_A_SOURCE = re.compile(r"fair|event|referr|agency|recruiter\b|newspaper|magazine|mail|radio|tv\b|television|conference|campus|university", re.I)
 
 
-_CATEGORY = re.compile(r"company|career|website|online|internet|job board|other", re.I)
+def source_key(text: str) -> str:
+    """Which source a sheet's answer or a picked entry names: "LinkedIn" is linkedin, "Company careers site" is company site."""
+    words = short(text or "")
+    if not words or _NOT_A_SOURCE.search(words):
+        return ""
+    for key, (_, accept, _) in SOURCE_TERMS.items():
+        if accept.search(words) or key in words.lower():
+            return key
+    return ""
 
 
 def _click_matching(page, accept, report: Report, what: str) -> bool:
     for i, text in enumerate(_texts(_options(page))):
-        if accept.search(text):
+        if accept.search(text) and not _NOT_A_SOURCE.search(text):
             _options(page).nth(i).click()
             page.wait_for_timeout(300)
             report.filled.append(f"{what}: {text.strip()}")
@@ -742,20 +823,21 @@ def _click_matching(page, accept, report: Report, what: str) -> bool:
     return False
 
 
-def pick_source(page, field, box, source: str, report: Report, company: str = "") -> bool:
-    """Answer "how did you hear about us" from where the posting was found, taking the tenant's nearest wording.
+def pick_source(page, field, box, source: str, report: Report, company: str = "", quiet: bool = False) -> bool:
+    """Answer "how did you hear about us" with `source`, taking the tenant's nearest wording.
 
-    Searches first. Tenants that offer a tree of categories instead get the list opened and walked a level or two.
-    A posting from the employer's own board also accepts an entry that names the employer, such as "Acme Careers".
+    Searches first. Tenants that offer a tree of categories instead get the list opened and the likely categories
+    looked through. A posting from the employer's own board also accepts an entry that names the employer, such as
+    "Acme Careers". With `quiet`, a miss isn't reported, since another source is tried next.
     """
     what = "How did you hear about us"
-    terms, accept = SOURCE_TERMS.get(source, ([], None))
+    terms, accept, categories = SOURCE_TERMS.get(source, ([], None, None))
     if not terms:
         return False
     if source == "company site" and company:
         first = re.escape(company.split()[0])
         terms = [f"{company} Careers", f"{company} Website", company] + terms
-        accept = re.compile(f"{accept.pattern}|{first}", re.I)
+        accept = re.compile(rf"{accept.pattern}|^\s*{first}\b.*(?:career|job|site|web)", re.I)
     page.keyboard.press("Escape")
     for term in terms:
         before = set(_texts(_options(page)))
@@ -775,24 +857,70 @@ def pick_source(page, field, box, source: str, report: Report, company: str = ""
             return True
     box.fill("")
     page.keyboard.press("Escape")
-    # No search hit. Open the whole list from the field's own button and look through it, one category deep.
+    # No search hit. Open the whole list from the field's own button and look in each likely category, one level deep.
     seen: list[str] = []
     opener = field.locator("button").first
     if opener.count():
-        opener.click()
-        page.wait_for_timeout(SETTLE_MS)
-        for _ in range(2):
+        tried: set[str] = set()
+        for _ in range(4):
+            opener.click()
+            page.wait_for_timeout(SETTLE_MS)
             shown = [t.strip() for t in _texts(_options(page)) if t.strip()]
             seen += [s for s in shown if s not in seen]
             if _click_matching(page, accept, report, what):
                 return True
-            category = next((i for i, t in enumerate(shown) if _CATEGORY.search(t)), None)
+            category = next((i for i, t in enumerate(shown) if categories.search(t) and t not in tried and not _NOT_A_SOURCE.search(t)), None)
             if category is None:
+                page.keyboard.press("Escape")
                 break
+            tried.add(shown[category])
             _options(page).nth(category).click()
             page.wait_for_timeout(SETTLE_MS)
-        page.keyboard.press("Escape")
-    report.skipped.append(f"{what}: nothing offered matched {source!r}. Seen: {', '.join(seen[:12]) or 'nothing'}")
+            shown = [t.strip() for t in _texts(_options(page)) if t.strip()]
+            seen += [s for s in shown if s not in seen]
+            if _click_matching(page, accept, report, what):
+                return True
+            page.keyboard.press("Escape")  # Closes the category, so the next pass opens the list at its top again.
+    if not quiet:
+        report.skipped.append(f"{what}: nothing offered matched {source!r}. Seen: {', '.join(seen[:12]) or 'nothing'}")
+    return False
+
+
+def _picked_values(holder) -> list[str]:
+    """The values a picker holds, by the names Workday gives their removable entries: "LinkedIn, press delete to clear value"."""
+    return [t.split(",")[0].strip() for t in _texts(holder.get_by_role("option", name=re.compile("press delete", re.I)))]
+
+
+def _clear_picked(page, holder) -> None:
+    """Remove a picker's values, the way their names say to: focus each one and press Delete."""
+    for _ in range(4):
+        chips = holder.get_by_role("option", name=re.compile("press delete", re.I))
+        if not chips.count():
+            return
+        chips.first.click()
+        page.keyboard.press("Delete")
+        page.wait_for_timeout(400)
+
+
+def answer_source(page, field, box, sources: list[str], report: Report, company: str = "") -> bool:
+    """Answer the source question with the first of `sources` the tenant offers.
+
+    A value already there, from a draft Workday kept or an earlier run, stays when it is the first wanted source or a
+    referral the candidate chose; anything else is replaced, and the run says so.
+    """
+    what = "How did you hear about us"
+    holder = box.locator("xpath=ancestor::*[starts-with(@data-automation-id,'formField-') or self::label][1]")
+    holder = holder if holder.count() else field
+    have = _picked_values(holder) if holder is not None else []
+    if have:
+        if any(source_key(v) == sources[0] or re.search(r"referr", v, re.I) for v in have):
+            report.filled.append(f"{what}: {have[0]} (already set, left as is)")
+            return True
+        report.decisions.append(f"{what}: it held {have[0]!r} from before, which isn't what the sheet says, so it was replaced")
+        _clear_picked(page, holder)
+    for i, source in enumerate(sources):
+        if pick_source(page, field, box, source, report, company, quiet=i < len(sources) - 1):
+            return True
     return False
 
 
@@ -828,12 +956,16 @@ def fill_information(page, info: dict[str, str], report: Report, source: str = "
     """Page 1 is mostly the account's own details. This answers the yes/no questions, and where the posting was found."""
     from .fill import is_ask
     hear, hear_box = _hear_about_field(page)
-    if hear_box is not None and not _already_picked(page, hear_box):
-        picked = pick_source(page, hear, hear_box, source, report, company)
+    if hear_box is not None:
+        # The sheet's answer comes first, so a candidate can name the source every tenant lists (LinkedIn); where the
+        # posting was found is the fallback. A sheet answer that isn't a known source is searched for as written.
         sheet_answer = next((a for q, a in info.items() if re.search(r"hear about", q, re.I)), "")
-        if not picked and sheet_answer and not is_ask(sheet_answer):
-            picked = bool(pick_search(page, hear_box, [short(sheet_answer)], report, "How did you hear about us"))
-        if not picked and not source:
+        stated = "" if is_ask(sheet_answer) else short(sheet_answer)
+        sources = list(dict.fromkeys(s for s in (source_key(stated), source) if s))
+        picked = answer_source(page, hear, hear_box, sources, report, company) if sources else _already_picked(page, hear_box)
+        if not picked and stated and not source_key(stated):
+            picked = bool(pick_search(page, hear_box, [stated], report, "How did you hear about us"))
+        if not picked and not sources:
             report.skipped.append("How did you hear about us: no entry for the posting's source, so it's yours to answer on the page")
     elif hear_box is None and page.get_by_text(re.compile(r"hear about", re.I)).count():
         report.skipped.append("How did you hear about us: the page asks it, but its box wasn't found")

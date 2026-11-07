@@ -2791,6 +2791,18 @@ class Autofill(ClaudeRun):
         self.assertEqual(workday.match_question("Have you previously been employed by Globex or one of its subsidiaries?", questions)[0],
                          "Previously employed by the company or a subsidiary")
         self.assertIsNone(workday.match_question("Are you willing to travel up to 25% of the time?", questions))
+        # Sponsorship in the words tenants use, which share little with the sheet's row; and its look-alikes that aren't it.
+        questions["Will you now or in the future require sponsorship"] = "No"
+        for label in ("Will you require employer support to obtain or maintain authorization to work in that country (e.g., visa sponsorship)?*",
+                      "Will you now or in the future require immigration sponsorship for employment?",
+                      "Do you need assistance from the company to obtain work authorization?"):
+            self.assertEqual(workday.match_question(label, questions)[0], "Will you now or in the future require sponsorship", label)
+        self.assertEqual(workday.match_question("Are you legally authorized to work in the country where this job is located?", questions)[0],
+                         "Legally authorized to work in the United States")
+        self.assertIsNone(workday.match_question("Will you require relocation assistance to work at this site?", questions))
+        self.assertEqual([workday.source_key(t) for t in ("LinkedIn", "Social Media - LinkedIn", "Company careers site. As found", "Acme Career Fair",
+                                                          "Company Event", "*Ask Alex*")],
+                         ["linkedin", "linkedin", "company site", "", "", ""])
 
     def test_the_browser_is_held_open_only_while_it_is_there(self):
         class Context:
@@ -2948,9 +2960,23 @@ class Autofill(ClaudeRun):
             self.assertEqual(page1, {"first": "Alex", "last": "Rivera", "street": "12 Lake St", "city": "Madison", "postal": "53703", "state": "Wisconsin",
                                      "email": "alex.rivera@example.com", "phoneType": "Mobile", "phone": "5550100142"})
             # A posting found on the employer's own board answers the source question with the tenant's wording for that.
+            # "Company Event" comes first among the results and shares a word, and is still not the employer's site.
             workday.fill_information(page, sheet_info, info_report, source="company site")
             self.assertEqual(page.evaluate("document.getElementById('source--source').dataset.selected"), "Company Careers Site")
             self.assertIn("How did you hear about us: Company Careers Site", info_report.filled)
+            # A sheet that names a source is answered with it before the posting's, in the tenant's wording, and a value
+            # left from before that isn't it is replaced, with a note.
+            linkedin_report = workday.Report()
+            workday.fill_information(page, dict(sheet_info, **{"How did you hear about us": "LinkedIn. Every tenant lists it"}),
+                                     linkedin_report, source="company site")
+            self.assertEqual(page.evaluate("document.getElementById('source--source').dataset.selected"), "Social Media - LinkedIn")
+            self.assertIn("How did you hear about us: Social Media - LinkedIn", linkedin_report.filled)
+            self.assertTrue(any("'Company Careers Site' from before" in d for d in linkedin_report.decisions), linkedin_report.decisions)
+            # Run again, it's already right and stays.
+            again = workday.Report()
+            workday.fill_information(page, dict(sheet_info, **{"How did you hear about us": "LinkedIn"}), again, source="company site")
+            self.assertIn("How did you hear about us: Social Media - LinkedIn (already set, left as is)", again.filled)
+            self.assertEqual(again.decisions, [])
             # The review page repeats every section's heading, and is still known as the review page.
             self.assertEqual(workday.current_step(page), "My Experience")
             page.evaluate("document.body.insertAdjacentHTML('beforeend', '<h2>My Information</h2><h2>Review</h2>')")
@@ -2975,8 +3001,10 @@ class Autofill(ClaudeRun):
         self.assertEqual(state["schools"], ["Lakeshore School of Business and Technology", "Western Prairie University"])
         self.assertTrue(any(s.startswith("education 1: this employer's list has no 'Lakeshore Nowhere Institute', so that entry was left off") for s in report.skipped), report.skipped)
         self.assertEqual(state["degrees"], ["Masters", "Bachelors"])
-        # No exact entry for the second field of study, so the sheet's stated nearest option is taken instead.
-        self.assertEqual(state["fields"], ["Business Administration", "Engineering Technology"])
+        # No exact entry for the second field of study, so the sheet's stated nearest option is taken instead, in the
+        # tenant's own spelling ("Technologies"), from a lookup slow enough to pass for a plain box if it weren't waited for.
+        self.assertEqual(state["fields"], ["Business Administration", "Engineering Technologies"])
+        self.assertFalse(any("(typed)" in f for f in report.filled), report.filled)
         self.assertEqual(report.decisions, [])
         self.assertEqual(state["gpa"], ["", "3.4"])
         # The years go into the inputs inside Workday's date wrappers, and an entry's missing dates are only reported.
