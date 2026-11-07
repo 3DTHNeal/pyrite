@@ -8,10 +8,17 @@ from datetime import date
 
 from . import score as scoring
 from . import sources
-from .store import ACTIVE, connect, get_job, load_config, log_event, now, quiet_days_since, record_listing
+from .store import (
+    ACTIVE, STATUSES, connect, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing,
+    set_status,
+)
 
 # How much of a posting's vocabulary must match for an edited repost to count as the same job.
 NEAR_TWIN_OVERLAP = 0.85
+# Days a sent application's posting can be down, with nothing heard, before it counts as ghosted. 0 turns this off.
+DEFAULT_GHOST_AFTER_DOWN_DAYS = 14
+# How a ghosted status set by the sweep starts, so a posting that comes back can undo it without touching your own calls.
+AUTO_GHOSTED = "The posting came down"
 
 
 def dedupe_key(company: str, title: str, description: str) -> str:
@@ -167,12 +174,53 @@ def run(only: str | None = None, fresh: bool = False, conn=None, cfg=None, max_m
                 conn.rollback()
                 _save_result(conn, {**result, "error": f"Couldn't be saved. {type(err).__name__}: {err}"[:300]}, cfg, started, stats)
 
+    stats["ghosted"] = len(settle_gone(conn, cfg))
     conn.execute(
         "UPDATE runs SET finished_at = ?, stats = ? WHERE id = ?",
         (now(), json.dumps(stats), run_id),
     )
     conn.commit()
     return stats
+
+
+def ghost_after_days(cfg: dict) -> int:
+    return cfg["run"].get("ghost_after_down_days", DEFAULT_GHOST_AFTER_DOWN_DAYS)
+
+
+def waiting_on_gone(job) -> bool:
+    """A sent application whose posting is down and that you haven't updated since: no reply, decision or next step of your own."""
+    return (job["status"] == "applied" and bool(job["posting_closed_at"])
+            and (job["next_action"] or "") in ("", "Follow up"))
+
+
+def settle_gone(conn, cfg: dict) -> list[int]:
+    """Mark ghosted each sent application whose posting has been down for the set days with nothing heard.
+
+    Mail the inbox flagged that you haven't dealt with yet holds a job back, since it may be the reply.
+    """
+    days = ghost_after_days(cfg)
+    if not days:
+        return []
+    flagged = possible_replies(conn)
+    settled = []
+    for job in conn.execute("SELECT * FROM jobs WHERE status = 'applied' AND posting_closed_at IS NOT NULL").fetchall():
+        if not waiting_on_gone(job) or job["id"] in flagged or quiet_days_since(job["posting_closed_at"]) < days:
+            continue
+        down = date.fromisoformat(job["posting_closed_at"][:10])
+        set_status(conn, job["id"], "ghosted",
+                   f"{AUTO_GHOSTED} on {down:%b} {down.day} and nothing came back in {days} days. "
+                   "Reopen it if they get in touch.", cfg["run"]["follow_up_days"])
+        settled.append(job["id"])
+    conn.commit()
+    return settled
+
+
+def _ghosted_by_sweep(conn, job_id: int) -> bool:
+    last = conn.execute(
+        f"SELECT kind, detail FROM events WHERE job_id = ? AND kind IN ({','.join('?' * len(STATUSES))}) ORDER BY id DESC LIMIT 1",
+        (job_id, *STATUSES),
+    ).fetchone()
+    return bool(last and last["kind"] == "ghosted" and (last["detail"] or "").startswith(AUTO_GHOSTED))
 
 
 def _save_result(conn, result, cfg, started, stats):
@@ -240,6 +288,9 @@ def _reopen_if_closed(conn, job, ts: str) -> None:
             "UPDATE jobs SET status = 'new', status_changed_at = ?, closed_out_at = NULL WHERE id = ?", (ts, job["id"])
         )
         log_event(conn, job["id"], "new", "The posting is back up")
+    elif job["status"] == "ghosted" and _ghosted_by_sweep(conn, job["id"]):
+        # Only the sweep's own call is undone. A job you marked ghosted yourself stays that way.
+        set_status(conn, job["id"], "applied", "The posting is back up, so this is waiting to hear again")
 
 
 def _mark_seen(conn, key: str, source_id: str, ts: str, cfg: dict, stats: dict) -> None:

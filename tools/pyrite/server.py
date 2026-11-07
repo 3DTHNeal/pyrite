@@ -20,7 +20,7 @@ from . import checks, claude_code, deadline, facts, prep, refresh, tasks
 from . import score as scoring
 from . import settings
 from .cli import finish_job
-from .discover import last_full_sweep
+from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
 from .store import (
     DEFAULT_FIX_ATTEMPTS, IS_EXAMPLE, REPLY_DISMISSED, ROOT, STATUSES, TAILOR_REQUESTED, changed_after_sending, connect, fix_attempts,
     get_job, job_dict, load_config, log_event, now, possible_replies, quiet_days_since, sent_copies, set_status,
@@ -193,7 +193,19 @@ def _history_text(job: dict) -> str:
     return ""
 
 
-def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS) -> list[dict]:
+def _gone_text(job: dict, ghost_days: int) -> str:
+    """What happens to a sent application whose posting came down, and when."""
+    down = quiet_days_since(job["posting_closed_at"]) or 0
+    since = {0: "today", 1: "yesterday"}.get(down, f"{down} days ago")
+    if not ghost_days:
+        return f"The posting came down {since} and you haven't heard. Mark it ghosted or rejected if you think it's filled."
+    left = ghost_days - down
+    when = "on the next sweep" if left <= 0 else "tomorrow" if left == 1 else f"in {left} days"
+    return (f"The posting came down {since} and you haven't heard. It counts as ghosted {when} "
+            "unless you log a reply or set a next step.")
+
+
+def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, ghost_days: int = 0) -> list[dict]:
     """Today's to-do list, most urgent first."""
     orders = []
     for job in jobs:
@@ -204,6 +216,9 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS) -> list[dic
         if job["status"] in ("interviewing", "offer") and job["follow_up_due"]:
             orders.append({"rank": 0, "kind": "Act now", "job_id": job["id"], "text": name,
                            "detail": job["next_action"] or "Next step is due"})
+        elif waiting_on_gone(job):
+            orders.append({"rank": 2, "kind": "Posting down", "job_id": job["id"], "text": name,
+                           "detail": _gone_text(job, ghost_days)})
         elif job["quiet"]:
             orders.append({"rank": 3, "kind": "Gone quiet", "job_id": job["id"], "text": name,
                            "detail": f"No reply in {job['days_since_applied']} days. Mark it ghosted, or try one last nudge."})
@@ -290,6 +305,7 @@ def build_state(conn, cfg) -> dict:
         "response_rate": round(100 * len(heard) / len(applied)) if applied else None,
         "replied": len(replied),
         "rejected": len(rejected),
+        "ghosted": sum(j["status"] == "ghosted" and bool(j["applied_at"]) for j in jobs),
         "reply_rate": round(100 * len(replied) / len(applied)) if applied else None,
         "median_days_to_reply": statistics.median(days_to_reply) if days_to_reply else None,
         "interviews": sum(bool(j["interview_at"]) for j in jobs),
@@ -297,14 +313,19 @@ def build_state(conn, cfg) -> dict:
         "possible_ghosts": sum(j["ghost_risk"] for j in radar),
         "to_triage": len(radar),
     }
+    # Each job once, at the stage it's at now, so a resume that went out counts as sent and no longer as ready.
+    at = lambda *statuses: sum(j["status"] in statuses for j in jobs)  # noqa: E731
     funnel = [
-        {"stage": "Found", "count": len(jobs)},
-        {"stage": "Resume ready", "count": sum(bool(j["ready_at"]) for j in jobs)},
-        {"stage": "Applied", "count": len(applied)},
-        {"stage": "Replied", "count": len(replied)},
-        {"stage": "Interview", "count": stats["interviews"]},
-        {"stage": "Offer", "count": sum(bool(j["offer_at"]) for j in jobs)},
+        {"stage": "Prospects", "count": at("new")},
+        {"stage": "Being tailored", "count": at("shortlisted", "needs_fix")},
+        {"stage": "Ready to send", "count": at("ready")},
+        {"stage": "Waiting to hear", "count": at("applied")},
+        {"stage": "Replied", "count": at("responded")},
+        {"stage": "Interviewing", "count": at("interviewing")},
+        {"stage": "Offer", "count": at("offer")},
     ]
+    closed_labels = {"rejected": "rejected", "ghosted": "ghosted", "withdrawn": "withdrawn", "passed": "passed", "closed": "posting closed"}
+    closed = [{"label": label, "count": at(status)} for status, label in closed_labels.items() if at(status)]
     brief = conn.execute("SELECT * FROM briefings ORDER BY id DESC LIMIT 1").fetchone()
     briefing = dict(brief) if brief else None
     if briefing:
@@ -317,7 +338,8 @@ def build_state(conn, cfg) -> dict:
         "jobs": jobs,
         "stats": stats,
         "funnel": funnel,
-        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS)),
+        "closed": closed,
+        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), ghost_days=ghost_after_days(cfg)),
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),
         "last_run": last_full_sweep(conn),
