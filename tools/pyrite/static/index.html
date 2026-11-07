@@ -61,6 +61,7 @@
       </select>
       <select id="radar-show" aria-label="Filter by freshness">
         <option value="">All listings</option>
+        <option value="unseen">Not looked at yet</option>
         <option value="new">New only</option>
         <option value="promoted">Preferred city or industry</option>
         <option value="clean">Never reposted</option>
@@ -68,6 +69,7 @@
       </select>
       <select id="radar-sort" aria-label="Sort postings">
         <option value="priority">Sort by priority</option>
+        <option value="deadline">Sort by deadline</option>
         <option value="newest">Sort by newest</option>
         <option value="score">Sort by score</option>
       </select>
@@ -109,6 +111,7 @@
 
 <aside id="drawer" class="drawer" hidden aria-label="Job details" tabindex="-1"></aside>
 <div id="scrim" class="scrim" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="add-dialog" class="dialog">
   <h2>Add a posting</h2>

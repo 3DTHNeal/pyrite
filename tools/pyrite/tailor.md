@@ -55,6 +55,8 @@ Don't name a skill, tool or product that `profile/facts.md`, `profile/approved-t
 
 Follow the model notes: the posting link, the role in brief, a table mapping what the company wants to the evidence and its strength, every gap to prepare for, including any that rest only on the record being silent (mark those so the candidate can correct them), and claims to word carefully in an interview. Be candid: this file is for the candidate alone. Mention anything odd in the posting.
 
+The dashboard reads two kinds of line from the notes and shows them on the job: a `- **Deadline:**` line with the date written out in full (November 8, 2026) when the posting gives one, and one `- **Check before applying:**` line for each thing that could rule the application out or needs a decision first, such as residency, relocation, a clearance or a core requirement the record doesn't meet. Keep each of those to one sentence.
+
 ## When you're done
 
 The fact checker and the build run after you stop, and any errors come back to you. Read the resume once as a skeptical hiring manager first: a true fact twisted into a false impression is still wrong. Finish with one plain sentence on how you pitched it, for the candidate to read on the dashboard.
