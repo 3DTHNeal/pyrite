@@ -76,27 +76,27 @@ The builder and its writing rules together are the drafter, and they carry a ver
 
 `tools/pyrite.py serve` runs it at <http://127.0.0.1:8787>. It only listens on this machine. On Windows, double-click `Pyrite.cmd`, which starts the dashboard if it's down and replaces it if it has hung. If another program holds port 8787, it says so and closes nothing. To start it at login, put a shortcut to `.venv\Scripts\pythonw.exe tools\pyrite.py serve` in your Startup folder, with this folder as its working directory.
 
-The dashboard uses a prospector's words for its parts:
+The dashboard labels its parts in plain words. The code and these docs sometimes use the prospector's name each started with:
 
-| Name | What it is |
-|---|---|
-| Sluice | Today's to-do list: what needs you, most urgent first |
-| Field report | The summary each Claude run leaves at the top of the Sluice |
-| Yield | How many jobs have reached each stage, from found to offer |
-| Claims | Jobs you're working: being tailored, ready, applied and beyond |
-| Nuggets | Drafts that passed the assay and are ready to send |
-| Prospects | New postings you haven't judged yet |
-| Tailings | Jobs that are closed out: passed, rejected, ghosted or taken down |
-| Veins | The job boards Pyrite reads, and whether each is working |
-| Pan | Reading the boards and checking mail. The command is still `pyrite sweep` |
-| Assay | The fact checker that decides whether a draft is ready |
+| On the dashboard | Also called | What it is |
+|---|---|---|
+| To do | Sluice | Today's to-do list: what needs you, most urgent first |
+| Field report | | The summary each Claude run leaves at the top of the to-do list |
+| Funnel | Yield | How many jobs have reached each stage, from found to offer |
+| Pipeline | Claims | Jobs you're working: being tailored, ready, applied and beyond |
+| Ready to send | Nuggets | Drafts that passed the assay and are ready to send |
+| Prospects | | New postings you haven't judged yet |
+| Closed | Tailings | Jobs that are closed out: passed, rejected, ghosted or taken down |
+| Sources | Veins | The job boards Pyrite reads, and whether each is working |
+| Check boards now | Pan | Reading the boards and checking mail. The command is `pyrite sweep` |
+| Fact check | Assay | The checker that decides whether a draft is ready |
 
 Two buttons at the top start a run without waiting for the schedule:
 
-- **Pan now** reads the job boards and checks mail, as the morning pan does. It uses no AI.
+- **Check boards now** reads the job boards and checks mail, as the morning sweep does. It uses no AI.
 - **Run Claude now** judges the new postings and tailors the best, as the daily run does. It uses your Claude plan, so it asks first.
 
-A third, **Tailor these now**, sits in the **Being tailored** column of the Claims board. It has Claude write every draft waiting there, stretch jobs included, without judging new postings and without the daily run's limit, and its result shows beside the buttons at the top. It uses your Claude plan, so it asks first. A draft that has used up its fix attempts is left alone; **Tailor this one first** on that job gives it another go.
+A third, **Tailor these now**, sits in the **Being tailored** column of the Pipeline board. It has Claude write every draft waiting there, stretch jobs included, without judging new postings and without the daily run's limit, and its result shows beside the buttons at the top. It uses your Claude plan, so it asks first. A draft that has used up its fix attempts is left alone; **Tailor this one first** on that job gives it another go.
 
 Each runs in the background, shows its progress beside the buttons, and refuses to start while one of its kind is already going. The Claude run and the tailoring batch also refuse to start while the other is going, since both write drafts. The demo starts none of them.
 
@@ -127,11 +127,11 @@ Nothing ever applies on your behalf. Click **I applied** on the dashboard and it
 
 ## Deadlines and what to check before applying
 
-Boards have no closing-date field, so the dashboard reads the posting's own words ("accepted at least until November 8, 2026", "expected to close on November 16th, 2026") and, failing that, the `**Deadline:**` line in the job's `notes.md`. A job that hasn't been sent shows **Apply by** on its card and in Prospects, red within two days. Ready drafts closing soonest lead the Sluice, and a prospect or shortlisted job closing within two days gets a **Closing soon** item even if it isn't new. Prospects can be sorted by deadline. A stated deadline that has passed shows quietly, since "at least until" often runs longer.
+Boards have no closing-date field, so the dashboard reads the posting's own words ("accepted at least until November 8, 2026", "expected to close on November 16th, 2026") and, failing that, the `**Deadline:**` line in the job's `notes.md`. A job that hasn't been sent shows **Apply by** on its card and in Prospects, red within two days. Ready drafts closing soonest lead the to-do list, and a prospect or shortlisted job closing within two days gets a **Closing soon** item even if it isn't new. Prospects can be sorted by deadline. A stated deadline that has passed shows quietly, since "at least until" often runs longer.
 
 The job panel opens with **Before you apply** when there's something to settle: the deadline, each `**Check before applying:**` line and each item under a "Before you apply" heading in the notes, any notes line saying to do something before applying, and what you've already sent the employer. It counts your applications to each employer and warns when a job would go past `max_per_company` under `[dashboard]` in `search.toml` (3 if unset), and when a nearly identical title there has already been sent, which is usually another listing of the same job.
 
-A ready draft whose files changed after the assay passed it shows as **Check again** in the Sluice, not **Send**, with a button that rebuilds and rechecks it there, and **Check all again** when there are several. The field report folds away, with a line saying so, once you've applied or passed on anything since it was written.
+A ready draft whose files changed after the assay passed it shows as **Check again** in the to-do list, not **Send**, with a button that rebuilds and rechecks it there, and **Check all again** when there are several. The field report folds away, with a line saying so, once you've applied or passed on anything since it was written.
 
 ## Going through prospects
 
@@ -139,7 +139,7 @@ A ready draft whose files changed after the assay passed it shows as **Check aga
 
 ## New listings, reposts and possible ghost jobs
 
-Prospects, the Sluice and the daily run put the newest listings first, ahead of older ones with a similar score. **Priority** is the filter score plus points for age and for a preferred city or industry, minus a penalty for each repost. The weights are under `[freshness]` and `[promote]` in `search.toml`. Priority only changes the order, and the filter score still decides what's kept and tailored.
+Prospects, the to-do list and the daily run put the newest listings first, ahead of older ones with a similar score. **Priority** is the filter score plus points for age and for a preferred city or industry, minus a penalty for each repost. The weights are under `[freshness]` and `[promote]` in `search.toml`. Priority only changes the order, and the filter score still decides what's kept and tailored.
 
 - **New:** posted in the last 7 days and never reposted.
 - **Reposted:** the same job came back under a new listing, or the same listing came back after being taken down. The same job in another city isn't a repost. Age keeps counting from the earliest date on record, so a repost doesn't look new again.
@@ -256,7 +256,7 @@ An app password opens the whole mailbox as far as Google is concerned. The read-
 - If you've applied to two roles at one company, a match appears on both.
 - Sender names can be forged. Treat a match as a prompt to open your mailbox, and don't follow links from the dashboard's text.
 
-If the login or connection fails, the pan still succeeds and **Email replies** shows as failing on the Veins tab.
+If the login or connection fails, the pan still succeeds and **Email replies** shows as failing on the Sources tab.
 
 ## Common commands
 
@@ -288,4 +288,4 @@ If the login or connection fails, the pan still succeeds and **Email replies** s
 
 ## Adding companies
 
-Add a line under `[watch.*]` in `search.toml` if the careers page is on Greenhouse, Lever, Ashby or Workday, then run `pyrite sources` to confirm it responds. Employers with no public feed go under `[[manual_check]]`, which lists them on the dashboard's Veins tab. Use **Add a posting** for anything you find yourself, such as on LinkedIn.
+Add a line under `[watch.*]` in `search.toml` if the careers page is on Greenhouse, Lever, Ashby or Workday, then run `pyrite sources` to confirm it responds. Employers with no public feed go under `[[manual_check]]`, which lists them on the dashboard's Sources tab. Use **Add a posting** for anything you find yourself, such as on LinkedIn.

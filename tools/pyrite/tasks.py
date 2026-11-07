@@ -112,7 +112,7 @@ def start(conn, kind: str) -> None:
 def _sweep(conn, cfg: dict, task_id: int) -> str:
     progress(conn, task_id, "Reading the job boards")
     stats = discover.run(conn=conn, cfg=cfg)
-    said = (f"{stats['postings']:,} postings read across {stats['sources']} veins, {stats['new']} new"
+    said = (f"{stats['postings']:,} postings read across {stats['sources']} sources, {stats['new']} new"
             + (f", {stats['failed']} failing" if stats["failed"] else "") + ".")
     progress(conn, task_id, "Checking mail for replies")
     try:

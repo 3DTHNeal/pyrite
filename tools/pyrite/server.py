@@ -269,9 +269,13 @@ def build_state(conn, cfg) -> dict:
 
     applied =[j for j in jobs if j["applied_at"]]
     heard = [j for j in applied if j["response_at"]]
+    # A rejection is hearing back, but it isn't progress, so replies and rejections are counted apart.
+    answered = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind IN ('responded', 'interviewing', 'offer')")}
+    replied = [j for j in heard if j["id"] in answered or j["interview_at"] or j["offer_at"]]
+    rejected = [j for j in applied if j["status"] == "rejected" and j not in replied]
     days_to_reply = [
         (datetime.fromisoformat(j["response_at"]) - datetime.fromisoformat(j["applied_at"])).days
-        for j in heard
+        for j in replied
     ]
     this_week = [j for j in applied if (quiet_days_since(j["applied_at"]) or 0) < 7]
     radar = [j for j in jobs if j["status"] == "new"]
@@ -284,6 +288,9 @@ def build_state(conn, cfg) -> dict:
         "applied_week": len(this_week),
         "heard": len(heard),
         "response_rate": round(100 * len(heard) / len(applied)) if applied else None,
+        "replied": len(replied),
+        "rejected": len(rejected),
+        "reply_rate": round(100 * len(replied) / len(applied)) if applied else None,
         "median_days_to_reply": statistics.median(days_to_reply) if days_to_reply else None,
         "interviews": sum(bool(j["interview_at"]) for j in jobs),
         "fresh": sum(j["is_new"] for j in radar),
@@ -294,7 +301,7 @@ def build_state(conn, cfg) -> dict:
         {"stage": "Found", "count": len(jobs)},
         {"stage": "Resume ready", "count": sum(bool(j["ready_at"]) for j in jobs)},
         {"stage": "Applied", "count": len(applied)},
-        {"stage": "Heard back", "count": len(heard)},
+        {"stage": "Replied", "count": len(replied)},
         {"stage": "Interview", "count": stats["interviews"]},
         {"stage": "Offer", "count": sum(bool(j["offer_at"]) for j in jobs)},
     ]
