@@ -347,12 +347,20 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
     """
     box = page.locator(selector).first if isinstance(selector, str) else selector
     page.keyboard.press("Escape")
-    for term in wanted + list(terms or []):
+    # Everything any search turned up, for the report: a miss should say how this tenant spells things.
+    seen: list[str] = []
+    said_none: list[str] = []
+    for term in list(dict.fromkeys(wanted + list(terms or []))):
         before = set(_texts(_options(page)))
         box.fill(term)
         box.press("Enter")
         page.wait_for_timeout(SETTLE_MS // 3)
         chosen, exact = _results(page, wanted, before)
+        if chosen is None and exact is None:
+            found = [t.strip() for t in _texts(_options(page)) if t.strip() and "press delete" not in t.lower()]
+            seen += [t for t in found if t not in seen]
+            if not found:
+                said_none.append(term)
         # A single-value picker selects an exact match by itself and shows it as a removable value.
         if chosen is not None:
             name = _picked_name(chosen, wanted)
@@ -374,7 +382,9 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
         page.wait_for_timeout(300)
         report.decisions.append(f"{what}: no entry called {wanted[0]!r}, picked {shown[0]!r}. Others: {', '.join(shown[1:6])}")
         return shown[0]
-    offered = f". Workday offers: {', '.join(shown[:6])}" if shown else ""
+    offered = f". Workday offers: {', '.join((seen or shown)[:12])}" if (seen or shown) else ""
+    if not offered and said_none:
+        offered = f". Nothing came up for: {', '.join(said_none)}"
     if keep_text:
         box.fill(wanted[0])
         page.keyboard.press("Escape")
@@ -653,7 +663,11 @@ def _education_details(page, block: str, entry: dict, report: Report, what: str)
         if _already_picked(page, field):
             report.filled.append(f"{what} field of study: already set, left as is")
         else:
-            pick_search(page, field, [entry["field"]] + entry.get("field_alternatives", []), report, f"{what} field of study")
+            # A tenant's search can find nothing for a long name and still list it, so the name's first word is searched
+            # too ("Electrical"). It only brings the tenant's spellings into view: just the sheet's names can be picked.
+            words = entry["field"].split()
+            broader = [words[0]] if len(words) > 2 else []
+            pick_search(page, field, [entry["field"]] + entry.get("field_alternatives", []), report, f"{what} field of study", terms=broader)
     elif field is None and entry.get("field"):
         report.skipped.append(f"{what} field of study: no field-of-study box found in this entry")
     gpa = _in_block(page, block, ["gradeAverage", "gpa"])

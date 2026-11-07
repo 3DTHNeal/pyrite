@@ -3030,8 +3030,13 @@ class Autofill(ClaudeRun):
             workday.SETTLE_MS = 100
             page.evaluate("""() => { window.plainSchool = true;
                 document.body.insertAdjacentHTML('afterbegin', '<div data-automation-id="promptOption">Website</div>'); }""")
-            workday.fill_education(page, [{"school": "Northfield Community College", "degree": "Bachelor of Science", "field": "", "gpa": "",
-                                           "from": "2004", "to": "2008"}], report)
+            # A field of study the list lacks is left empty, not half-typed, and the miss names what the searches turned up.
+            workday.fill_education(page, [{"school": "Northfield Community College", "degree": "Bachelor of Science",
+                                           "field": "Underwater Welding Technology", "gpa": "", "from": "2004", "to": "2008"}], report)
+            field = page.evaluate("(() => { const e = document.querySelector('[id$=\"--fieldOfStudy\"]'); return [e.value, e.dataset.selected || ''] })()")
+            self.assertEqual(field, ["", ""])
+            self.assertIn("education 1 field of study: no entry called 'Underwater Welding Technology'. Workday offers: Coastal and Ocean Engineering Technology",
+                          report.skipped)
             schools = page.evaluate("[...document.querySelectorAll('[id$=\"--schoolName\"]')].map(e => e.value)")
             degrees = page.evaluate("[...document.querySelectorAll('[id$=\"--degree\"]')].map(e => e.textContent)")
             browser.close()
