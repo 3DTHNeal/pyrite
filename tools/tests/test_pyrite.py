@@ -2259,8 +2259,10 @@ class Gate(ClaudeRun):
         self.assertEqual(self.detail()["changed_since_check"], [])
         (self.folder / "resume.md").write_text(self.draft + "\n- Added later.\n", encoding="utf-8")
         self.assertEqual(self.detail()["changed_since_check"], ["resume.md"])
-        send = [o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Send"]
-        self.assertIn("changed after the assay", send[0]["detail"])
+        # Not one to send any more: the Sluice asks for it to be checked again instead.
+        orders = server.build_state(self.conn, CFG)["orders"]
+        self.assertEqual([o["kind"] for o in orders if o["kind"] in ("Send", "Check again")], ["Check again"])
+        self.assertIn("changed after the assay", next(o for o in orders if o["kind"] == "Check again")["detail"])
         (self.folder / "resume.md").write_text(self.draft, encoding="utf-8")
         (self.folder / "cover-letter.md").write_text("A letter nobody checked.", encoding="utf-8")
         self.assertEqual(self.detail()["changed_since_check"], ["cover-letter.md"])

@@ -97,15 +97,50 @@ function renderKpis() {
     tile(s.to_triage, "Prospects", `${s.fresh} new, ${s.possible_ghosts} possible ghost${s.possible_ghosts === 1 ? "" : "s"}`, s.fresh > 0));
 }
 
-function renderOrders() {
+// The report names jobs as they stood when it was written. Once you've applied or passed since, fold it away and say so.
+function renderBriefing() {
   const b = state.briefing;
-  fill($("briefing"), b ? [h("span", { class: "when" }, `Field report, ${ago(b.ts)}`), b.body] : []);
+  if (!b) return fill($("briefing"));
+  const since = b.since || {};
+  const moved = [since.applied ? `applied to ${plural(since.applied, "job")}` : "", since.passed ? `passed on ${since.passed}` : ""].filter(Boolean);
+  if (!moved.length) return fill($("briefing"), h("span", { class: "when" }, `Field report, ${ago(b.ts)}`), b.body);
+  return fill($("briefing"), h("details", { class: "stale-report" },
+    h("summary", {}, `Field report from ${ago(b.ts)} is out of date: since then you ${moved.join(" and ")}. The list below is current.`),
+    h("p", {}, b.body)));
+}
+
+// Checking again rebuilds the documents, which can take a minute each, so it runs one at a time and says how far it's got.
+let recheckProgress = "";
+
+async function recheckAll(ids) {
+  for (const [index, id] of ids.entries()) {
+    recheckProgress = ids.length > 1 ? `Checking ${index + 1} of ${ids.length}…` : "Checking…";
+    renderOrders();
+    try {
+      await api(`/api/job/${id}/action`, { action: "recheck" });
+    } catch (err) {
+      runError = `Couldn't check a draft again: ${err.message}`;
+      break;
+    }
+  }
+  recheckProgress = "";
+  await refresh();
+}
+
+function renderOrders() {
+  renderBriefing();
   const kindClass = (kind) => `kind kind-${kind.toLowerCase().replace(/\s+/g, "-")}`;
+  const recheck = state.demo ? [] : state.orders.filter((o) => o.action === "recheck").map((o) => o.job_id);
+  const sluiceIds = state.orders.map((o) => o.job_id).filter(Boolean);
+  const checkButton = (ids, label) => h("button", { class: "btn dismiss", type: "button", disabled: Boolean(recheckProgress),
+    title: "Rebuilds the documents and runs the assay again. Takes up to a minute each.", onclick: () => recheckAll(ids) }, recheckProgress || label);
   const items = state.orders.map((o) => h("li", {},
-    h("button", { class: "order", type: "button", onclick: () => openJob(o.job_id) },
+    h("button", { class: "order", type: "button", onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : null) },
       h("span", { class: kindClass(o.kind) }, o.kind),
-      h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail)))));
-  fill($("orders"), items.length ? items : h("li", { class: "empty" }, "Nothing needs you right now."));
+      h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),
+    o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null));
+  const all = recheck.length > 1 ? h("li", { class: "order-batch" }, checkButton(recheck, `Check all ${recheck.length} again`)) : null;
+  fill($("orders"), items.length ? [all, ...items] : h("li", { class: "empty" }, "Nothing needs you right now."));
 }
 
 function renderFunnel() {
@@ -142,9 +177,39 @@ function freshnessPills(job) {
 }
 
 const FIT_TONE = { strong: "good", good: "good", stretch: "warn", skip: "bad" };
+const NOT_SENT = ["new", "shortlisted", "needs_fix", "ready"];
+const dayName = (iso) => toDate(iso).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+// When the posting stops taking applications. Only worth showing until you've sent one.
+function deadlinePill(job) {
+  const days = job.days_to_deadline;
+  if (days === null || days === undefined || !NOT_SENT.includes(job.status)) return null;
+  const on = shortDate(job.deadline);
+  if (days < 0) return pill("muted", `Deadline ${on} passed`, "The posting's stated deadline has passed. \"At least until\" often runs longer, so check the posting is still up.");
+  const label = days === 0 ? "Apply today" : days === 1 ? "Apply by tomorrow" : `Apply by ${on}`;
+  return pill(days <= 2 ? "bad" : days <= 7 ? "warn" : "muted", label, `The posting gives ${dayName(job.deadline)} as its deadline`);
+}
+
+// What you've already sent this employer, so a second listing of the same job or one application too many is caught before it goes out.
+function historyPills(job) {
+  if (job.applied_at) return [];
+  const pills = [];
+  const same = job.same_title_applied;
+  if (same) pills.push(pill("bad", "Same title sent", `You applied for ${same.title} here on ${shortDate(same.applied_at)}. This may be another listing of it.`));
+  if (job.applied_here) {
+    pills.push(pill(job.applied_here >= job.company_limit ? "warn" : "muted", `${job.applied_here} sent here`,
+      `Applications already sent to ${job.company}. Your limit is ${job.company_limit} at a time.`));
+  }
+  return pills;
+}
+
+const blockerPill = (job) => ((job.blockers || []).length
+  ? pill("bad", "Check first", `From the notes, before you apply:\n- ${job.blockers.join("\n- ")}`) : null);
+
+const urgentPills = (job) => [deadlinePill(job), blockerPill(job), ...historyPills(job)].filter(Boolean);
 
 function cardMeta(job) {
-  const meta = [];
+  const meta = [...urgentPills(job)];
   if (job.possible_reply) meta.push(pill("warn", "Possible reply"));
   if (job.priority) meta.push(pill("info", "Your pick", "You asked for this one next"));
   if (job.score) meta.push(h("span", { class: "score", title: "Filter score, out of 100" }, `Score ${job.score}`));
@@ -177,20 +242,23 @@ function renderBoard() {
         id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo,
         title: "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
         onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
-      h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id) },
+      h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id, jobs.map((j) => j.id)) },
         h("span", { class: "co" }, job.company), h("span", { class: "ti" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
   }));
 }
 
 // ---- Radar ----
 
+const byDeadline = (job) => (job.days_to_deadline === null || job.days_to_deadline === undefined || job.days_to_deadline < 0 ? Infinity : job.days_to_deadline);
 const RADAR_SORTS = {
   priority: (a, b) => b.rank - a.rank,
+  deadline: (a, b) => byDeadline(a) - byDeadline(b) || b.rank - a.rank,
   newest: (a, b) => (a.age_days ?? Infinity) - (b.age_days ?? Infinity) || b.rank - a.rank,
   score: (a, b) => b.score - a.score || b.rank - a.rank,
 };
 const RADAR_SHOWS = {
   "": () => true,
+  unseen: (j) => !j.seen,
   new: (j) => j.is_new,
   promoted: (j) => j.promoted.length,
   clean: (j) => !j.reposts && !j.redates,
@@ -213,23 +281,39 @@ function renderRadar() {
     && RADAR_SHOWS[$("radar-show").value](j))
     .sort(RADAR_SORTS[$("radar-sort").value]);
   const shown = rows.slice(0, 300);
-  $("radar-count").textContent = rows.length > shown.length ? `Showing ${shown.length} of ${rows.length}` : `${rows.length} postings`;
+  const ids = shown.map((j) => j.id);
+  const unseen = state.jobs.filter((j) => j.status === "new" && !j.seen).length;
+  const count = rows.length > shown.length ? `Showing ${shown.length} of ${rows.length}` : `${rows.length} postings`;
+  $("radar-count").textContent = unseen ? `${count}. ${unseen} not looked at yet.` : count;
+  // Tailor and Pass act straight from the row, so a quick no never needs the panel.
+  const quick = (j, label, action, cls) => h("button", { class: cls, type: "button",
+    onclick: (e) => { e.stopPropagation(); triage(j, action, false); } }, label);
   fill($("radar"),
     h("thead", {}, h("tr", {},
       h("th", { class: "num", title: "Score plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost" }, "Priority"),
       h("th", { class: "num", title: "Filter score, out of 100" }, "Score"),
-      ["Company", "Title", "Location", "Track", "Pay", "Posted", "Signals"].map((c) => h("th", {}, c)))),
-    h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
+      ["Company", "Title", "Location", "Track", "Pay", "Posted", "Signals"].map((c) => h("th", {}, c)),
+      h("th", {}, h("span", { class: "visually-hidden" }, "Actions")))),
+    h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, class: j.seen ? "" : "unseen", onclick: () => openJob(j.id, ids) },
       h("td", { class: "num" }, j.rank),
       h("td", { class: "num muted" }, j.score),
       h("td", {}, j.company),
-      h("td", {}, h("button", { class: "linkish", type: "button" }, j.title)),
-      h("td", {}, j.location || "Not stated"),
+      h("td", {}, h("button", { class: "linkish", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title)),
+      h("td", {}, h("span", { class: "place", title: j.location || "" }, shortPlace(j.location))),
       h("td", {}, j.track),
       h("td", {}, j.comp),
       h("td", { class: "nowrap", title: shortDate(j.first_posted_at || j.posted_at) }, daysAgo(j.age_days) || "Unknown"),
-      h("td", {}, h("span", { class: "signals" }, freshnessPills(j)))))
-      : h("tr", {}, h("td", { colspan: 9, class: "empty" }, "No prospects match."))));
+      h("td", {}, h("span", { class: "signals" }, urgentPills(j), freshnessPills(j))),
+      h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small"))))
+      : h("tr", {}, h("td", { colspan: 10, class: "empty" }, "No prospects match."))));
+}
+
+// A posting can list dozens of places. Show the first few and keep the rest in the tooltip.
+function shortPlace(location) {
+  if (!location) return "Not stated";
+  const places = [...new Set(location.split(/\s*[|;]\s*/).filter(Boolean))];
+  if (places.length <= 3) return places.join(" | ");
+  return `${places.slice(0, 3).join(" | ")} and ${places.length - 3} more`;
 }
 
 function renderArchive() {
@@ -813,14 +897,18 @@ function actionButtons(job, noteEl) {
   }, label);
   const status = (s) => ({ action: "status", status: s });
   const heard = (kind) => ({ action: "heard_back", kind });
+  // Tailor and Pass move on to the next job in the list you opened this from, since that's what you'd click next anyway.
+  const triageButton = (label, action, cls = "btn", key = "") => h("button", {
+    class: cls, type: "button", title: key ? `Shortcut: ${key}` : null, onclick: () => triage(job, action, true, note()),
+  }, label);
   switch (job.status) {
     case "new":
-      return [button("Tailor a resume next", { action: "tailor_next" }, "btn primary"), button("Pass", status("passed"))];
+      return [triageButton("Tailor a resume next", "tailor_next", "btn primary", "T"), triageButton("Pass", "pass", "btn", "P")];
     case "shortlisted":
     case "needs_fix":
-      return [button("Tailor this one first", { action: "tailor_next" }, "btn primary"), button("Pass", status("passed"))];
+      return [triageButton("Tailor this one first", "tailor_next", "btn primary", "T"), triageButton("Pass", "pass", "btn", "P")];
     case "ready":
-      return [button("I applied", status("applied"), "btn primary"), button("Pass", status("passed"))];
+      return [button("I applied", status("applied"), "btn primary"), triageButton("Pass", "pass")];
     case "applied":
       return [button("Got a reply", heard("reply"), "btn primary"), button("Interview", heard("interview")),
         button("Rejected", heard("rejected")), button("Ghosted", status("ghosted")), button("Withdraw", status("withdrawn"))];
@@ -832,8 +920,88 @@ function actionButtons(job, noteEl) {
     case "offer":
       return [button("Withdraw or decline", status("withdrawn"))];
     default:
-      return [button("Reopen", { action: "reopen" }, "btn primary")];
+      return [job.can_unpass ? button("Undo pass", { action: "unpass" }, "btn primary") : button("Reopen", { action: "reopen" }, "btn primary")];
   }
+}
+
+// ---- Triage: pass or tailor, then on to the next ----
+
+let nav = [];
+let toastTimer = null;
+
+function toast(text, undo) {
+  const box = $("toast");
+  fill(box, h("span", {}, text), undo ? h("button", { class: "btn small", type: "button", onclick: async () => {
+    box.hidden = true;
+    try {
+      await undo();
+    } catch (err) {
+      runError = err.message;
+    }
+    await refresh();
+  } }, "Undo") : null);
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, 10000);
+}
+
+function nextInList(id) {
+  const at = nav.indexOf(id);
+  return at < 0 ? null : nav[at + 1] ?? nav[at - 1] ?? null;
+}
+
+async function triage(job, action, fromPanel, note = "") {
+  const body = action === "pass" ? { action: "status", status: "passed", note } : { action: "tailor_next", note };
+  const next = fromPanel ? nextInList(job.id) : null;
+  try {
+    await api(`/api/job/${job.id}/action`, body);
+  } catch (err) {
+    toast(`${job.company}: ${err.message}`);
+    return;
+  }
+  if (action === "pass") {
+    toast(`Passed on ${job.company}: ${job.title}`, () => api(`/api/job/${job.id}/action`, { action: "unpass" }));
+  } else {
+    toast(`${job.company}: ${job.title} is queued for tailoring.`);
+  }
+  nav = nav.filter((id) => id !== job.id);
+  await refresh();
+  if (!fromPanel) return;
+  if (next) await openJob(next);
+  else closeDrawer();
+}
+
+// What could stop this application, gathered where you can't miss it: the deadline, the notes' warnings and what you've already sent there.
+function beforeApplyBlock(job) {
+  if (!NOT_SENT.includes(job.status)) return null;
+  const lines = [];
+  const days = job.days_to_deadline;
+  if (days !== null && days !== undefined) {
+    const on = dayName(job.deadline);
+    lines.push(days < 0 ? `The posting's stated deadline, ${on}, has passed. Check it's still up before you spend time on it.`
+      : days === 0 ? `Apply today. The posting gives ${on} as its deadline.`
+        : `Apply by ${on}${days === 1 ? ", tomorrow" : `, in ${days} days`}.`);
+  }
+  const same = job.same_title_applied;
+  if (same) lines.push(`You applied for ${same.title} here on ${shortDate(same.applied_at)}. This may be another listing of the same job.`);
+  if (job.applied_here >= job.company_limit) lines.push(`You've sent ${job.company} ${job.applied_here} applications already, and your limit is ${job.company_limit}.`);
+  const blockers = job.blockers || [];
+  if (!lines.length && !blockers.length) return null;
+  const urgent = (days !== null && days !== undefined && days >= 0 && days <= 2) || blockers.length || same;
+  return h("div", { class: `callout${urgent ? " bad" : ""}` },
+    h("strong", {}, "Before you apply"),
+    h("ul", {}, lines.map((line) => h("li", {}, line)), blockers.map((line) => h("li", {}, line))),
+    blockers.length ? h("p", { class: "muted" }, "From this job's notes. The full reasoning is under Fit and interview notes.") : null);
+}
+
+function navBar(id) {
+  const at = nav.indexOf(id);
+  if (at < 0 || nav.length < 2) return null;
+  const go = (to) => (to === undefined ? null : () => openJob(to));
+  return h("div", { class: "row nav" },
+    h("button", { class: "btn small", type: "button", disabled: at === 0, title: "Shortcut: K", onclick: go(nav[at - 1]) }, "‹ Previous"),
+    h("span", { class: "muted" }, `${at + 1} of ${nav.length}`),
+    h("button", { class: "btn small", type: "button", disabled: at === nav.length - 1, title: "Shortcut: J", onclick: go(nav[at + 1]) }, "Next ›"));
 }
 
 // The sender and subject come from whoever sent the mail, so they stay plain text.
@@ -958,13 +1126,18 @@ async function watchRefresh(id) {
   refreshWatch = setTimeout(() => watchRefresh(id), 5000);
 }
 
-async function openJob(id) {
+// `list` is the order of the list it was opened from, for Previous, Next and moving on after a pass.
+async function openJob(id, list) {
   let job;
   try {
     job = await api(`/api/job/${id}`);
   } catch (err) {
     return;
   }
+  if (list) nav = list;
+  else if (!nav.includes(id)) nav = [];
+  if (job.status === "new" && !job.seen && !state.demo) markSeen(id);
+  const wasOpen = !$("drawer").hidden;
   openJobId = id;
   clearTimeout(refreshWatch);
   if (working(job)) refreshWatch = setTimeout(() => watchRefresh(id), 5000);
@@ -992,6 +1165,8 @@ async function openJob(id) {
     h("div", { class: "drawer-head" },
       h("div", {}, h("h2", {}, job.title), h("p", { class: "muted" }, job.company)),
       h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Close")),
+    navBar(id),
+    beforeApplyBlock(job),
     h("div", { class: "row" },
       href ? h("a", { class: "btn", href, target: "_blank", rel: "noopener noreferrer" }, "Open posting") : null,
       pdfs.map((file) => h("a", { class: "btn", href: fileHref(file), target: "_blank", rel: "noopener" }, file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " "))),
@@ -1032,6 +1207,38 @@ async function openJob(id) {
   );
   $("drawer").hidden = false;
   $("scrim").hidden = false;
+  $("drawer").scrollTop = 0;
+  // Focus goes into the panel so the keyboard shortcuts and Tab start there, not on the page behind it.
+  if (!wasOpen || !$("drawer").contains(document.activeElement)) $("drawer").focus();
+}
+
+// The first time you open a prospect. It's only a marker for the Prospects tab, so a failure is ignored.
+function markSeen(id) {
+  api(`/api/job/${id}/action`, { action: "seen" }).catch(() => {});
+  const job = state.jobs.find((j) => j.id === id);
+  if (job) {
+    job.seen = true;
+    renderRadar();
+  }
+}
+
+// J and K step through the list, T tailors and P passes, as long as you aren't typing in a box.
+function drawerKeys(e) {
+  if (!openJobId || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const key = e.key.toLowerCase();
+  const at = nav.indexOf(openJobId);
+  if ((key === "j" || key === "k") && at >= 0) {
+    const to = nav[at + (key === "j" ? 1 : -1)];
+    if (to !== undefined) openJob(to);
+    e.preventDefault();
+    return;
+  }
+  if (key !== "p" && key !== "t") return;
+  const job = state.jobs.find((j) => j.id === openJobId);
+  // Only before anything is written: a ready draft is passed on with the button, never a stray key.
+  if (!job || !["new", "shortlisted", "needs_fix"].includes(job.status)) return;
+  e.preventDefault();
+  triage(job, key === "p" ? "pass" : "tailor_next", true);
 }
 
 function closeDrawer() {
@@ -1051,7 +1258,10 @@ document.querySelectorAll(".tabs button").forEach((tab) => tab.addEventListener(
 window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen) e.preventDefault(); });
 ["radar-search", "radar-track", "radar-place", "radar-show", "radar-sort"].forEach((id) => $(id).addEventListener("input", renderRadar));
 $("scrim").addEventListener("click", closeDrawer);
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openJobId) closeDrawer(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && openJobId) closeDrawer();
+  else drawerKeys(e);
+});
 
 $("run-sweep").addEventListener("click", () => startRun("sweep"));
 $("run-claude").addEventListener("click", () => startRun("claude"));

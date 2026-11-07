@@ -125,6 +125,18 @@ Either way, the code holds two lines by itself. Only `pyrite finish` can mark a 
 
 Nothing ever applies on your behalf. Click **I applied** on the dashboard and it schedules a follow-up reminder for 7 days later. It also freezes the job: a read-only copy of `resume.md`, `cover-letter.md` and the built documents goes into the folder's `sent/`, the job leaves the ready list, and from then on nothing rebuilds, refreshes or re-checks its documents. The job shows **Frozen** with links to the sent copies, and **Changed after sending** if a file in the folder stops matching them. A second application to the same company is a new job with its own folder. For applications made before this existed, `pyrite sent <id> --from <subfolder>` keeps the copy from a subfolder you saved by hand. Log what comes back with **Got a reply**, **Interview** or **Rejected** so the numbers stay right. Reply detection points out mail worth checking, but only those buttons change a job's status.
 
+## Deadlines and what to check before applying
+
+Boards have no closing-date field, so the dashboard reads the posting's own words ("accepted at least until November 8, 2026", "expected to close on November 16th, 2026") and, failing that, the `**Deadline:**` line in the job's `notes.md`. A job that hasn't been sent shows **Apply by** on its card and in Prospects, red within two days. Ready drafts closing soonest lead the Sluice, and a prospect or shortlisted job closing within two days gets a **Closing soon** item even if it isn't new. Prospects can be sorted by deadline. A stated deadline that has passed shows quietly, since "at least until" often runs longer.
+
+The job panel opens with **Before you apply** when there's something to settle: the deadline, each `**Check before applying:**` line and each item under a "Before you apply" heading in the notes, any notes line saying to do something before applying, and what you've already sent the employer. It counts your applications to each employer and warns when a job would go past `max_per_company` under `[dashboard]` in `search.toml` (3 if unset), and when a nearly identical title there has already been sent, which is usually another listing of the same job.
+
+A ready draft whose files changed after the assay passed it shows as **Check again** in the Sluice, not **Send**, with a button that rebuilds and rechecks it there, and **Check all again** when there are several. The field report folds away, with a line saying so, once you've applied or passed on anything since it was written.
+
+## Going through prospects
+
+**Tailor** and **Pass** sit on each row of Prospects, so a quick no doesn't need the panel. In the job panel, **J** and **K** step through the list you opened it from, and on a job nothing has been written for yet, **T** tailors it and **P** passes, then the next one opens. A pass shows **Undo** for ten seconds, and a passed job that hadn't been sent offers **Undo pass**, which puts it back where it was. A ready draft is only passed with the button, never a key. The first time you open a prospect it's marked as looked at; the Prospects count says how many you haven't opened, and **Not looked at yet** filters to them.
+
 ## New listings, reposts and possible ghost jobs
 
 Prospects, the Sluice and the daily run put the newest listings first, ahead of older ones with a similar score. **Priority** is the filter score plus points for age and for a preferred city or industry, minus a penalty for each repost. The weights are under `[freshness]` and `[promote]` in `search.toml`. Priority only changes the order, and the filter score still decides what's kept and tailored.
