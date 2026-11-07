@@ -19,6 +19,7 @@ import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import claude_code, store
 from .store import CODE_ROOT, IS_EXAMPLE, get_job, log_event
@@ -30,9 +31,22 @@ STATE_NAMES = {STARTED: "running", DONE: "done", FAILED: "failed"}
 LOG = "autofill-log.txt"
 # A run holds the browser open until the window is closed, so "running" can be long. Past this it must have died.
 STALE_MINUTES = 180
-WORKDAY_URL = re.compile(r"myworkday", re.I)
-OFF = ("Workday autofill is experimental and off. To try it, add `autofill = true` under [workday] "
+# Workday's candidate sites, by host. The host is what's checked, never a substring of the whole address, since
+# `https://myworkday.example.com` or `https://example.com/?myworkday` would otherwise pass, and a page that copies
+# Workday's markup would get the candidate's name, address, history and resume.
+WORKDAY_DOMAINS = ("myworkdayjobs.com", "myworkday.com")
+OFF =("Workday autofill is experimental and off. To try it, add `autofill = true` under [workday] "
        "in profile/search.toml. It never submits.")
+
+
+def is_workday(url: str) -> bool:
+    """Whether `url` is an https page on one of Workday's own hosts."""
+    try:
+        parts = urlparse((url or "").strip())
+        host = (parts.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return parts.scheme == "https" and any(host == domain or host.endswith("." + domain) for domain in WORKDAY_DOMAINS)
 
 
 def enabled() -> bool:
@@ -195,7 +209,7 @@ def refusal(conn, job) -> str | None:
         return "This job has no application folder with a resume, so there's nothing to fill from."
     if not (store.ROOT / "profile" / "workday-paste.md").exists():
         return "No profile/workday-paste.md in the workspace. Copy the example and fill it in once."
-    if not WORKDAY_URL.search(job["url"] or ""):
+    if not is_workday(job["url"]):
         return "This only fills Workday forms, and the posting link isn't a Workday site."
     if importlib.util.find_spec("playwright") is None:
         return "Playwright isn't installed. In the pyrite venv: python -m pip install playwright, then python -m playwright install chromium."
@@ -971,9 +985,13 @@ COOKIES = "cookies.json"
 
 
 def save_cookies(context, profile: Path) -> None:
-    """Keep the sign-ins. Workday's are session cookies, which the browser drops on close, so they're kept here instead."""
+    """Keep the sign-ins. Workday's are session cookies, which the browser drops on close, so they're kept here instead.
+
+    Only Workday's own: the file is plain text, and another site's session, such as an SSO sign-in, has no business in it.
+    """
     try:
-        (profile / COOKIES).write_text(json.dumps(context.cookies()), encoding="utf-8")
+        kept = [c for c in context.cookies() if is_workday("https://" + str(c.get("domain", "")).lstrip("."))]
+        (profile / COOKIES).write_text(json.dumps(kept), encoding="utf-8")
     except Exception:  # noqa: BLE001  The browser is already gone; nothing to keep.
         pass
 
@@ -1041,6 +1059,9 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
 
     `on_filled(report)` is called once the filling is over and before the browser is held open for the candidate.
     """
+    if not is_workday(url):
+        raise ValueError(f"Not a Workday page, so nothing is filled: {url!r}. Autofill only types into https pages on "
+                         f"{' or '.join(WORKDAY_DOMAINS)}.")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as err:
@@ -1050,7 +1071,7 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
     profile = root / PROFILE_DIR
     profile.mkdir(parents=True, exist_ok=True)
     # Straight into the form, past the Apply menu: Workday's own address for "Apply Manually". A sign-in, if needed, comes first.
-    if WORKDAY_URL.search(url) and "/apply" not in url:
+    if "/apply" not in url:
         url = url.rstrip("/") + "/apply/applyManually"
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(str(profile), headless=False, viewport={"width": 1100, "height": 900})
@@ -1070,7 +1091,8 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
             # A sign-in may open the form in a new tab; the newest one is where the candidate is.
             if context.pages:
                 page = context.pages[-1]
-            if current_step(page):
+            # A sign-in can pass through another site's page; only a form on Workday's own host counts.
+            if is_workday(page.url) and current_step(page):
                 break
             try:
                 page.wait_for_timeout(2000)
@@ -1088,6 +1110,9 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
                 report.stopped_at = "the browser, which was closed"
                 break
             page = context.pages[-1]
+            if not is_workday(page.url):
+                report.stopped_at = f"a page off Workday ({urlparse(page.url).hostname or page.url}), so nothing was typed there"
+                break
             step = current_step(page)
             if not step or step in seen or step not in STEPS:
                 report.stopped_at = step or "a page this doesn't know"
@@ -1112,6 +1137,9 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
                 if answer.strip().lower().startswith("q"):
                     report.stopped_at = f"{step}, at your request"
                     break
+            if not is_workday(page.url):  # The page moved while it was being filled.
+                report.stopped_at = f"{step}: the page left Workday ({urlparse(page.url).hostname or page.url}), so it wasn't saved"
+                break
             if press_next(page, report, step):
                 continue
             if "wouldn't save" not in report.stopped_at and "didn't turn" not in report.stopped_at:

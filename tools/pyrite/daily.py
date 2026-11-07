@@ -1,7 +1,7 @@
 """The Claude run, driven by code: Claude judges and writes, and this module does everything else.
 
 A posting is untrusted text from the internet, so Claude never gets a shell here. Each posting is judged
-by its own run that can only read. Each application is written by a run that can change only that
+by its own run that has no tools at all. Each application is written by a run that can change only that
 application's own files. Recording verdicts, making folders, building documents and running the fact
 checker all happen in this code, so no instruction in a posting can reach them.
 """
@@ -62,7 +62,9 @@ def _shorten(text: str, limit: int = REASON_LIMIT) -> str:
 
 def triage_prompt(job) -> str:
     board = {key: job[key] for key in BOARD_FIELDS}
-    return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.job_line(job) + "\n"
+    # Triage runs with no tools, so a posting can't steer it into reading anything: the two files it judges by come with it.
+    return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.profile_section(ROOT, claude_code.PROFILE_FILES[:2])
+            + claude_code.job_line(job) + "\n"
             + claude_code.posting_block(board, job["description"]) + "\n")
 
 
