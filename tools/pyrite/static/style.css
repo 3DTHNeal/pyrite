@@ -83,7 +83,8 @@ main > * { min-width: 0; }
 .order .what { display: block; font-weight: 600; overflow-wrap: anywhere; }
 .order .why { display: block; color: var(--ink-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .kind-act-now, .kind-blocked { color: var(--bad); }
-.kind-follow-up, .kind-gone-quiet, .kind-possible-reply { color: var(--warn); }
+.kind-follow-up, .kind-gone-quiet, .kind-possible-reply, .kind-posting-down { color: var(--warn); }
+.funnel-note { font-size: 12px; }
 .kind-send { color: var(--good); }
 .kind-check-again, .kind-closing-soon { color: var(--bad); }
 .order-list .order-batch { justify-content: flex-end; }
