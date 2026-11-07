@@ -3018,6 +3018,28 @@ class Autofill(ClaudeRun):
         self.assertEqual(state["files"], 1)
         self.assertIn("resume: Alex_Rivera_Resume_Acme.docx", report.filled)
 
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_a_plain_school_box_gets_the_name_typed_not_the_entry_dropped(self):
+        # As on some tenants: the school takes any text, the wrapper around the whole entry carries lookup markings
+        # for the field of study, and a value picked elsewhere on the page shows as a prompt option.
+        report = workday.Report()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            workday.SETTLE_MS = 100
+            page.evaluate("""() => { window.plainSchool = true;
+                document.body.insertAdjacentHTML('afterbegin', '<div data-automation-id="promptOption">Website</div>'); }""")
+            workday.fill_education(page, [{"school": "Northfield Community College", "degree": "Bachelor of Science", "field": "", "gpa": "",
+                                           "from": "2004", "to": "2008"}], report)
+            schools = page.evaluate("[...document.querySelectorAll('[id$=\"--schoolName\"]')].map(e => e.value)")
+            degrees = page.evaluate("[...document.querySelectorAll('[id$=\"--degree\"]')].map(e => e.textContent)")
+            browser.close()
+        self.assertEqual(schools, ["Northfield Community College"])
+        self.assertEqual(degrees, ["Bachelors"])
+        self.assertIn("education 1 school: Northfield Community College (typed, since this employer's box takes any name)", report.filled)
+        self.assertFalse(any("left off" in s for s in report.skipped), report.skipped)
+
 
 class Gate(ClaudeRun):
     """Ready means the draft on file passed the fact checker, and nothing else can say so."""

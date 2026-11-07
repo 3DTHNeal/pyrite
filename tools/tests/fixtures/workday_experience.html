@@ -157,12 +157,19 @@ function dropdown(button, names) {
   });
 }
 
+// Some tenants take the school as plain text, inside a wrapper for the whole entry that also carries the field of
+// study's lookup markings. Set window.plainSchool to build entries that way.
+window.plainSchool = false;
 function addEdu() {
   const k = next();
+  const school = window.plainSchool
+    ? `<label>School or University <input id="education-${k}--schoolName" type="text"></label>`
+    : `<label>School or University <input id="education-${k}--school" type="text" data-automation-id="searchBox"><ul role="listbox" hidden></ul></label>`;
   document.getElementById("edu").insertAdjacentHTML("beforeend", `
-    <fieldset>
+    <fieldset data-automation-id="formField-education${k}">
+      <span data-automation-id="promptIcon"></span>
       <button type="button" onclick="this.parentElement.remove()">Delete</button>
-      <label>School or University <input id="education-${k}--school" type="text" data-automation-id="searchBox"><ul role="listbox" hidden></ul></label>
+      ${school}
       <div data-automation-id="formField-degree">Degree <button type="button" id="education-${k}--degree">Select One</button></div>
       <div data-automation-id="formField-fieldOfStudy"><label>Field of Study <input id="education-${k}--fieldOfStudy" type="text"><ul role="listbox" hidden></ul></label></div>
       <label>GPA <input id="education-${k}--gradeAverage" type="text"></label>
@@ -170,7 +177,7 @@ function addEdu() {
       <div id="education-${k}--firstYearAttended">From <input id="education-${k}--firstYearAttended-dateSectionYear-input" type="text" size="4"></div>
       <div id="education-${k}--lastYearAttended">To <input id="education-${k}--lastYearAttended-dateSectionYear-input" type="text" size="4"></div>
     </fieldset>`);
-  searchPicker(document.getElementById(`education-${k}--school`), CATALOG.school, true);
+  if (!window.plainSchool) searchPicker(document.getElementById(`education-${k}--school`), CATALOG.school, true);
   // A slow lookup, as on some tenants: an answer after seconds must not be taken for a plain box that has none.
   searchPicker(document.getElementById(`education-${k}--fieldOfStudy`), CATALOG.field, true, 3500);
   dropdown(document.getElementById(`education-${k}--degree`), CATALOG.degree);

@@ -449,31 +449,28 @@ def choose(page, button, wanted: list[str], report: Report, what: str) -> str:
 
 
 def _takes_any_text(page, box, name: str) -> bool:
-    """Whether a box is plain text rather than one of Workday's lookups: no picker markings, and typing a name then
-    pressing Enter brings up no list at all. The name is left typed in a plain box, which is all it needs."""
+    """Whether a box is plain text rather than one of Workday's lookups: no picker markings on the box itself, and typing
+    a name then pressing Enter brings up no list at all. The name is left typed in a plain box, which is all it needs.
+
+    Only the box's own markings count. The wrapper around it can be a whole education entry on some tenants, holding the
+    field-of-study lookup's markings too, and a plain school box read through it is taken for a lookup and left off.
+    """
     if box.get_attribute("data-automation-id") == "searchBox" or box.get_attribute("role") == "combobox" \
             or box.get_attribute("aria-autocomplete") is not None or box.get_attribute("aria-haspopup") is not None \
             or re.search(r"select|prompt|multi", box.get_attribute("data-uxi-widget-type") or "", re.I):
         return False
-    # Workday's lookups carry their markings on the field around the box too: a prompt icon, a container for picks.
-    holder = box.locator("xpath=ancestor::*[starts-with(@data-automation-id,'formField-')][1]")
-    if holder.count() and holder.locator(LOOKUP_MARKS).count():
-        return False
-    before = set(_texts(_options(page)))
+    prompts = page.locator('[data-automation-id="promptOption"]:visible')
+    before, shown_before = set(_texts(_options(page))), prompts.count()
     box.fill(name)
     box.press("Enter")
-    # A tenant's lookup can take seconds to answer, and a slow answer mistaken for none leaves a name typed but never picked.
+    # A tenant's lookup can take seconds to answer, and a slow answer mistaken for none leaves a name typed but never
+    # picked. Values already picked elsewhere on the page show as prompt options too, so only new ones count.
     deadline = time.monotonic() + RESULTS_MS / 2000
     while time.monotonic() < deadline:
         page.wait_for_timeout(300)
-        if set(_texts(_options(page))) != before or _says_none(page) \
-                or page.locator('[data-automation-id="promptOption"]:visible').count():
+        if set(_texts(_options(page))) != before or _says_none(page) or prompts.count() > shown_before:
             return False
     return (box.input_value() or "").strip() == name
-
-
-LOOKUP_MARKS = ('[data-automation-id="promptIcon"], [data-automation-id="multiselectInputContainer"], [data-automation-id="multiSelectContainer"], '
-                '[data-automation-id="selectedItemList"], [data-uxi-widget-type="multiselect"], [data-uxi-widget-type="selectinput"]')
 
 
 def _already_picked(page, selector) -> bool:
@@ -610,6 +607,12 @@ def fill_education(page, education: list[dict], report: Report) -> None:
             if not picked:
                 # The picker's own message names what the lookup offered, which is the clue to how this tenant spells the school.
                 offered = report.skipped.pop().partition(". Workday offers: ")[2]
+                # A search that offered nothing may not have been a lookup at all. Removing an entry is only for a list
+                # that answered, so the box gets one more look, and a plain one keeps the name.
+                if not offered and _takes_any_text(page, school, name):
+                    report.filled.append(f"{what} school: {name} (typed, since this employer's box takes any name)")
+                    picked = name
+            if not picked:
                 _remove_block(page, school)
                 kept -= 1
                 report.skipped.append(f"{what}: this employer's list has no {name!r}, so that entry was left off. The resume carries it."
