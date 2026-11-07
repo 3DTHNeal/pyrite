@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import claude_code
+from . import checks, claude_code
 from .claude_code import ClaudeFailed, find_claude, sign_in_help, spawn_worker
 from .cli import finish_job, write_posting
 from .store import IS_EXAMPLE, ROOT, get_job, log_event
@@ -84,12 +84,37 @@ def command(claude: str, folder: str) -> list[str]:
     return claude_code.command(claude, [f"{folder}/resume.md", f"{folder}/notes.md"])
 
 
-def prompt(job, folder: str, feedback: str = "") -> str:
+def prompt(job, folder: str, feedback: str = "", polish: str = "") -> str:
     text = INSTRUCTIONS.read_text(encoding="utf-8").replace("{folder}", folder)
+    text += claude_code.files_section(ROOT, folder, ("resume.md", "notes.md"))
     text += claude_code.job_line(job) + f"Today is {datetime.now().date().isoformat()}.\n"
     if feedback:
         text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{feedback}\n"
+    if polish:
+        text += f"\n{checks.POLISH_ASK}\n{polish}\n"
     return text
+
+
+def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, deadline: float) -> None:
+    """One more pass over a rewrite that passed with warnings it can clear. The letter isn't this run's to change,
+    so its warnings are left alone. If the pass fails the assay, the rewrite that passed goes back."""
+    asks = checks.polish_requests(report, letter=False)
+    if not asks or time.monotonic() > deadline:
+        return
+    files = [ROOT / folder / name for name in ("resume.md", "notes.md")]
+    kept = {path: path.read_bytes() for path in files if path.exists()}
+    try:
+        text = prompt(get_job(conn, job_id), folder, polish="\n".join(f"- {ask}" for ask in asks))
+        claude_code.ask(conn, job_id, "refresh", command(claude, folder), text, ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
+        if get_job(conn, job_id)["status"] not in REFRESHABLE:
+            return  # You moved it on during the pass, so its files are yours now.
+        if finish_job(conn, cfg, job_id)["ok"]:
+            return
+    except ClaudeFailed:
+        pass
+    for path, content in kept.items():
+        path.write_bytes(content)
+    finish_job(conn, cfg, job_id)
 
 
 def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
@@ -103,6 +128,7 @@ def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
             raise RefreshFailed("You moved this job on during the refresh, so the resume stays as it was.")
         report = finish_job(conn, cfg, job_id)
         if report["ok"]:
+            _polish(conn, cfg, job_id, folder, claude, report, deadline)
             return summary
         if any(error.startswith("Build failed") for error in report["errors"]):
             raise RefreshFailed("; ".join(report["errors"]))

@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS tasks (
     ok INTEGER,
     detail TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS mail_alerts (
+    id INTEGER PRIMARY KEY,
+    message_id TEXT NOT NULL UNIQUE,
+    ts TEXT NOT NULL,
+    job_id INTEGER REFERENCES jobs (id),
+    sender TEXT DEFAULT '',
+    subject TEXT DEFAULT '',
+    date TEXT,
+    reasons TEXT DEFAULT '[]',
+    dismissed_at TEXT
+);
 """
 
 

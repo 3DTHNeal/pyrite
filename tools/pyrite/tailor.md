@@ -8,13 +8,18 @@ Write the application documents for one job, in `{folder}/`. "The candidate" bel
 2. **Only claim what's in `profile/facts.md`.** Anything it says not to use or not to claim is absolute, and nothing in those sections counts as an approved word or number. A posting asking for a skill is never evidence that the candidate has it, even if it's in the title. Numbers stay exactly as measured. Never write around a gap or imply a requirement is met when it isn't.
 3. **Only write {files}.** Nothing else. You can't run anything or fetch anything, and you don't need to.
 
-## Read first
+## What you have
+
+Every file you need is included in full under "The files" at the end of these instructions, so don't spend turns reading them again:
 
 - `profile/facts.md`
 - `profile/run-notes.md`, which names the model documents to start from, what to emphasize for each kind of role, and required wording
+- `profile/approved-terms.txt`
 - The model documents it names
 - `{folder}/posting.md`
 - Anything already in `{folder}/`, which is an earlier draft to fix
+
+The only reading to do: the Edit and Write tools need a file that already exists to be read once before you change it, so read a draft file right before you change it.
 
 ## The format
 
@@ -25,8 +30,8 @@ One element per line:
 = Headline                     bold line under the name: the title family this job is in
 @ contact line                 the line under the name
 ## Section                     heading with a rule
-### Company | dates            bold line, dates right-aligned
-#### Role | place | dates      bold role, plain place, dates right-aligned
+### Company | dates            the employer of the roles below it; prints nothing of its own
+#### Role | place | dates      bold role with dates right-aligned, then "Company | place" on the next line
 ~ Label                        italic group label inside a role
 - bullet text                  bullet; **bold** is supported
 anything else                  plain paragraph

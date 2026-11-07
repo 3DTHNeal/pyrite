@@ -1,7 +1,7 @@
 """The Claude run, driven by code: Claude judges and writes, and this module does everything else.
 
 A posting is untrusted text from the internet, so Claude never gets a shell here. Each posting is judged
-by its own run that can only read. Each application is written by a run that can change only that
+by its own run that has no tools at all. Each application is written by a run that can change only that
 application's own files. Recording verdicts, making folders, building documents and running the fact
 checker all happen in this code, so no instruction in a posting can reach them.
 """
@@ -11,10 +11,10 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import claude_code
+from . import checks, claude_code
 from .claude_code import ClaudeFailed, find_claude
 from .cli import BOARD_FIELDS, apply_triage, ensure_folder, finish_job, queue
-from .store import ROOT, get_job, now
+from .store import ROOT, get_job, log_event, now
 
 FITS = ("strong", "good", "stretch", "skip")
 # A first draft and two fixes, as the instructions for a hand-run session allow.
@@ -62,7 +62,9 @@ def _shorten(text: str, limit: int = REASON_LIMIT) -> str:
 
 def triage_prompt(job) -> str:
     board = {key: job[key] for key in BOARD_FIELDS}
-    return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.job_line(job) + "\n"
+    # Triage runs with no tools, so a posting can't steer it into reading anything: the two files it judges by come with it.
+    return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.profile_section(ROOT, claude_code.PROFILE_FILES[:2])
+            + claude_code.job_line(job) + "\n"
             + claude_code.posting_block(board, job["description"]) + "\n")
 
 
@@ -72,15 +74,18 @@ def tailor_files(folder: str, cfg: dict) -> list[str]:
     return [f"{folder}/{name}" for name in names]
 
 
-def tailor_prompt(job, folder: str, cfg: dict, feedback: str = "") -> str:
+def tailor_prompt(job, folder: str, cfg: dict, feedback: str = "", polish: str = "") -> str:
     letters = cfg["run"].get("cover_letters", True)
     files = " and ".join(f"`{path}`" for path in tailor_files(folder, cfg))
     text = TAILOR_INSTRUCTIONS.read_text(encoding="utf-8").replace("{letter_section}", LETTER_SECTION if letters else "")
     text = text.replace("{files}", files).replace("{folder}", folder)
     today = date.today()
+    text += claude_code.files_section(ROOT, folder, tuple(path.rsplit("/", 1)[1] for path in tailor_files(folder, cfg)))
     text += claude_code.job_line(job) + f"Today is {today:%B} {today.day}, {today.year}.\n"
     if feedback:
         text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{feedback}\n"
+    if polish:
+        text += f"\n{checks.POLISH_ASK}\n{polish}\n"
     return text
 
 
@@ -122,11 +127,43 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float) -> bool:
             return False
         report = finish_job(conn, cfg, job_id)
         if report["ok"]:
+            polish(conn, cfg, job_id, folder, cmd, report, deadline)
             return True
         if any(error.startswith("Build failed") for error in report["errors"]):
             return False  # Not something a rewrite can fix.
         feedback = "\n".join(f"- {error}" for error in report["errors"])
     return False
+
+
+def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: dict, deadline: float) -> None:
+    """One more pass over a draft that passed with warnings a rewrite can clear, such as a letter naming unapproved
+    terms or a resume that copies the posting's skill terms. If that pass fails the assay, the passing draft goes back."""
+    asks = checks.polish_requests(report, letter=cfg["run"].get("cover_letters", True))
+    if not asks or time.monotonic() > deadline:
+        return
+    files = [ROOT / path for path in tailor_files(folder, cfg)]
+    kept = {path: path.read_bytes() for path in files if path.exists()}
+    try:
+        text = tailor_prompt(get_job(conn, job_id), folder, cfg, polish="\n".join(f"- {ask}" for ask in asks))
+        _ask(conn, job_id, "tailor", cmd, text, deadline)
+        if get_job(conn, job_id)["status"] != "ready":
+            return  # You moved it on during the pass, so its files are yours now.
+        if finish_job(conn, cfg, job_id)["ok"]:
+            log_event(conn, job_id, "polished", "Passed the assay with warnings, so one more pass cleared what it could: " + "; ".join(asks)[:400])
+            conn.commit()
+            return
+    except NotSignedIn:
+        raise
+    except ClaudeFailed:
+        pass
+    for path in files:
+        if path in kept:
+            path.write_bytes(kept[path])
+        elif path.exists():
+            path.unlink()  # Added by the pass that failed.
+    finish_job(conn, cfg, job_id)
+    log_event(conn, job_id, "polished", "A pass to clear the assay's warnings failed it instead, so the draft that passed is back.")
+    conn.commit()
 
 
 def _count(number: int, one: str, many: str | None = None) -> str:

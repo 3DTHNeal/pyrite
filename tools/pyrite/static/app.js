@@ -136,10 +136,12 @@ function renderOrders() {
   const sluiceIds = state.orders.map((o) => o.job_id).filter(Boolean);
   const checkButton = (ids, label) => h("button", { class: "btn dismiss", type: "button", disabled: Boolean(recheckProgress),
     title: "Rebuilds the documents and runs the assay again. Takes up to a minute each.", onclick: () => recheckAll(ids) }, recheckProgress || label);
+  // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
   const items = state.orders.map((o) => h("li", {},
     h("button", { class: "order", type: "button", onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : null) },
       h("span", { class: kindClass(o.kind) }, o.kind),
       h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),
+    o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
     o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null));
   const all = recheck.length > 1 ? h("li", { class: "order-batch" }, checkButton(recheck, `Check all ${recheck.length} again`)) : null;
   fill($("orders"), items.length ? [all, ...items] : h("li", { class: "empty" }, "Nothing needs you right now."));
@@ -223,6 +225,7 @@ function cardMeta(job) {
   const sent = !NOT_SENT.includes(job.status);
   const meta = [...urgentPills(job)];
   if (job.possible_reply) meta.push(pill("warn", "Possible reply"));
+  if (job.scam_alert) meta.push(pill("bad", "Possible scam", `Mail naming this company looked like a scam: ${job.scam_alert.reasons.join("; ")}`));
   if (job.priority && !sent) meta.push(pill("info", "Your pick", "You asked for this one next"));
   if (job.score && !sent) meta.push(h("span", { class: "score", title: "Filter score, out of 100" }, `Score ${job.score}`));
   if (job.fit && !sent) meta.push(pill(FIT_TONE[job.fit] || "muted", job.fit === "skip" ? "Skip" : `${capitalized(job.fit)} fit`, job.fit_reason));
@@ -859,6 +862,15 @@ async function act(id, body) {
   await openJob(id);
 }
 
+async function dismissAlert(id) {
+  try {
+    await api(`/api/alert/${id}/dismiss`, {});
+    await refresh();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
 // A button that fails says so in the panel. Otherwise a refused or timed-out action looks like nothing happened.
 async function tryAct(id, body, what = "That didn't go through") {
   try {
@@ -868,6 +880,48 @@ async function tryAct(id, body, what = "That didn't go through") {
     $("refresh-error").scrollIntoView({ block: "nearest" });
   }
 }
+
+const autofilling = (job) => Boolean(job.autofill && job.autofill.state === "running");
+
+// Types the fill sheet into the Workday form in a browser window of its own. It stops before Submit, which stays yours.
+async function startAutofill(job) {
+  const question = "Fill this job's Workday form?\n\nA browser window opens on the posting. Sign in there if it asks, click Apply, then Apply Manually, and watch it type each page. It stops before the voluntary disclosures and never submits: you answer what it lists, read the review page and click Submit yourself.";
+  if (!window.confirm(question)) return;
+  try {
+    await act(job.id, { action: "autofill" });
+  } catch (err) {
+    fill($("refresh-error"), h("div", { class: "callout bad" }, h("strong", {}, "Couldn't start filling the form"), h("p", {}, err.message)));
+  }
+}
+
+function autofillButton(job) {
+  if (!job.can_autofill) return null;
+  return h("button", { class: "btn", type: "button", disabled: autofilling(job), onclick: () => startAutofill(job) },
+    autofilling(job) ? "Filling the Workday form…" : "Fill Workday form");
+}
+
+function autofillBlock(job) {
+  const result = job.autofill;
+  if (!result) return null;
+  const lines = (result.detail || "").split("\n").filter(Boolean);
+  const log = job.autofill_log ? h("p", {}, h("a", { href: fileHref(job.autofill_log), target: "_blank", rel: "noopener" }, "The run's log")) : null;
+  if (result.state === "running") {
+    return h("div", { class: "callout" }, h("strong", {}, "Filling the Workday form"),
+      h("p", {}, "A Chromium window opened on the posting, probably behind this one: look for it in the taskbar. Sign in there if asked, click Apply, then Apply Manually. It waits up to 15 minutes for the form. When it stops, finish the form there: answer what it lists, read the review page and click Submit yourself."));
+  }
+  if (result.state === "failed") {
+    return h("div", { class: "callout bad" }, h("strong", {}, `The last fill failed, ${ago(result.at)}`), lines.map((line) => h("p", {}, line)), log);
+  }
+  return h("div", { class: "callout" }, h("strong", {}, `Workday form filled ${ago(result.at)}`),
+    h("p", {}, lines[0] || ""), lines.length > 1 ? h("ul", {}, lines.slice(1).map((line) => h("li", {}, line))) : null,
+    h("p", { class: "muted" }, "The browser window stays open for you to finish and submit. Nothing here submits."), log);
+}
+
+// The Workday paste sheet merged with this job's tailored role text, for you to fill the form from. Nothing submits.
+const fillButton = (job) => (job.can_fill
+  ? h("button", { class: "btn", type: "button", title: "Writes fill-sheet.md in the job's folder: the Workday paste sheet with this resume's role text",
+    onclick: () => tryAct(job.id, { action: "fill_sheet" }, "Couldn't write the fill sheet") }, job.fill_sheet ? "Remake fill sheet" : "Make fill sheet")
+  : null);
 
 const recheckButton = (job) => (job.can_recheck
   ? h("div", { class: "row" }, h("button", { class: "btn", type: "button",
@@ -1236,6 +1290,7 @@ async function openJob(id, list) {
       h("p", {}, `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof: some companies keep real openings up all year. Consider asking a recruiter whether it's actively being filled.`)) : null,
     applyRow(job, href),
     h("div", { id: "refresh-error" }),
+    autofillBlock(job),
     replyBlock(job),
     frozenBlock(job),
     changedBlock(job),

@@ -25,6 +25,7 @@ my-job-search/
   profile/search.toml         what to look for, which companies to watch, what to block
   profile/run-notes.md        personal guidance for the daily run
   profile/seed.toml           optional: applications you made before using this
+  profile/workday-paste.md    optional: every Workday field typed out once, which `pyrite fill` merges per job
   applications/               one folder per job
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
@@ -66,7 +67,7 @@ The check reads file contents, file and branch names, commit messages and the te
 .venv/Scripts/python.exe tools/build_resume.py path/to/resume.md --name Your_Name_Resume_Acme --author "Your Name"
 ```
 
-Cover letters use the same script with `--letter`, and should fit on one page.
+Cover letters use the same script with `--letter`, and should fit on one page. To build a resume and its letter together, add `--letter-source path/to/cover-letter.md --letter-name Your_Name_Cover_Letter_Acme`: Word's first PDF export in a process takes most of a minute and every later one a moment, so the pair shares one session, which is what `pyrite finish` and the daily run do.
 
 Each build makes three files: the `.docx`, the `.pdf` and a `.txt` for the paste boxes on application sites and LinkedIn. The documents are shaped for the parsers behind applicant tracking systems (one column, standard section names, real bullet characters, nothing in headers or footers), and after the PDF is made its text is read back the way a parser reads it. The build fails if the name, a contact detail, a heading or a date range didn't survive, or if the export produced ligatures that a keyword search can't match. That read-back needs poppler's `pdftotext`, which Git for Windows includes; without it the step is skipped. `docs/resume-playbook.md` has the evidence behind the format and the writing rules, and the table of what each application system does with an upload.
 
@@ -115,6 +116,8 @@ any    You               read each draft, apply on the company's site, log what 
 
 `pyrite run` is the daily run with its limits built in. The code does every step that changes anything: it records each verdict, makes each folder, builds the documents and runs the assay. Claude is started once per posting to judge it, with tools that can only read, and once per application to write it, able to change only that application's `resume.md`, `cover-letter.md` and `notes.md`. It never gets a shell or web access, so an instruction hidden in a posting has nothing to reach. Its instructions are `tools/pyrite/triage.md` and `tools/pyrite/tailor.md`, and the field report is written by the code from what the run did.
 
+A writing run gets everything it needs in its prompt: `profile/facts.md`, `profile/run-notes.md`, `profile/approved-terms.txt`, the model documents the run notes name in backticks (a folder means its `resume.md`, `cover-letter.md` and `notes.md`; a file path means that file), the job's `posting.md` and any draft already in its folder. That saves the six or seven turns a run used to spend reading them, each of which re-sent the whole conversation. The posting goes in fenced as job-board data, as it is everywhere else. **Refresh resume** gets the same. The run may still read the workspace, and must read a draft once before it can change it.
+
 The older way is a Claude Code session of your own following `tools/pyrite/daily_run.md`. That session has a shell, so its rules are only instructions, and its limits are yours to set. If you use it, give it permissions that:
 
 - allow the `pyrite` commands it needs: `queue`, `discover`, `job`, `triage`, `folder`, `finish` and `brief`
@@ -122,6 +125,33 @@ The older way is a Claude Code session of your own following `tools/pyrite/daily
 - deny edits to `profile/`, `data/` and this repository, and deny web access
 
 Either way, the code holds two lines by itself. Only `pyrite finish` can mark a draft ready, and a draft changed after it passed is flagged on the dashboard.
+
+### Filling a Workday form
+
+No applicant tracking system lets a candidate apply through an API: Workday, Greenhouse, Lever and Ashby all take applications only through their forms, and their apply endpoints need the employer's own credentials. Workday's form is the long one, and its resume parse fills the work history badly, so a workspace can keep `profile/workday-paste.md`: every field, in page order, typed out once. Copy `example/profile/workday-paste.md` to start. Its role sections need to keep the shape the example has, a `### Work experience N` heading, a table with `Job title` and `Company` rows, and one fenced text block, because that's what the merge reads.
+
+**Make fill sheet** on a job, or `pyrite fill <id>` (also `pyrite fill <folder>` for a folder with no job row), writes `fill-sheet.md` in the job's folder: the paste sheet with each role's description replaced by the tailored text from that job's `resume.md`, under a header that names the posting, the files to attach, the fields the sheet says to answer per application, and the lines in `notes.md` about salary, referrals or recruiters. A role the resume leaves out keeps the sheet's standard text and is marked so; a role in the resume with no section on the sheet is listed for you to add. Make it again after the resume changes. A sent job gets no new sheet, since its folder is a record.
+
+The sheet is for you, or for a browser session you watch, to fill the form from. Nothing in Pyrite submits an application, and a fill sheet changes nothing about that: you sign in, fill each page, review it and click Submit.
+
+**Typing it for you (experimental, off by default).** This has been tested against a fixture page with Workday's field ids, not yet on a live application, so it's off until your workspace's `search.toml` turns it on:
+
+```toml
+[workday]
+autofill = true
+```
+
+Only the file can turn it on: the dashboard's Settings tab can't. Check that automated form filling is acceptable under the terms of the site you use it on. With it on, **Fill Workday form** on a job, or `pyrite autofill <id>`, opens the job's posting in a browser window of its own, waits for you to sign in and reach the form, and types the sheet in: the work history with its tailored descriptions, education, languages, the skills picker, websites, the resume upload, and the standard application questions. From the command line it pauses before saving each page so you can look; from the dashboard it goes straight through and leaves the browser open for you. Either way it reports what it left for you (the sheet's per-application answers, questions it didn't recognize, skills Workday has no entry for) and which near-matches it picked, on the job's panel and in `autofill-log.txt` in its folder, and stops at the first page it doesn't know, which is the voluntary disclosures or the review page. The button shows only for a Workday posting that hasn't been sent. On Workday's Apply menu choose **Apply Manually**; a page Workday kept as a draft is left as it is. It has no way to submit: the only footer button it presses is one that saves or continues, and a button that submits is refused. It needs Playwright once:
+
+```bash
+.venv/Scripts/python.exe -m pip install playwright
+```
+
+```bash
+.venv/Scripts/python.exe -m playwright install chromium
+```
+
+The browser profile lives in your workspace's `data/browser/`, so each Workday tenant's sign-in survives between runs. Every tenant customizes its form a little, so the first run on a new one may find a section this doesn't fill; it says so and leaves it to you. Workday spells some skills its own way ("Machine Learning (ML)"); the common ones are built in, and `profile/workday-skills.toml` in your workspace adds more, as `"Your name" = "Workday's name"` lines under `[skills]`. `fill-sheet.json` beside the sheet is what the run reads, so the sheet's shape matters: the sections and field names in `example/profile/workday-paste.md`.
 
 Nothing ever applies on your behalf. Click **I applied** on the dashboard and it schedules a follow-up reminder for 7 days later. It also freezes the job: a read-only copy of `resume.md`, `cover-letter.md` and the built documents goes into the folder's `sent/`, the job leaves the ready list, and from then on nothing rebuilds, refreshes or re-checks its documents. The job shows **Frozen** with links to the sent copies, and **Changed after sending** if a file in the folder stops matching them. A second application to the same company is a new job with its own folder. For applications made before this existed, `pyrite sent <id> --from <subfolder>` keeps the copy from a subfolder you saved by hand. Log what comes back with **Got a reply**, **Interview** or **Rejected** so the numbers stay right. Reply detection points out mail worth checking, but only those buttons change a job's status.
 
@@ -198,12 +228,13 @@ It also warns, without blocking, about wording that readers now take as machine-
 - **Every line is checked.** Only your exact approved contact line is exempt, and an indented heading counts as a heading.
 - **Ready means the files on disk passed.** `pyrite finish` is the only thing that marks a draft ready. If a draft's files change afterwards, the dashboard shows **Changed since checked** until you click **Check again** or run `pyrite finish <id>`. A ready draft that fails a later check goes back to blocked.
 - **Drafts that keep failing.** After `fix_attempts` failed assays (6 unless you set it under `[run]`), the daily run stops retrying a draft. **Tailor this one first** gives it another set of tries.
+- **Passed, with warnings.** A draft that passes but draws a warning a rewrite can clear (a letter naming terms outside your sources or borrowed from the posting, an em dash, filler wording, a long letter, or a resume using more than 85% of the posting's skill terms) gets one more Claude pass from the daily run, told to fix those and nothing else. If that pass fails the assay, the draft that passed goes back, warnings and all. The job's timeline says which happened. Warnings about a file from an older drafter are for you.
 
 What it can still miss: a real number attached to the wrong claim, a number from one to ten written as a word, and an invented skill written in lowercase or opening a sentence without the posting naming it.
 
 ## Refreshing a resume
 
-**Refresh resume** on a draft you haven't sent has Claude Code rewrite it for that posting, in the background. The assay and the build run afterward, and any errors go back to Claude, up to three tries. If it still fails, the earlier draft and its documents are restored. While it runs, the previous draft is kept as `resume.previous.md` in the job's folder. It needs Claude Code installed and signed in. The demo refuses this, since a real run would spend your usage and overwrite the sample draft.
+**Refresh resume** on a draft you haven't sent has Claude Code rewrite it for that posting, in the background. The assay and the build run afterward, and any errors go back to Claude, up to three tries. If it still fails, the earlier draft and its documents are restored. A rewrite that passes with a warning it can clear gets one more pass, as in the daily run, though the cover letter isn't this run's to change. While it runs, the previous draft is kept as `resume.previous.md` in the job's folder. It needs Claude Code installed and signed in. The demo refuses this, since a real run would spend your usage and overwrite the sample draft.
 
 ## Interview prep
 
@@ -226,9 +257,27 @@ The **Sources** tab shows what the Claude runs started from the dashboard or the
 
 ## Reply detection
 
-`pyrite inbox` runs after each morning pan. It reads the sender, subject and date of recent Gmail messages and compares them with every active job you've applied to. A match appears as **Possible reply** on the job's card, in the to-do list and on its timeline. Message bodies are never downloaded.
+`pyrite inbox` runs after each morning pan. It reads the sender, subject and date of recent Gmail messages and compares them with every active job you've applied to. A match appears as **Possible reply** on the job's card, in the to-do list and on its timeline.
 
 A match never changes a status, so a wrong one can't affect the response rate. Read the email, then use the usual buttons if it's real, or **Dismiss** if it isn't.
+
+There are two ways to read the mailbox. IMAP with an app password is the plain one and never downloads a message body. The Gmail connector in Claude Code needs no password on disk and also warns about job scams, at the cost of one short Claude run per pan.
+
+### Through the Gmail connector
+
+Set `source = "gmail"` under `[inbox]` in `search.toml`. Each pan then starts Claude Code for one narrow job: copy the sender, subject, date and snippet of recent mail, and a little of the text of mail about hiring, into one JSON list that it hands back as its closing message. That run gets only the Gmail `search_threads` and `get_message` tools, and no tool that writes, so it can't send, reply, label or delete anything, or touch a file on this machine, whatever an email tells it. The list is thrown away once judged, so message text never stays on disk or in the database. Only the Primary and Updates categories are read, since that's where replies and recruiter mail land, mail from job boards such as LinkedIn and Indeed is left out of the search, since an alert is never a reply, and the text of a message is read only when it's about hiring and comes from somewhere other than a known employer, applicant tracking system or job board. That last rule is what keeps the run cheap: a confirmation from Workday is judged from its subject and snippet alone. Plain code does the matching above, and the scam check below. The run is counted under **Checking mail** on the Claude usage panel. It uses Sonnet, since copying headers needs no judgment; `model` under `[inbox]` picks another. The first read of a week or two of mail is the longest and dearest one, since later runs only read back a couple of days past the last good one.
+
+Setup: connect Gmail under Connectors in the Claude desktop app, sign in once with `claude auth login` in a terminal outside the app, and test it:
+
+```bash
+.venv/Scripts/python.exe tools/pyrite.py inbox
+```
+
+A Claude session that has read Gmail itself can also hand over an export in the same shape as `tools/pyrite/mail_check.md` describes, with `pyrite inbox --from <file.json>`.
+
+**Scam warnings** appear as **Possible scam** at the top of the to-do list, with a **Possible scam** mark on the card of any job whose company the mail names, and the reasons in plain words. Only mail about hiring, or mail that names a company Pyrite has seen, is looked at. One strong sign is enough: a domain that looks like the company's but isn't, a personal address claiming to be the company, replies routed to a personal address, an interview over WhatsApp or Telegram, or any mention of gift cards, checks, fees, crypto, bank details or ID documents. Weaker signs, such as "you've been selected" wording, pressure to act within hours, link shorteners or a form to fill in, need two together. Mail from the company's own domain or a known applicant tracking system gets the benefit of the doubt on wording, because a real offer also mentions deadlines and ID checks. A warning changes nothing. Open the mail yourself, don't reply, click or pay, and **Dismiss** it if it turns out to be genuine.
+
+### Through IMAP
 
 **Setup.** Until this is done, the command says it isn't set up and exits cleanly.
 
@@ -256,6 +305,7 @@ An app password opens the whole mailbox as far as Google is concerned. The read-
 **What it can miss or get wrong:**
 
 - It misses outside recruiters, personal addresses, LinkedIn messages and anything in Spam. Keep reading your email.
+- The scam rules work from patterns, so they miss a scam that uses none of the usual tells and can flag a blunt recruiter. They're a prompt to look closer, not a verdict.
 - It flags automatic "we received your application" notices, and non-marketing mail from a company you also buy from. Mailing-list mail is skipped unless its subject is about hiring.
 - If you've applied to two roles at one company, a match appears on both.
 - Sender names can be forged. Treat a match as a prompt to open your mailbox, and don't follow links from the dashboard's text.

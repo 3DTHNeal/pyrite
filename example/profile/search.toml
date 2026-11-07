@@ -184,6 +184,9 @@ paper = "letter"  # or "a4"
 # Searched on every Workday site. Results still go through the filters above.
 queries = ['principal engineer', 'firmware embedded', 'software engineering manager']
 max_pages = 2
+# Experimental: `pyrite autofill` and the Fill Workday form button type a job's fill sheet into its
+# Workday form while you watch. It never submits. Off unless this is true. See docs/operating.md.
+autofill = false
 
 [dashboard]
 # Extra names the dashboard answers to besides localhost, such as a private VPN name.
@@ -195,6 +198,11 @@ before_send = ["Check that anything you cite from a past employer is yours to sh
 [inbox]
 # How far back `pyrite inbox` reads mail. Only mail since you applied can match.
 lookback_days = 14
+# Where the mail comes from: "imap" (the default, with ~/.config/pyrite/imap.env) or
+# "gmail", which reads through the Gmail connector in Claude Code and also warns about job scams.
+# source = "gmail"
+# Which model copies the mail out for the "gmail" source. Sonnet unless you say otherwise.
+# model = "claude-sonnet-5-5"
 
 # Mail from a domain matching the company's name is matched already. List employers
 # here only when their mail comes from some other domain.

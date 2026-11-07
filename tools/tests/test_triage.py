@@ -32,7 +32,7 @@ class PostingDeadline(unittest.TestCase):
 class NotesBeforeApplying(unittest.TestCase):
     NOTES = """# Acme: Role
 
-- **Location:** Springfield, or remote in IL. Confirm before applying from Arizona, since relocation is out.
+- **Location:** Springfield, or remote in IL. Confirm before applying from Wisconsin, since relocation is out.
 - **Deadline:** applications accepted at least until November 8, 2026, two days from the save date.
 - **Check before applying:** **The remote option may need Illinois residency.**
 - **Referral:** none known. See "Before you apply".
@@ -56,7 +56,7 @@ Some framing first.
         self.assertEqual(when, "2026-11-08")
         # The referral line only points at the section, and the table is evidence, so neither is listed.
         self.assertEqual(blockers, [
-            "Location: Confirm before applying from Arizona, since relocation is out.",
+            "Location: Confirm before applying from Wisconsin, since relocation is out.",
             "The remote option may need Illinois residency.",
             "The core requirement is unmet",
             "Location is a stretch.",

@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from . import checks, claude_code, deadline, facts, prep, refresh, tasks
+from . import checks, claude_code, deadline, facts, fill, mail, prep, refresh, tasks, workday
 from . import score as scoring
 from . import settings
 from .cli import finish_job
@@ -118,13 +118,13 @@ def _changed_since_check(job: dict) -> list[str]:
     return checks.changed_since(ROOT / job["app_folder"], checked)
 
 
-def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: dict) -> None:
-    job["possible_reply"] = replies.get(job["id"])
-    job["refresh"] = refreshes.get(job["id"])
-    job["prep"] = preps.get(job["id"])
-    job["fix_attempts"] = tries.get(job["id"], 0)
-    if job["refresh"] and job["refresh"]["state"] == "running":
-        job["changed_since_check"] = []  # A refresh rewrites the draft in place and checks it when it's done.
+def _scam_alerts(alerts: list[dict]) -> dict[int, dict]:
+    """The latest open scam warning that names each job's company, by job id."""
+    by_job: dict[int, dict] = {}
+    for alert in alerts:
+        if alert["job_id"] is not None:
+            by_job.setdefault(alert["job_id"], alert)
+    return by_job
 
 
 def _company_key(name: str) -> str:
@@ -193,6 +193,16 @@ def _history_text(job: dict) -> str:
     return ""
 
 
+def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: dict, scams: dict | None = None) -> None:
+    job["possible_reply"] = replies.get(job["id"])
+    job["scam_alert"] = (scams or {}).get(job["id"])
+    job["refresh"] = refreshes.get(job["id"])
+    job["prep"] = preps.get(job["id"])
+    job["fix_attempts"] = tries.get(job["id"], 0)
+    if job["refresh"] and job["refresh"]["state"] == "running":
+        job["changed_since_check"] = []  # A refresh rewrites the draft in place and checks it when it's done.
+
+
 def _gone_text(job: dict, ghost_days: int) -> str:
     """What happens to a sent application whose posting came down, and when."""
     down = quiet_days_since(job["posting_closed_at"]) or 0
@@ -205,9 +215,14 @@ def _gone_text(job: dict, ghost_days: int) -> str:
             "unless you log a reply or set a next step.")
 
 
-def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, ghost_days: int = 0) -> list[dict]:
+def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: list[dict] = (), ghost_days: int = 0) -> list[dict]:
     """Today's to-do list, most urgent first."""
     orders = []
+    for alert in alerts:
+        # The sender and subject were written by whoever sent the mail, so the page shows them as text only.
+        orders.append({"rank": 0, "kind": "Possible scam", "job_id": alert["job_id"], "alert_id": alert["id"],
+                       "text": f"{alert['sender']}: {alert['subject'] or '(no subject)'}",
+                       "detail": "; ".join(alert["reasons"]) + ". Don't reply, click or pay. Dismiss this if it's genuine."})
     for job in jobs:
         name = f"{job['company']}: {job['title']}"
         if job["possible_reply"]:
@@ -274,11 +289,13 @@ def build_state(conn, cfg) -> dict:
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
     jobs = [_enrich(r, cfg, today) for r in rows]
     replies, refreshes, preps, tries = possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn)
+    alerts = mail.open_alerts(conn)
+    scams = _scam_alerts(alerts)
     history = _applied_by_company(conn)
     limit = cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY)
     seen = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (SEEN,))}
     for job in jobs:
-        _attach_runs(job, replies, refreshes, preps, tries)
+        _attach_runs(job, replies, refreshes, preps, tries, scams)
         _attach_history(job, history, limit)
         job["seen"] = job["id"] in seen
 
@@ -339,7 +356,8 @@ def build_state(conn, cfg) -> dict:
         "stats": stats,
         "funnel": funnel,
         "closed": closed,
-        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), ghost_days=ghost_after_days(cfg)),
+        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg)),
+        "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),
         "last_run": last_full_sweep(conn),
@@ -353,7 +371,8 @@ def build_state(conn, cfg) -> dict:
 
 def job_detail(conn, job_id: int, cfg: dict) -> dict:
     job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True)
-    _attach_runs(job, possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn))
+    _attach_runs(job, possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn),
+                 _scam_alerts(mail.open_alerts(conn)))
     _attach_history(job, _applied_by_company(conn), cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY))
     job["seen"] = bool(conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = ?", (job_id, SEEN)).fetchone())
     job["can_unpass"] = job["status"] == "passed" and _status_before_pass(conn, job_id) is not None
@@ -367,12 +386,24 @@ def job_detail(conn, job_id: int, cfg: dict) -> dict:
     )]
     job["notes_md"] = ""
     job["prep_file"] = ""
+    job["fill_sheet"] = ""
+    job["can_fill"] = False
     if job["app_folder"]:
-        path = ROOT / job["app_folder"] / "notes.md"
+        folder = ROOT / job["app_folder"]
+        path = folder / "notes.md"
         if path.exists():
             job["notes_md"] = path.read_text(encoding="utf-8")
-        if (ROOT / job["app_folder"] / prep.BRIEF).exists():
+        if (folder / prep.BRIEF).exists():
             job["prep_file"] = f"{job['app_folder']}/{prep.BRIEF}"
+        if (folder / fill.SHEET).exists():
+            job["fill_sheet"] = f"{job['app_folder']}/{fill.SHEET}"
+        # The sheet is for filling the form, so a sent job doesn't get a new one.
+        job["can_fill"] = (folder / "resume.md").exists() and (ROOT / fill.PASTE_SHEET).exists() and not job["frozen"] and not IS_EXAMPLE
+    row = get_job(conn, job_id)
+    job["autofill"] = workday.states(conn).get(job_id)
+    job["autofill_refusal"] = workday.refusal(conn, row)
+    job["can_autofill"] = job["autofill_refusal"] is None or (job["autofill"] or {}).get("state") == "running"
+    job["autofill_log"] = f"{job['app_folder']}/{workday.LOG}" if job["app_folder"] and (ROOT / job["app_folder"] / workday.LOG).exists() else ""
     return job
 
 
@@ -407,6 +438,21 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         if (refresh.states(conn).get(job_id) or {}).get("state") == "running":
             raise ValueError("This resume is being refreshed, and that run checks it when it's done.")
         finish_job(conn, cfg, job_id)
+    elif action == "fill_sheet":
+        if IS_EXAMPLE:
+            raise ValueError("The demo doesn't write fill sheets.")
+        if job["applied_at"]:
+            raise ValueError("This job was sent, so its folder is a record. A second application is a new job.")
+        if not job["app_folder"]:
+            raise ValueError("No application folder yet, so there's no tailored resume to merge.")
+        try:
+            report = fill.make_sheet(ROOT / job["app_folder"], job["company"], job["title"], job["url"],
+                                     source=fill.posting_source(job["source_key"], job["url"]))
+        except FileNotFoundError as err:
+            raise ValueError(str(err)) from err
+        log_event(conn, job_id, "fill_sheet", fill.summary(report))
+    elif action == "autofill":
+        workday.start(conn, job_id)
     elif action == "refresh_resume":
         refresh.start(conn, job_id)
     elif action == "interview_prep":
@@ -586,6 +632,11 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/job/(\d+)/action", path)
             if match:
                 apply_action(conn, int(match.group(1)), body, cfg)
+                conn.commit()
+                return self._json({"ok": True})
+            match = re.fullmatch(r"/api/alert/(\d+)/dismiss", path)
+            if match:
+                mail.dismiss_alert(conn, int(match.group(1)))
                 conn.commit()
                 return self._json({"ok": True})
             return self._json({"error": "not found"}, 404)

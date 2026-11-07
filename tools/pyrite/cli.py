@@ -8,14 +8,14 @@ import tomllib
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import checks, claude_code, demo, discover, inbox, score, store
+from . import checks, claude_code, demo, discover, fill, inbox, score, store
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
 
 BUILD = CODE_ROOT / "tools" / "build_resume.py"
 BUILD_TIMEOUT_SECONDS = 300
 # With no workspace set, these would write into the fictional example inside this repository.
 NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish", "refresh", "prep", "status", "add", "brief", "serve", "seed",
-                   "sweep", "run", "task"}
+                   "sweep", "run", "task", "fill", "autofill"}
 
 
 def quiet_hours(iso: str) -> float:
@@ -51,16 +51,20 @@ def cmd_rescore(args):
 
 
 def cmd_inbox(args):
-    """Look for replies in Gmail, read-only. Prints no subjects: read those on the dashboard."""
+    """Look for replies and scams in Gmail, read-only. Prints no subjects: read those on the dashboard."""
+    from . import mail
+
     conn = connect()
-    result = inbox.run(conn, load_config())
+    cfg = load_config()
+    result = mail.ingest_file(conn, cfg, Path(args.export)) if args.export else mail.check(conn, cfg)
     if result["state"] == "not_configured":
         print(f"Reply detection isn't set up, so no mail was checked. {result['message']} See \"Reply detection\" in docs/operating.md.")
         return
     if result["state"] == "error":
         print(f"Reply detection failed, so no mail was checked. {result['message']}")
         sys.exit(1)
-    print(f"Read {result['messages']} message headers from {result['folder']} for {result['jobs']} applications, read-only.")
+    where = f" from {result['folder']}" if result.get("folder") else ""
+    print(f"Read {result['messages']} message headers{where} for {result['jobs']} applications, read-only. {mail.summary(result)}")
     for hit in result["found"]:
         print(f"Possible reply: {hit['company']} (job {hit['job_id']}), from {hit['sender']}")
     if result["found"]:
@@ -199,10 +203,11 @@ def cmd_folder(args):
     print(ROOT / ensure_folder(connect(), args.id))
 
 
-def _build(source: Path, name: str, letter: bool, author: str, paper: str = "letter") -> str:
+def _build(source: Path, name: str, author: str, paper: str = "letter", letter: tuple[Path, str] | None = None) -> str:
+    """Build a resume, and its cover letter with it when there is one: Word's first PDF export in a process is the slow one."""
     cmd = [sys.executable, str(BUILD), str(source), "--name", name, "--author", author, "--paper", paper]
     if letter:
-        cmd.append("--letter")
+        cmd += ["--letter-source", str(letter[0]), "--letter-name", letter[1]]
     # A stuck PDF export, such as Word waiting on a dialog nobody can see, must not hang a run for good.
     return subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=ROOT, timeout=BUILD_TIMEOUT_SECONDS).stdout.strip()
 
@@ -240,10 +245,10 @@ def finish_job(conn, cfg: dict, job_id: int) -> dict:
         token = _file_token(job["company"])
         prefix, author = _file_prefix(cfg), cfg["candidate"]["name"]
         paper = cfg.get("documents", {}).get("paper", "letter")
+        letter = folder / "cover-letter.md"
         try:
-            print(_build(folder / "resume.md", f"{prefix}_Resume_{token}", False, author, paper))
-            if (folder / "cover-letter.md").exists():
-                print(_build(folder / "cover-letter.md", f"{prefix}_Cover_Letter_{token}", True, author, paper))
+            print(_build(folder / "resume.md", f"{prefix}_Resume_{token}", author, paper,
+                         (letter, f"{prefix}_Cover_Letter_{token}") if letter.exists() else None))
         except subprocess.CalledProcessError as err:
             report["ok"] = False
             report["errors"].append(f"Build failed: {(err.stderr or err.stdout or '').strip()[:300]}")
@@ -352,6 +357,67 @@ def cmd_check(args):
     _print_json(report)
     if not report["ok"]:
         sys.exit(1)
+
+
+def cmd_fill(args):
+    """Write a job's fill sheet: the Workday paste sheet with this application's tailored role text."""
+    if args.job.isdigit():
+        conn = connect()
+        job = get_job(conn, int(args.job))
+        if not job["app_folder"]:
+            sys.exit("No application folder. Run `pyrite folder <id>` first.")
+        folder, who = ROOT / job["app_folder"], (job["company"], job["title"], job["url"])
+        source = fill.posting_source(job["source_key"], job["url"])
+    else:
+        folder, who, source = Path(args.job).resolve(), ("", "", ""), ""
+        conn = None
+        if not folder.is_dir():
+            sys.exit(f"No folder {folder}.")
+    try:
+        report = fill.make_sheet(folder, *who, source=source)
+    except FileNotFoundError as err:
+        sys.exit(str(err))
+    if conn is not None:
+        log_event(conn, int(args.job), "fill_sheet", fill.summary(report))
+        conn.commit()
+    _print_json(report)
+
+
+def cmd_autofill(args):
+    """Type a job's fill sheet into its Workday form while you watch. Stops before Submit, which stays yours."""
+    from . import workday
+    if not workday.enabled():
+        sys.exit(workday.OFF)
+    conn = connect()
+    job = get_job(conn, args.id)
+    if not job["app_folder"]:
+        sys.exit("No application folder. Run `pyrite folder <id>` first.")
+    if job["applied_at"]:
+        sys.exit("This job is already marked applied. A second application is a new job.")
+    folder = ROOT / job["app_folder"]
+    try:
+        fill.make_sheet(folder, job["company"], job["title"], job["url"], source=fill.posting_source(job["source_key"], job["url"]))
+    except FileNotFoundError as err:
+        sys.exit(str(err))
+    url = args.url or job["url"]
+    if not url:
+        sys.exit("The job has no posting link. Pass --url.")
+    # The dashboard logs the start itself before it spawns this as a worker; from the command line, log it here.
+    if not args.worker:
+        log_event(conn, args.id, workday.STARTED)
+        conn.commit()
+
+    def filled(report):
+        log_event(conn, args.id, workday.DONE, report.detail())
+        conn.commit()
+
+    try:
+        report = workday.run(workday.load_sheet(folder / fill.SHEET_JSON), url, ROOT, pause=not args.no_pause, on_filled=filled)
+    except Exception as err:  # noqa: BLE001  Whatever went wrong, the dashboard must stop saying it's running.
+        log_event(conn, args.id, workday.FAILED, str(err)[:500])
+        conn.commit()
+        raise
+    print(report.summary())
 
 
 def cmd_sent(args):
@@ -478,7 +544,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-minutes", type=float, default=45, help="start no new sources after this long")
     p.set_defaults(func=cmd_discover)
 
-    sub.add_parser("inbox", help="flag possible replies from Gmail, read-only").set_defaults(func=cmd_inbox)
+    p = sub.add_parser("inbox", help="flag possible replies and scams in Gmail, read-only")
+    p.add_argument("--from", dest="export", help="judge a JSON export written by hand instead of reading Gmail")
+    p.set_defaults(func=cmd_inbox)
     sub.add_parser("sources", help="test every watched source").set_defaults(func=cmd_sources)
     sub.add_parser("rescore", help="re-apply the filters to postings you haven't acted on").set_defaults(func=cmd_rescore)
 
@@ -528,6 +596,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--company", default="")
     p.add_argument("--title", default="")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("fill", help="write a job's Workday fill sheet: the paste sheet with this application's tailored role text")
+    p.add_argument("job", help="a job id, or the path of an application folder")
+    p.set_defaults(func=cmd_fill)
+
+    p = sub.add_parser("autofill", help="experimental, off unless [workday] autofill = true: type a job's fill sheet into its Workday form in a browser you sign in to; stops before Submit")
+    p.add_argument("id", type=int)
+    p.add_argument("--url", default="", help="the apply page, when the job's link isn't it")
+    p.add_argument("--no-pause", action="store_true", help="don't wait for a look at each page before it's saved")
+    p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_autofill)
 
     p = sub.add_parser("sent", help="keep a read-only copy of what was sent for a job you've applied to, if none exists yet")
     p.add_argument("id", type=int)

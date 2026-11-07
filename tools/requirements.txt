@@ -1,1 +1,3 @@
 python-docx
+# Optional, for `pyrite autofill`: also run `python -m playwright install chromium`.
+playwright
