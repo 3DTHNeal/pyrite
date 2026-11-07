@@ -83,7 +83,7 @@ The dashboard labels its parts in plain words. The code and these docs sometimes
 |---|---|---|
 | To do | Sluice | Today's to-do list: what needs you, most urgent first |
 | Field report | | The summary each Claude run leaves at the top of the to-do list |
-| Funnel | Yield | How many jobs have reached each stage, from found to offer |
+| Where they stand | Yield | How many jobs are at each stage now, each counted once, with the closed ones on a line below |
 | Pipeline | Claims | Jobs you're working: being tailored, ready, applied and beyond |
 | Ready to send | Nuggets | Drafts that passed the assay and are ready to send |
 | Prospects | | New postings you haven't judged yet |
@@ -162,6 +162,10 @@ Boards have no closing-date field, so the dashboard reads the posting's own word
 The job panel opens with **Before you apply** when there's something to settle: the deadline, each `**Check before applying:**` line and each item under a "Before you apply" heading in the notes, any notes line saying to do something before applying, and what you've already sent the employer. It counts your applications to each employer and warns when a job would go past `max_per_company` under `[dashboard]` in `search.toml` (3 if unset), and when a nearly identical title there has already been sent, which is usually another listing of the same job.
 
 A ready draft whose files changed after the assay passed it shows as **Check again** in the to-do list, not **Send**, with a button that rebuilds and rechecks it there, and **Check all again** when there are several. The field report folds away, with a line saying so, once you've applied or passed on anything since it was written.
+
+## When a posting you applied to comes down
+
+A pan that finds a sent application's posting gone shows **Posting down** on its card and puts it on the to-do list, with when it will count as ghosted. If you've logged nothing since (no reply, interview or decision, and no next step of your own), and no possible reply from the inbox is waiting for you, the pan marks it **ghosted** once the posting has been down for `ghost_after_down_days` under `[run]` in `search.toml` (14 if unset; 0 turns it off). The timeline says the pan did it. If the posting comes back, the pan puts the job back to waiting, which it never does for a job you marked ghosted yourself. Reopen a job if they get in touch later. Ghosted jobs count beside rejections under the reply rate, never inside it.
 
 ## Going through prospects
 

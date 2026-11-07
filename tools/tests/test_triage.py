@@ -1,11 +1,11 @@
 """Deadlines, what to settle before applying, and moving quickly through prospects without losing anything."""
 import json
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from test_pyrite import CFG, Base  # Also sets up the throwaway workspace every path points into.
 
-from pyrite import deadline, server, store
+from pyrite import deadline, discover, server, store
 
 
 def spelled(day: date) -> str:
@@ -181,6 +181,75 @@ class ReplyNumbers(Base):
         self.applied("a", "interviewing", "rejected")
         stats = server.build_state(self.conn, CFG)["stats"]
         self.assertEqual((stats["replied"], stats["rejected"]), (1, 0))
+
+
+
+def days_ago(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+
+
+class PostingGone(Base):
+    """A sent application whose posting disappears is counted as ghosted once you've had a fair wait and done nothing."""
+
+    def sent(self, source_id, down_days, **kw):
+        job = self.add(source_id=source_id, **kw)
+        store.set_status(self.conn, job, "applied")
+        self.conn.execute("UPDATE jobs SET posting_closed_at = ? WHERE id = ?", (days_ago(down_days), job))
+        return job
+
+    def status(self, job):
+        return store.get_job(self.conn, job)["status"]
+
+    def test_down_past_the_grace_period_with_nothing_heard_is_ghosted(self):
+        gone = self.sent("gone", 20)
+        recent = self.sent("recent", 3)
+        self.assertEqual(discover.settle_gone(self.conn, CFG), [gone])
+        self.assertEqual((self.status(gone), self.status(recent)), ("ghosted", "applied"))
+        detail = self.conn.execute("SELECT detail FROM events WHERE job_id = ? AND kind = 'ghosted'", (gone,)).fetchone()[0]
+        self.assertTrue(detail.startswith(discover.AUTO_GHOSTED), detail)
+
+    def test_anything_you_did_since_keeps_it_waiting(self):
+        planned = self.sent("planned", 20)
+        self.conn.execute("UPDATE jobs SET next_action = 'Phone screen' WHERE id = ?", (planned,))
+        replied = self.sent("replied", 20)
+        store.set_status(self.conn, replied, "responded")
+        flagged = self.sent("flagged", 20)
+        store.log_event(self.conn, flagged, store.REPLY_DETECTED, "From a recruiter")
+        self.assertEqual(discover.settle_gone(self.conn, CFG), [])
+
+    def test_zero_days_turns_it_off(self):
+        self.sent("gone", 90)
+        off = {**CFG, "run": {**CFG["run"], "ghost_after_down_days": 0}}
+        self.assertEqual(discover.settle_gone(self.conn, off), [])
+
+    def test_the_to_do_list_says_when_it_will_count_as_ghosted(self):
+        self.sent("gone", 4)
+        order = next(o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Posting down")
+        self.assertIn("counts as ghosted in 10 days", order["detail"])
+
+    def test_a_posting_back_up_undoes_only_the_sweeps_own_call(self):
+        swept = self.sent("swept", 20)
+        mine = self.sent("mine", 20)
+        discover.settle_gone(self.conn, CFG)
+        store.set_status(self.conn, mine, "applied")
+        store.set_status(self.conn, mine, "ghosted", "I gave up on this one")
+        for job in (swept, mine):
+            discover._reopen_if_closed(self.conn, store.get_job(self.conn, job), store.now())
+        self.assertEqual((self.status(swept), self.status(mine)), ("applied", "ghosted"))
+
+
+class WhereTheyStand(Base):
+    def test_each_job_counts_once_at_its_stage_now(self):
+        sent = self.add(source_id="sent", status="ready")
+        self.add(source_id="waiting", status="ready")
+        self.add(source_id="prospect")
+        store.set_status(self.conn, sent, "applied")
+        passed = self.add(source_id="passed")
+        store.set_status(self.conn, passed, "passed")
+        state = server.build_state(self.conn, CFG)
+        stages = {f["stage"]: f["count"] for f in state["funnel"]}
+        self.assertEqual((stages["Prospects"], stages["Ready to send"], stages["Waiting to hear"]), (1, 1, 1))
+        self.assertEqual(state["closed"], [{"label": "passed", "count": 1}])
 
 
 if __name__ == "__main__":

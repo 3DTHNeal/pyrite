@@ -86,7 +86,8 @@ main > * { min-width: 0; }
 .order-list li { display: flex; align-items: flex-start; gap: 8px; }
 .order-list .order { flex: 1; }
 .order-list .dismiss { flex: none; font-size: 12px; padding: 4px 8px; margin-top: 6px; }
-.kind-follow-up, .kind-gone-quiet, .kind-possible-reply { color: var(--warn); }
+.kind-follow-up, .kind-gone-quiet, .kind-possible-reply, .kind-posting-down { color: var(--warn); }
+.funnel-note { font-size: 12px; }
 .kind-send { color: var(--good); }
 .kind-check-again, .kind-closing-soon { color: var(--bad); }
 .order-list .order-batch { justify-content: flex-end; }

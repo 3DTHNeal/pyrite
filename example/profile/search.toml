@@ -27,6 +27,7 @@ tailor_min_score = 55
 cover_letters = true
 follow_up_days = 7   # nudge this long after applying
 quiet_days = 30      # flag as probably ghosted after this long
+ghost_after_down_days = 14  # a sent job whose posting has been down this long, with nothing heard, counts as ghosted; 0 turns it off
 fix_attempts = 6     # failed assays before the daily run stops retrying a draft, until you ask for it again
 
 # Priority = filter score + age points + promotion points - repost penalty. It only decides

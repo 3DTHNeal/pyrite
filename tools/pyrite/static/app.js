@@ -93,7 +93,7 @@ function renderKpis() {
     tile(s.awaiting, "Awaiting reply", s.follow_ups ? `${s.follow_ups} follow-up${s.follow_ups > 1 ? "s" : ""} due` : "No follow-ups due", s.follow_ups > 0),
     // Replies only: a rejection is counted beside it, not inside it, so the rate isn't flattering.
     tile(s.reply_rate === null || s.reply_rate === undefined ? "–" : `${s.reply_rate}%`, "Reply rate",
-      s.applied ? [`${s.replied} of ${s.applied} replied`, s.rejected ? `${s.rejected} rejected` : "",
+      s.applied ? [`${s.replied} of ${s.applied} replied`, s.rejected ? `${s.rejected} rejected` : "", s.ghosted ? `${s.ghosted} ghosted` : "",
         s.median_days_to_reply !== null ? `median ${s.median_days_to_reply}d` : ""].filter(Boolean).join(", ") : "Nothing sent yet"),
     tile(s.interviews, "Interviews", "Reached interview stage"),
     tile(s.to_triage, "Prospects", `${s.fresh} new, ${s.possible_ghosts} possible ghost${s.possible_ghosts === 1 ? "" : "s"}`, s.fresh > 0));
@@ -155,7 +155,14 @@ function renderFunnel() {
       h("span", { class: "stage" }, f.stage),
       h("span", { class: "funnel-track" }, h("span", { class: `funnel-bar${f.count ? "" : " zero"}`, style: `width:${width}%` })),
       h("span", { class: "count" }, f.count.toLocaleString()));
-  }), h("p", { class: "muted", style: "font-size:12px" }, "Bar length uses a square-root scale so small stages stay visible."));
+  }), h("p", { class: "muted funnel-note" }, closedLine()),
+  h("p", { class: "muted funnel-note" }, "Each job counts once, at the stage it's at now. Bars use a square-root scale so small stages stay visible."));
+}
+
+// Jobs that left the pipeline, so the stages above don't hide where the rest went.
+function closedLine() {
+  const closed = state.closed || [];
+  return closed.length ? `Closed: ${closed.map((c) => `${c.count} ${c.label}`).join(", ")}.` : "Nothing closed yet.";
 }
 
 // ---- Pipeline ----
