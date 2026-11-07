@@ -160,5 +160,28 @@ class Triage(Base):
         self.assertFalse(server.job_detail(self.conn, withdrawn_then_passed, CFG)["can_unpass"])
 
 
+
+class ReplyNumbers(Base):
+    def applied(self, source_id, *then):
+        job = self.add(source_id=source_id)
+        for status in ("applied", *then):
+            store.set_status(self.conn, job, status)
+        return job
+
+    def test_a_rejection_is_counted_beside_replies_not_inside_them(self):
+        self.applied("a", "rejected")
+        self.applied("b", "responded")
+        self.applied("c")
+        state = server.build_state(self.conn, CFG)
+        stats = state["stats"]
+        self.assertEqual((stats["replied"], stats["rejected"], stats["reply_rate"], stats["heard"]), (1, 1, 33, 2))
+        self.assertEqual({f["stage"]: f["count"] for f in state["funnel"]}["Replied"], 1)
+
+    def test_a_rejection_after_an_interview_still_counts_as_a_reply(self):
+        self.applied("a", "interviewing", "rejected")
+        stats = server.build_state(self.conn, CFG)["stats"]
+        self.assertEqual((stats["replied"], stats["rejected"]), (1, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

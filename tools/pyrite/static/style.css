@@ -105,8 +105,14 @@ main > * { min-width: 0; }
 .tabs button { background: none; border: 0; padding: 8px 14px; cursor: pointer; color: var(--ink-2); border-bottom: 2px solid transparent; font-weight: 600; white-space: nowrap; }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 
-.board { display: grid; grid-template-columns: repeat(6, minmax(210px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 8px; align-items: start; }
-.column { background: var(--surface-2); border-radius: 6px; padding: 8px; min-width: 0; }
+.board { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+.column { background: var(--surface-2); border-radius: 6px; padding: 8px; flex: 1 1 210px; min-width: 210px; }
+.column.empty { flex: 0 0 132px; min-width: 132px; }
+.column.empty .column-hint { display: none; }
+.more-files summary { cursor: pointer; font-size: 13px; color: var(--accent-ink); }
+.more-files .row { margin-top: 6px; }
+.checklist ul { list-style: none; padding-left: 0; }
+.checklist label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
 .column h3 { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 6px 8px; }
 .column h3 span { font-family: var(--mono); color: var(--ink-2); }
 .column-hint { color: var(--ink-3); font-size: 12px; padding: 0 6px 8px; }

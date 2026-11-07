@@ -2639,7 +2639,7 @@ class RunsYouStart(Base):
         self.assertTrue(tasks.run(self.conn, CFG, task))
         state = self.state(tasks.SWEEP)
         self.assertEqual(state["state"], "done")
-        self.assertIn("1,200 postings read across 3 veins, 4 new, 1 failing", state["detail"])
+        self.assertIn("1,200 postings read across 3 sources, 4 new, 1 failing", state["detail"])
         self.assertIn("1 possible reply", state["detail"])
         discover.run.assert_called_once()
         inbox.run.assert_called_once()
