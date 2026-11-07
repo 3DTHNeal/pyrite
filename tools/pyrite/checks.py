@@ -38,7 +38,7 @@ NUMBER_WORD = re.compile(
 # The drafter is the builder plus the writing rules it enforces. Bump this when either changes in a way
 # that shows in the documents, and say what changed under "Drafter versions" in docs/resume-playbook.md.
 # Every .docx and .pdf carries its drafter version, so a folder's files can be told apart from older ones.
-DRAFTER_VERSION = "2"
+DRAFTER_VERSION = "3"
 # Wording that recruiters and screening tools now read as machine-written or empty. Warned, never blocked.
 CLICHE = re.compile(
     r"\b(?:spearhead(?:ed|ing|s)?|leverag(?:ed|ing|es)?|orchestrat(?:ed|ing|es)?|honed|streamlin(?:ed|ing|es)?|"
@@ -456,3 +456,32 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
 
     overlap = keyword_overlap(resume, description, cfg) if description else None
     return {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
+
+
+# Above this share of the posting's skill terms a resume reads as copied from it, which screeners mark down. The
+# dashboard draws the same line. With only a few terms in play the share says little, so it isn't held against a draft.
+OVERLAP_MAX = 85
+OVERLAP_MIN_TERMS = 5
+OVERLAP_TARGET = "60 to 80%"
+# Warnings a rewrite can clear. The rest, such as a file from an older drafter, are for you.
+POLISH_MARKERS = ("names terms not in your approved sources", "repeats terms from the posting", "uses an em dash",
+                  "reads as filler", "Cover letter runs")
+POLISH_ASK = ("The fact checker passed your draft, so it's ready to send, but it flagged these, which are worth fixing first. "
+              "Fix them and change nothing else, adding no claim the fact bank doesn't support:")
+
+
+def polish_requests(report: dict, letter: bool = True) -> list[str]:
+    """What's worth one more pass on a draft that passed: warnings a rewrite can clear, and too close a copy of the posting.
+
+    The draft is ready without these. The daily run and a refresh still give it one more go, because a
+    warning you'd otherwise fix by hand is cheaper to fix before you read the draft. `letter` is whether
+    the run may change the cover letter; when it can't, the letter's warnings are left for you.
+    """
+    asks = [warning for warning in report.get("warnings", [])
+            if any(marker in warning for marker in POLISH_MARKERS) and (letter or not warning.startswith("Cover letter"))]
+    overlap = report.get("overlap") or {}
+    pct, covered = overlap.get("pct"), overlap.get("covered") or []
+    if pct is not None and pct > OVERLAP_MAX and len(covered) + len(overlap.get("missing") or []) >= OVERLAP_MIN_TERMS:
+        asks.append(f"The resume uses {pct}% of the posting's skill terms, which reads as copied from it. Aim for {OVERLAP_TARGET}: "
+                    f"keep the terms the candidate's record backs best and say the rest in plain words. It uses: {', '.join(covered)}.")
+    return asks

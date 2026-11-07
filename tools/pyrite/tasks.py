@@ -6,7 +6,7 @@ drafts, so only one of those two goes at a time.
 """
 from datetime import datetime, timezone
 
-from . import claude_code, discover, inbox
+from . import claude_code, discover, mail
 from .claude_code import find_claude, sign_in_help
 from .store import IS_EXAMPLE, ROOT, now
 
@@ -112,20 +112,14 @@ def start(conn, kind: str) -> None:
 def _sweep(conn, cfg: dict, task_id: int) -> str:
     progress(conn, task_id, "Reading the job boards")
     stats = discover.run(conn=conn, cfg=cfg)
-    said = (f"{stats['postings']:,} postings read across {stats['sources']} veins, {stats['new']} new"
+    said = (f"{stats['postings']:,} postings read across {stats['sources']} sources, {stats['new']} new"
             + (f", {stats['failed']} failing" if stats["failed"] else "") + ".")
     progress(conn, task_id, "Checking mail for replies")
     try:
-        mail = inbox.run(conn, cfg)
+        result = mail.check(conn, cfg)
     except Exception as err:  # Trouble reading mail never fails a sweep. It shows on the Sources tab instead.
-        mail = {"state": "error", "message": f"{type(err).__name__}: {err}"}
-    if mail["state"] == "ok":
-        said += f" Mail checked: {len(mail['found'])} possible repl{'y' if len(mail['found']) == 1 else 'ies'}."
-    elif mail["state"] == "error":
-        said += " Mail couldn't be checked: see the Veins tab."
-    else:
-        said += " Reply detection isn't set up, so no mail was checked."
-    return said
+        result = {"state": "error", "message": f"{type(err).__name__}: {err}"}
+    return f"{said} {mail.summary(result)}"
 
 
 def run(conn, cfg: dict, task_id: int) -> bool:

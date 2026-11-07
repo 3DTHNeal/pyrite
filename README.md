@@ -8,7 +8,7 @@ Pyrite is fool's gold. The name covers both halves of the job: telling real open
 
 The interesting problem isn't generating a resume. It's that a language model will happily write a confident, plausible, false one. So the model isn't trusted to police itself. A deterministic fact checker stands between every draft and "ready to send", and it can't be talked out of its answer. Pyrite calls it the assay, after the test that tells gold from fool's gold.
 
-![The dashboard, showing the sluice, the yield and the claims](docs/screenshots/dashboard.png)
+![The dashboard, showing the to-do list, the funnel and the pipeline](docs/screenshots/dashboard.png)
 
 *Everything in this screenshot is fictional. See [Keeping my data out of this repo](#keeping-my-data-out-of-this-repo).*
 
@@ -88,6 +88,8 @@ The split is deliberate. Everything that can be a rule is a rule, which keeps it
 
 **Reply detection can't corrupt the numbers.** [`inbox.py`](tools/pyrite/inbox.py) opens the mailbox read-only and requests only sender, subject and date, so message bodies never reach this machine's database. A match adds a note to a job's timeline and never changes its status. Sender names can be forged, so lookalikes such as `acme.evil.example` are refused, and the tests use a fake server that raises an error on any write.
 
+**Claude can be the courier, but never the judge, of your mail.** With the Gmail connector, [`mail.py`](tools/pyrite/mail.py) starts Claude Code with exactly two Gmail reading tools and nothing that writes, so it can copy recent mail out as a JSON list in its closing message, but can't send, reply, label or delete, or touch a file, whatever an email tells it. The same plain code then matches replies, and a second set of rules flags the shapes job scams take: a lookalike domain, a personal address claiming to be the employer, an interview over a chat app, or any mention of gift cards, checks, fees or ID documents. A **Possible scam** warning changes nothing on its own.
+
 **Ghost jobs get flagged, not hidden.** Some listings stay up for months or keep getting reposted. [`score.py`](tools/pyrite/score.py) tracks each job's earliest date, so a repost can't make an old job look new, and it marks likely ghosts as a reason for doubt while leaving the decision to you.
 
 **The dashboard assumes it's a target.** It listens on localhost only and checks the `Host` header against DNS rebinding. It refuses cross-site requests and non-JSON posts, and it builds the page from text nodes, never from HTML strings, under a strict content security policy. [`server.py`](tools/pyrite/server.py) has the details, and the tests attack all of it.
@@ -117,7 +119,7 @@ Building the `.docx`, `.pdf` and paste-ready `.txt` files also needs `pip instal
 - It reads Greenhouse, Lever, Ashby and Workday boards. Greenhouse, Lever and Ashby publish feeds for this. Workday doesn't, so its reader calls the JSON endpoint behind its public careers pages. Sites that forbid automated collection, such as LinkedIn, are left for you to check by hand.
 - The assay works from patterns and from what's in your fact bank. It catches invented numbers and terms, not misleading framing or a real number moved to a different claim. It can also miss an invented skill written in lowercase, one that opens a sentence without being named in the posting, and a number from one to ten written as a word.
 - The location filters assume a search based in the US unless you set your own lists, and documents are US Letter unless you choose A4.
-- Reply detection misses outside recruiters, LinkedIn messages and anything in Spam.
+- Reply detection misses outside recruiters, LinkedIn messages and anything in Spam. The scam rules work from patterns, so they can miss a careful scam and flag a blunt recruiter.
 - It's built for one person on one machine, and the dashboard has no login.
 
 ## Built with Claude Code

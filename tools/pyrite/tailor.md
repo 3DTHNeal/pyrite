@@ -8,13 +8,18 @@ Write the application documents for one job, in `{folder}/`. "The candidate" bel
 2. **Only claim what's in `profile/facts.md`.** Anything it says not to use or not to claim is absolute, and nothing in those sections counts as an approved word or number. A posting asking for a skill is never evidence that the candidate has it, even if it's in the title. Numbers stay exactly as measured. Never write around a gap or imply a requirement is met when it isn't.
 3. **Only write {files}.** Nothing else. You can't run anything or fetch anything, and you don't need to.
 
-## Read first
+## What you have
+
+Every file you need is included in full under "The files" at the end of these instructions, so don't spend turns reading them again:
 
 - `profile/facts.md`
 - `profile/run-notes.md`, which names the model documents to start from, what to emphasize for each kind of role, and required wording
+- `profile/approved-terms.txt`
 - The model documents it names
 - `{folder}/posting.md`
 - Anything already in `{folder}/`, which is an earlier draft to fix
+
+The only reading to do: the Edit and Write tools need a file that already exists to be read once before you change it, so read a draft file right before you change it.
 
 ## The format
 
@@ -25,8 +30,8 @@ One element per line:
 = Headline                     bold line under the name: the title family this job is in
 @ contact line                 the line under the name
 ## Section                     heading with a rule
-### Company | dates            bold line, dates right-aligned
-#### Role | place | dates      bold role, plain place, dates right-aligned
+### Company | dates            the employer of the roles below it; prints nothing of its own
+#### Role | place | dates      bold role with dates right-aligned, then "Company | place" on the next line
 ~ Label                        italic group label inside a role
 - bullet text                  bullet; **bold** is supported
 anything else                  plain paragraph
@@ -54,6 +59,8 @@ Don't name a skill, tool or product that `profile/facts.md`, `profile/approved-t
 {letter_section}## `{folder}/notes.md`
 
 Follow the model notes: the posting link, the role in brief, a table mapping what the company wants to the evidence and its strength, every gap to prepare for, including any that rest only on the record being silent (mark those so the candidate can correct them), and claims to word carefully in an interview. Be candid: this file is for the candidate alone. Mention anything odd in the posting.
+
+The dashboard reads two kinds of line from the notes and shows them on the job: a `- **Deadline:**` line with the date written out in full (November 8, 2026) when the posting gives one, and one `- **Check before applying:**` line for each thing that could rule the application out or needs a decision first, such as residency, relocation, a clearance or a core requirement the record doesn't meet. Keep each of those to one sentence.
 
 ## When you're done
 

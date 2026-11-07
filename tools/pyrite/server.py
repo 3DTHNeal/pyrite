@@ -11,17 +11,18 @@ import statistics
 import tomllib
 import traceback
 from datetime import date, datetime, timezone
+from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from . import checks, claude_code, facts, prep, refresh, tasks
+from . import checks, claude_code, deadline, facts, fill, mail, prep, refresh, tasks, workday
 from . import score as scoring
 from . import settings
 from .cli import finish_job
-from .discover import last_full_sweep
+from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
 from .store import (
-    DEFAULT_FIX_ATTEMPTS, IS_EXAMPLE, REPLY_DISMISSED, ROOT, TAILOR_REQUESTED, changed_after_sending, connect, fix_attempts,
+    DEFAULT_FIX_ATTEMPTS, IS_EXAMPLE, REPLY_DISMISSED, ROOT, STATUSES, TAILOR_REQUESTED, changed_after_sending, connect, fix_attempts,
     get_job, job_dict, load_config, log_event, now, possible_replies, quiet_days_since, sent_copies, set_status,
 )
 
@@ -44,6 +45,14 @@ HEARD_BACK = {"reply": "responded", "interview": "interviewing", "offer": "offer
 # What the dashboard's own buttons set. Ready and needs_fix come only from the fact checker.
 USER_STATUSES = ("applied", "passed", "ghosted", "withdrawn")
 RECHECKABLE = ("ready", "needs_fix")
+# Logged the first time you open a prospect, so the Prospects tab can show what you haven't looked at yet.
+SEEN = "seen"
+# Jobs that haven't gone out, and so the statuses Pass can be undone back to. Anything further along is Reopen's job.
+NOT_SENT = ("new", "shortlisted", "needs_fix", "ready")
+DEFAULT_MAX_PER_COMPANY = 3
+# How alike two titles at one company must be to count as the same job, such as a second requisition of it.
+SAME_TITLE = 0.9
+SOON = 2  # Days. A deadline this close puts a job near the top of the Sluice.
 
 
 def safe_url(url: str) -> str:
@@ -93,6 +102,11 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> di
                          if job["frozen"] and job["app_folder"] else [])
     # The whole row, because priority reads the description even when the page isn't sent it.
     job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today)))
+    # The posting's own closing date first; the notes written from it are the fallback.
+    noted, blockers = deadline.read_notes(ROOT / job["app_folder"]) if job["app_folder"] else (None, [])
+    job["deadline"] = deadline.from_posting(row["description"] or "") or noted
+    job["days_to_deadline"] = (date.fromisoformat(job["deadline"]) - date.fromisoformat(today)).days if job["deadline"] else None
+    job["blockers"] = blockers if job["status"] in NOT_SENT else []
     return job
 
 
@@ -104,8 +118,84 @@ def _changed_since_check(job: dict) -> list[str]:
     return checks.changed_since(ROOT / job["app_folder"], checked)
 
 
-def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: dict) -> None:
+def _scam_alerts(alerts: list[dict]) -> dict[int, dict]:
+    """The latest open scam warning that names each job's company, by job id."""
+    by_job: dict[int, dict] = {}
+    for alert in alerts:
+        if alert["job_id"] is not None:
+            by_job.setdefault(alert["job_id"], alert)
+    return by_job
+
+
+def _company_key(name: str) -> str:
+    name = re.sub(r"\b(inc|incorporated|corp|corporation|llc|ltd|co|company)\b\.?", " ", (name or "").lower())
+    return " ".join(re.findall(r"[a-z0-9]+", name))
+
+
+def _title_key(title: str) -> str:
+    words = re.findall(r"[a-z0-9]+", (title or "").lower())
+    return " ".join("senior" if w == "sr" else w for w in words)
+
+
+def _applied_by_company(conn) -> dict[str, list[dict]]:
+    """Every application sent so far, grouped by employer, oldest first."""
+    history: dict[str, list[dict]] = {}
+    for row in conn.execute("SELECT id, company, title, applied_at FROM jobs WHERE applied_at IS NOT NULL ORDER BY applied_at"):
+        history.setdefault(_company_key(row["company"]), []).append(dict(row))
+    return history
+
+
+def _attach_history(job: dict, history: dict, limit: int) -> None:
+    """How many times you've applied to this employer, and whether one of them was this same job under another listing."""
+    sent = [a for a in history.get(_company_key(job["company"]), []) if a["id"] != job["id"]]
+    job["applied_here"] = len(sent)
+    job["company_limit"] = limit
+    same = None
+    if not job["applied_at"]:
+        title = _title_key(job["title"])
+        same = next((a for a in reversed(sent) if SequenceMatcher(None, _title_key(a["title"]), title).ratio() >= SAME_TITLE), None)
+    job["same_title_applied"] = {"id": same["id"], "title": same["title"], "applied_at": same["applied_at"]} if same else None
+
+
+def _status_before_pass(conn, job_id: int) -> str | None:
+    """What a passed job was before you passed on it, if that was a job not yet sent. None means Pass can't be undone."""
+    marks = ", ".join("?" * len(STATUSES))
+    kinds = [r[0] for r in conn.execute(
+        f"SELECT kind FROM events WHERE job_id = ? AND kind IN ({marks}) ORDER BY id DESC", (job_id, *STATUSES))]
+    if not kinds or kinds[0] != "passed":
+        return None
+    before = kinds[1] if len(kinds) > 1 else "new"  # A job found and passed has no status event before the pass.
+    return before if before in NOT_SENT else None
+
+
+def _deadline_text(job: dict) -> str:
+    days = job["days_to_deadline"]
+    if days is None:
+        return ""
+    when = date.fromisoformat(job["deadline"])
+    label = f"{when:%b} {when.day}"
+    if days < 0:
+        return f"Its stated deadline, {label}, has passed: check the posting is still open."
+    if days == 0:
+        return f"Apply today: the posting gives {label}."
+    if days == 1:
+        return f"Apply by tomorrow, {label}."
+    return f"Apply by {label}, in {days} days."
+
+
+def _history_text(job: dict) -> str:
+    same = job.get("same_title_applied")
+    if same:
+        sent = date.fromisoformat(same["applied_at"][:10])
+        return f"You applied for {same['title']} here on {sent:%b} {sent.day}: this may be another listing of it."
+    if job.get("applied_here", 0) >= job.get("company_limit", DEFAULT_MAX_PER_COMPANY):
+        return f"You've already applied here {job['applied_here']} times."
+    return ""
+
+
+def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: dict, scams: dict | None = None) -> None:
     job["possible_reply"] = replies.get(job["id"])
+    job["scam_alert"] = (scams or {}).get(job["id"])
     job["refresh"] = refreshes.get(job["id"])
     job["prep"] = preps.get(job["id"])
     job["fix_attempts"] = tries.get(job["id"], 0)
@@ -113,9 +203,26 @@ def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: 
         job["changed_since_check"] = []  # A refresh rewrites the draft in place and checks it when it's done.
 
 
-def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS) -> list[dict]:
+def _gone_text(job: dict, ghost_days: int) -> str:
+    """What happens to a sent application whose posting came down, and when."""
+    down = quiet_days_since(job["posting_closed_at"]) or 0
+    since = {0: "today", 1: "yesterday"}.get(down, f"{down} days ago")
+    if not ghost_days:
+        return f"The posting came down {since} and you haven't heard. Mark it ghosted or rejected if you think it's filled."
+    left = ghost_days - down
+    when = "on the next sweep" if left <= 0 else "tomorrow" if left == 1 else f"in {left} days"
+    return (f"The posting came down {since} and you haven't heard. It counts as ghosted {when} "
+            "unless you log a reply or set a next step.")
+
+
+def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: list[dict] = (), ghost_days: int = 0) -> list[dict]:
     """Today's to-do list, most urgent first."""
     orders = []
+    for alert in alerts:
+        # The sender and subject were written by whoever sent the mail, so the page shows them as text only.
+        orders.append({"rank": 0, "kind": "Possible scam", "job_id": alert["job_id"], "alert_id": alert["id"],
+                       "text": f"{alert['sender']}: {alert['subject'] or '(no subject)'}",
+                       "detail": "; ".join(alert["reasons"]) + ". Don't reply, click or pay. Dismiss this if it's genuine."})
     for job in jobs:
         name = f"{job['company']}: {job['title']}"
         if job["possible_reply"]:
@@ -124,6 +231,9 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS) -> list[dic
         if job["status"] in ("interviewing", "offer") and job["follow_up_due"]:
             orders.append({"rank": 0, "kind": "Act now", "job_id": job["id"], "text": name,
                            "detail": job["next_action"] or "Next step is due"})
+        elif waiting_on_gone(job):
+            orders.append({"rank": 2, "kind": "Posting down", "job_id": job["id"], "text": name,
+                           "detail": _gone_text(job, ghost_days)})
         elif job["quiet"]:
             orders.append({"rank": 3, "kind": "Gone quiet", "job_id": job["id"], "text": name,
                            "detail": f"No reply in {job['days_since_applied']} days. Mark it ghosted, or try one last nudge."})
@@ -138,20 +248,39 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS) -> list[dic
                 detail = (f"The draft failed the assay {tries} times, so the daily run has stopped retrying it. "
                           "Open it to see why, then use Tailor this one first to try again.")
             orders.append({"rank": 2, "kind": "Blocked", "job_id": job["id"], "text": name, "detail": detail})
+    def soon(job):
+        return job["days_to_deadline"] is not None and 0 <= job["days_to_deadline"] <= SOON
+
+    def joined(*parts):
+        return " ".join(part for part in parts if part)
+
+    # The ones closing first lead, so a deadline is never cut off the end of the list.
     ready = sorted((j for j in jobs if j["status"] == "ready" and not j["posting_closed_at"]),
-                   key=lambda j: -j["rank"])
+                   key=lambda j: (not soon(j), -j["rank"]))
     for job in ready[:5]:
-        detail = job["fit_reason"] or job["notes"] or "Read it through, then send."
+        first = f"Check first: {job['blockers'][0]}" if job["blockers"] else ""
         if job["changed_since_check"]:
-            detail = "Its files changed after the assay passed it. Open it and check it again before you send."
-        orders.append({"rank": 2, "kind": "Send", "job_id": job["id"],
+            # Not ready to send: the pass no longer covers what's on file.
+            orders.append({"rank": 1 if soon(job) else 2, "kind": "Check again", "job_id": job["id"], "action": "recheck",
+                           "text": f"{job['company']}: {job['title']}",
+                           "detail": joined(_deadline_text(job), "Its files changed after the assay passed it, so check it again before you send.", first)})
+            continue
+        detail = joined(_deadline_text(job), first, _history_text(job)) or job["fit_reason"] or job["notes"] or "Read it through, then send."
+        orders.append({"rank": 1 if soon(job) else 2, "kind": "Send", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}", "detail": detail})
-    fresh = sorted((j for j in jobs if j["status"] == "new" and j["is_new"]), key=lambda j: -j["rank"])
+    listed = {o["job_id"] for o in orders}
+    closing = sorted((j for j in jobs if j["status"] in ("new", "shortlisted", "needs_fix") and soon(j) and j["id"] not in listed),
+                     key=lambda j: (j["days_to_deadline"], -j["rank"]))
+    for job in closing[:3]:
+        orders.append({"rank": 1, "kind": "Closing soon", "job_id": job["id"], "text": f"{job['company']}: {job['title']}",
+                       "detail": joined(_deadline_text(job), _history_text(job), "Tailor it now or pass.")})
+        listed.add(job["id"])
+    fresh = sorted((j for j in jobs if j["status"] == "new" and j["is_new"] and j["id"] not in listed), key=lambda j: -j["rank"])
     for job in fresh[:3]:
         posted = {0: "today", 1: "yesterday"}.get(job["age_days"], f"{job['age_days']} days ago")
         orders.append({"rank": 3, "kind": "New listing", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}",
-                       "detail": f"Posted {posted}, never reposted. Score {job['score']}."})
+                       "detail": joined(f"Posted {posted}, never reposted. Score {job['score']}.", _deadline_text(job), _history_text(job))})
     return sorted(orders, key=lambda o: o["rank"])
 
 
@@ -160,14 +289,25 @@ def build_state(conn, cfg) -> dict:
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
     jobs = [_enrich(r, cfg, today) for r in rows]
     replies, refreshes, preps, tries = possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn)
+    alerts = mail.open_alerts(conn)
+    scams = _scam_alerts(alerts)
+    history = _applied_by_company(conn)
+    limit = cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY)
+    seen = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (SEEN,))}
     for job in jobs:
-        _attach_runs(job, replies, refreshes, preps, tries)
+        _attach_runs(job, replies, refreshes, preps, tries, scams)
+        _attach_history(job, history, limit)
+        job["seen"] = job["id"] in seen
 
     applied =[j for j in jobs if j["applied_at"]]
     heard = [j for j in applied if j["response_at"]]
+    # A rejection is hearing back, but it isn't progress, so replies and rejections are counted apart.
+    answered = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind IN ('responded', 'interviewing', 'offer')")}
+    replied = [j for j in heard if j["id"] in answered or j["interview_at"] or j["offer_at"]]
+    rejected = [j for j in applied if j["status"] == "rejected" and j not in replied]
     days_to_reply = [
         (datetime.fromisoformat(j["response_at"]) - datetime.fromisoformat(j["applied_at"])).days
-        for j in heard
+        for j in replied
     ]
     this_week = [j for j in applied if (quiet_days_since(j["applied_at"]) or 0) < 7]
     radar = [j for j in jobs if j["status"] == "new"]
@@ -180,31 +320,48 @@ def build_state(conn, cfg) -> dict:
         "applied_week": len(this_week),
         "heard": len(heard),
         "response_rate": round(100 * len(heard) / len(applied)) if applied else None,
+        "replied": len(replied),
+        "rejected": len(rejected),
+        "ghosted": sum(j["status"] == "ghosted" and bool(j["applied_at"]) for j in jobs),
+        "reply_rate": round(100 * len(replied) / len(applied)) if applied else None,
         "median_days_to_reply": statistics.median(days_to_reply) if days_to_reply else None,
         "interviews": sum(bool(j["interview_at"]) for j in jobs),
         "fresh": sum(j["is_new"] for j in radar),
         "possible_ghosts": sum(j["ghost_risk"] for j in radar),
         "to_triage": len(radar),
     }
+    # Each job once, at the stage it's at now, so a resume that went out counts as sent and no longer as ready.
+    at = lambda *statuses: sum(j["status"] in statuses for j in jobs)  # noqa: E731
     funnel = [
-        {"stage": "Found", "count": len(jobs)},
-        {"stage": "Resume ready", "count": sum(bool(j["ready_at"]) for j in jobs)},
-        {"stage": "Applied", "count": len(applied)},
-        {"stage": "Heard back", "count": len(heard)},
-        {"stage": "Interview", "count": stats["interviews"]},
-        {"stage": "Offer", "count": sum(bool(j["offer_at"]) for j in jobs)},
+        {"stage": "Prospects", "count": at("new")},
+        {"stage": "Being tailored", "count": at("shortlisted", "needs_fix")},
+        {"stage": "Ready to send", "count": at("ready")},
+        {"stage": "Waiting to hear", "count": at("applied")},
+        {"stage": "Replied", "count": at("responded")},
+        {"stage": "Interviewing", "count": at("interviewing")},
+        {"stage": "Offer", "count": at("offer")},
     ]
+    closed_labels = {"rejected": "rejected", "ghosted": "ghosted", "withdrawn": "withdrawn", "passed": "passed", "closed": "posting closed"}
+    closed = [{"label": label, "count": at(status)} for status, label in closed_labels.items() if at(status)]
     brief = conn.execute("SELECT * FROM briefings ORDER BY id DESC LIMIT 1").fetchone()
+    briefing = dict(brief) if brief else None
+    if briefing:
+        # The report names jobs as they stood when it was written, so say how much has moved since.
+        briefing["since"] = {kind: count for kind, count in conn.execute(
+            "SELECT kind, COUNT(DISTINCT job_id) FROM events WHERE ts > ? AND kind IN ('applied', 'passed') GROUP BY kind",
+            (briefing["ts"],))}
     source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")]
     return {
         "jobs": jobs,
         "stats": stats,
         "funnel": funnel,
-        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS)),
+        "closed": closed,
+        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg)),
+        "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),
         "last_run": last_full_sweep(conn),
-        "briefing": dict(brief) if brief else None,
+        "briefing": briefing,
         "before_send": cfg.get("dashboard", {}).get("before_send", []),
         "usage": claude_code.usage(conn),
         "tasks": tasks.latest(conn),
@@ -214,23 +371,39 @@ def build_state(conn, cfg) -> dict:
 
 def job_detail(conn, job_id: int, cfg: dict) -> dict:
     job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True)
-    _attach_runs(job, possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn))
+    _attach_runs(job, possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn),
+                 _scam_alerts(mail.open_alerts(conn)))
+    _attach_history(job, _applied_by_company(conn), cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY))
+    job["seen"] = bool(conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = ?", (job_id, SEEN)).fetchone())
+    job["can_unpass"] = job["status"] == "passed" and _status_before_pass(conn, job_id) is not None
     job["fix_limit"] = cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS)
     job["can_refresh"] = job["status"] in refresh.REFRESHABLE and bool(job["app_folder"])
     job["can_recheck"] = job["status"] in RECHECKABLE and bool(job["app_folder"]) and not IS_EXAMPLE
     # Offered even without an application folder, so the button can say what's missing.
     job["can_prep"] = job["status"] in prep.PREPPABLE
     job["events"] =[dict(r) for r in conn.execute(
-        "SELECT ts, kind, detail FROM events WHERE job_id = ? ORDER BY id DESC", (job_id,)
+        "SELECT ts, kind, detail FROM events WHERE job_id = ? AND kind != ? ORDER BY id DESC", (job_id, SEEN)
     )]
     job["notes_md"] = ""
     job["prep_file"] = ""
+    job["fill_sheet"] = ""
+    job["can_fill"] = False
     if job["app_folder"]:
-        path = ROOT / job["app_folder"] / "notes.md"
+        folder = ROOT / job["app_folder"]
+        path = folder / "notes.md"
         if path.exists():
             job["notes_md"] = path.read_text(encoding="utf-8")
-        if (ROOT / job["app_folder"] / prep.BRIEF).exists():
+        if (folder / prep.BRIEF).exists():
             job["prep_file"] = f"{job['app_folder']}/{prep.BRIEF}"
+        if (folder / fill.SHEET).exists():
+            job["fill_sheet"] = f"{job['app_folder']}/{fill.SHEET}"
+        # The sheet is for filling the form, so a sent job doesn't get a new one.
+        job["can_fill"] = (folder / "resume.md").exists() and (ROOT / fill.PASTE_SHEET).exists() and not job["frozen"] and not IS_EXAMPLE
+    row = get_job(conn, job_id)
+    job["autofill"] = workday.states(conn).get(job_id)
+    job["autofill_refusal"] = workday.refusal(conn, row)
+    job["can_autofill"] = job["autofill_refusal"] is None or (job["autofill"] or {}).get("state") == "running"
+    job["autofill_log"] = f"{job['app_folder']}/{workday.LOG}" if job["app_folder"] and (ROOT / job["app_folder"] / workday.LOG).exists() else ""
     return job
 
 
@@ -265,6 +438,21 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         if (refresh.states(conn).get(job_id) or {}).get("state") == "running":
             raise ValueError("This resume is being refreshed, and that run checks it when it's done.")
         finish_job(conn, cfg, job_id)
+    elif action == "fill_sheet":
+        if IS_EXAMPLE:
+            raise ValueError("The demo doesn't write fill sheets.")
+        if job["applied_at"]:
+            raise ValueError("This job was sent, so its folder is a record. A second application is a new job.")
+        if not job["app_folder"]:
+            raise ValueError("No application folder yet, so there's no tailored resume to merge.")
+        try:
+            report = fill.make_sheet(ROOT / job["app_folder"], job["company"], job["title"], job["url"],
+                                     source=fill.posting_source(job["source_key"], job["url"]))
+        except FileNotFoundError as err:
+            raise ValueError(str(err)) from err
+        log_event(conn, job_id, "fill_sheet", fill.summary(report))
+    elif action == "autofill":
+        workday.start(conn, job_id)
     elif action == "refresh_resume":
         refresh.start(conn, job_id)
     elif action == "interview_prep":
@@ -272,6 +460,14 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
     elif action == "reopen":
         target = "applied" if job["applied_at"] else "ready" if job["ready_at"] else "shortlisted"
         set_status(conn, job_id, target, "Reopened", follow_up)
+    elif action == "unpass":
+        before = _status_before_pass(conn, job_id) if job["status"] == "passed" else None
+        if before is None:
+            raise ValueError("Only a job you passed on before sending it can be put back. Use Reopen instead.")
+        set_status(conn, job_id, before, "Pass undone", follow_up)
+    elif action == "seen":
+        if not conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = ?", (job_id, SEEN)).fetchone():
+            log_event(conn, job_id, SEEN)
     elif action == "note":
         conn.execute("UPDATE jobs SET notes = ? WHERE id = ?", (str(body.get("notes") or "")[:5000], job_id))
     elif action == "next_action":
@@ -436,6 +632,11 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/job/(\d+)/action", path)
             if match:
                 apply_action(conn, int(match.group(1)), body, cfg)
+                conn.commit()
+                return self._json({"ok": True})
+            match = re.fullmatch(r"/api/alert/(\d+)/dismiss", path)
+            if match:
+                mail.dismiss_alert(conn, int(match.group(1)))
                 conn.commit()
                 return self._json({"ok": True})
             return self._json({"error": "not found"}, 404)

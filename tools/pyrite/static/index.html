@@ -17,7 +17,7 @@
     <p id="runs" class="sweep runs" aria-live="polite"></p>
   </div>
   <div class="masthead-actions">
-    <button id="run-sweep" class="btn" type="button" title="Read the job boards and check mail now. No AI.">Pan now</button>
+    <button id="run-sweep" class="btn" type="button" title="Read the job boards and check mail now. No AI.">Check boards now</button>
     <button id="run-claude" class="btn" type="button" title="Judge new postings and tailor the best now. Uses your Claude plan.">Run Claude now</button>
     <button id="add-open" class="btn primary" type="button">Add a posting</button>
   </div>
@@ -28,21 +28,21 @@
 
   <section class="command">
     <div class="panel orders">
-      <h2>Sluice</h2>
+      <h2>To do</h2>
       <div id="briefing" class="briefing"></div>
       <ol id="orders" class="order-list"></ol>
     </div>
     <div class="panel funnel-panel">
-      <h2>Yield</h2>
+      <h2>Funnel</h2>
       <div id="funnel" class="funnel"></div>
     </div>
   </section>
 
   <nav class="tabs" role="tablist" aria-label="Views">
-    <button role="tab" data-tab="pipeline" aria-selected="true">Claims</button>
+    <button role="tab" data-tab="pipeline" aria-selected="true">Pipeline</button>
     <button role="tab" data-tab="radar" aria-selected="false">Prospects</button>
-    <button role="tab" data-tab="archive" aria-selected="false">Tailings</button>
-    <button role="tab" data-tab="sources" aria-selected="false">Veins</button>
+    <button role="tab" data-tab="archive" aria-selected="false">Closed</button>
+    <button role="tab" data-tab="sources" aria-selected="false">Sources</button>
     <button role="tab" data-tab="facts" aria-selected="false">Facts</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
@@ -61,6 +61,7 @@
       </select>
       <select id="radar-show" aria-label="Filter by freshness">
         <option value="">All listings</option>
+        <option value="unseen">Not looked at yet</option>
         <option value="new">New only</option>
         <option value="promoted">Preferred city or industry</option>
         <option value="clean">Never reposted</option>
@@ -68,6 +69,7 @@
       </select>
       <select id="radar-sort" aria-label="Sort postings">
         <option value="priority">Sort by priority</option>
+        <option value="deadline">Sort by deadline</option>
         <option value="newest">Sort by newest</option>
         <option value="score">Sort by score</option>
       </select>
@@ -84,7 +86,7 @@
   <section id="view-sources" class="view" hidden>
     <div class="panel manual">
       <h2>Check these by hand</h2>
-      <p class="muted">These have no public feed, so a pan can't see them.</p>
+      <p class="muted">These have no public feed, so the board check can't see them.</p>
       <ul id="manual-list" class="manual-list"></ul>
     </div>
     <p id="source-summary" class="muted"></p>
@@ -109,6 +111,7 @@
 
 <aside id="drawer" class="drawer" hidden aria-label="Job details" tabindex="-1"></aside>
 <div id="scrim" class="scrim" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="add-dialog" class="dialog">
   <h2>Add a posting</h2>

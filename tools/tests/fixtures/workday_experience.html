@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: a Workday "My Experience" page</title>
+<style>
+  body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; }
+  [role=listbox] { border: 1px solid #888; padding: .25rem; }
+  [role=option] { padding: .1rem .5rem; cursor: pointer; }
+  .chip { display: inline-block; border: 1px solid #aaa; margin: 2px; padding: 2px 6px; }
+  label { display: block; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<!-- The ids, roles and automation ids below are the ones Workday's candidate site uses. Nothing else about it is copied. -->
+<h2>My Experience</h2>
+
+<!-- Two fields from a tenant's "My Information" page, which some tenants make required. -->
+<div data-automation-id="formField-source">
+  <label for="source--source">How Did You Hear About Us?*</label>
+  <input id="source--source" type="text"><ul role="listbox" hidden></ul>
+</div>
+<div data-automation-id="formField-legalName">
+  <label>First Name <input id="name--legalName--firstName" type="text"></label>
+  <label>Last Name <input id="name--legalName--lastName" type="text"></label>
+</div>
+<div data-automation-id="formField-address">
+  <label>Address Line 1 <input id="address--addressLine1" type="text"></label>
+  <label>City <input id="address--city" type="text"></label>
+  <label>Postal Code <input id="address--postalCode" type="text"></label>
+</div>
+<div data-automation-id="formField-state">State <button type="button" id="address--countryRegion">Select One</button></div>
+<div data-automation-id="formField-email"><label>Email Address <input id="email--email" type="text" value="alex.rivera@example.com"></label></div>
+<div data-automation-id="formField-phoneType">Phone Device Type <button type="button" id="phoneNumber--phoneType">Select One</button></div>
+<div data-automation-id="formField-phoneNumber"><label>Phone Number <input id="phoneNumber--phoneNumber" type="text"></label></div>
+<div data-automation-id="formField-previousWorker">
+  <div>Have you previously worked for Acme as an employee or contractor?*</div>
+  <label><input type="radio" name="previousWorker" value="true"> Yes</label>
+  <label><input type="radio" name="previousWorker" value="false"> No</label>
+</div>
+
+<h3>Work Experience</h3>
+<div id="work"></div>
+<button type="button" data-automation-id="add-button" onclick="addWork()">Add Another</button>
+
+<h3>Education</h3>
+<div id="edu"></div>
+<button type="button" data-automation-id="add-button" onclick="addEdu()">Add</button>
+
+<h3>Languages</h3>
+<div id="lang"></div>
+<button type="button" data-automation-id="add-button" onclick="addLang()">Add</button>
+
+<h3>Skills</h3>
+<div data-automation-id="formField-skills">
+  <label for="skills--skills">Type to Add Skills</label>
+  <div id="skill-chips"></div>
+  <input id="skills--skills" type="text" placeholder="Search">
+  <ul id="skill-list" role="listbox" hidden></ul>
+</div>
+
+<h3>Resume/CV</h3>
+<input type="file" data-automation-id="file-upload-input-ref">
+
+<h3>Websites</h3>
+<div id="web"></div>
+<button type="button" data-automation-id="add-button" onclick="addWeb()">Add</button>
+
+<p><button type="button" data-automation-id="pageFooterBackButton">Back</button>
+<button type="button" data-automation-id="pageFooterNextButton" onclick="document.title='saved'">Save and Continue</button></p>
+
+<script>
+const CATALOG = {
+  school: ["Lakeshore School of Business and Technology", "Western Prairie University", "Western Plains University"],
+  field: ["Business Administration", "Coastal and Ocean Engineering Technology", "Engineering Technology"],
+  degree: ["Bachelors", "Masters", "Doctorate"],
+  language: ["English", "French"],
+  level: ["1 - Beginner", "3 - Intermediate", "5 - Fluent"],
+  skills: ["Firmware", "Python (Programming Language)", "Python IDLE", "Machine Learning (ML)", "Machine Learning Methods", "Linux", "Linux Server", "Scrum"],
+};
+let n = 0;
+const next = () => ++n;
+
+function addWork() {
+  const k = next();
+  document.getElementById("work").insertAdjacentHTML("beforeend", `
+    <fieldset data-block="workExperience-${k}">
+      <label>Job Title <input id="workExperience-${k}--jobTitle" type="text"></label>
+      <label>Company <input id="workExperience-${k}--companyName" type="text"></label>
+      <label>Location <input id="workExperience-${k}--location" type="text"></label>
+      <label><input id="workExperience-${k}--currentlyWorkHere" type="checkbox"> I currently work here</label>
+      From <input id="workExperience-${k}--startDate-dateSectionMonth-input" type="text" size="2">/<input id="workExperience-${k}--startDate-dateSectionYear-input" type="text" size="4">
+      To <input id="workExperience-${k}--endDate-dateSectionMonth-input" type="text" size="2">/<input id="workExperience-${k}--endDate-dateSectionYear-input" type="text" size="4">
+      <label>Role Description <textarea id="workExperience-${k}--roleDescription"></textarea></label>
+    </fieldset>`);
+}
+
+// A single-value search picker: Enter finds matches; an exact match is taken at once and shown as a removable value.
+// Like a real tenant, the old list is cleared at once and the answer arrives after a round trip, as "No Items." when nothing matched.
+const ROUND_TRIP_MS = 300;
+function searchPicker(input, names, single) {
+  const list = input.nextElementSibling;
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { input.nextElementSibling.hidden = true; return; }
+    if (ev.key !== "Enter") return;
+    // Workday's search is loose: anything sharing words with the query comes back, best match first.
+    const q = input.value.trim().toLowerCase();
+    const words = q.split(/\s+/).filter((w) => w.length > 2);
+    const score = (s) => (s.toLowerCase().includes(q) ? 100 : 0) + words.filter((w) => s.toLowerCase().split(/\W+/).includes(w)).length;
+    const hits = names.filter((s) => score(s) > 0).sort((a, b) => score(b) - score(a));
+    list.innerHTML = "";
+    list.hidden = false;
+    setTimeout(() => {
+      if (!hits.length) { list.innerHTML = "<li>No Items.</li>"; return; }
+      const exact = hits.find((s) => s.toLowerCase() === q);
+      if (single && exact) { selectSingle(input, list, exact); return; }
+      for (const s of hits) {
+        const li = document.createElement("li");
+        li.setAttribute("role", "option");
+        li.setAttribute("aria-label", single ? s : `${s} not checked`);
+        li.textContent = s;
+        li.onclick = () => single ? selectSingle(input, list, s) : toggleSkill(s, li);
+        list.appendChild(li);
+      }
+    }, ROUND_TRIP_MS);
+  });
+}
+function selectSingle(input, list, s) {
+  input.value = "";
+  list.innerHTML = `<li role="option" aria-label="${s}, press delete to clear value.">${s}</li>`;
+  input.dataset.selected = s;
+}
+function toggleSkill(s, li) {
+  const chips = document.getElementById("skill-chips");
+  li.setAttribute("aria-label", `${s} checked`);
+  chips.insertAdjacentHTML("beforeend", `<span class="chip" data-skill="${s}">× ${s}</span>`);
+}
+
+function dropdown(button, names) {
+  button.addEventListener("click", () => {
+    let box = button.nextElementSibling;
+    if (box && box.getAttribute("role") === "listbox") { box.remove(); return; }
+    box = document.createElement("ul");
+    box.setAttribute("role", "listbox");
+    for (const s of names) {
+      const li = document.createElement("li");
+      li.textContent = s;
+      li.onclick = () => { button.textContent = s; box.remove(); };
+      box.appendChild(li);
+    }
+    button.after(box);
+  });
+}
+
+function addEdu() {
+  const k = next();
+  document.getElementById("edu").insertAdjacentHTML("beforeend", `
+    <fieldset>
+      <button type="button" onclick="this.parentElement.remove()">Delete</button>
+      <label>School or University <input id="education-${k}--school" type="text" data-automation-id="searchBox"><ul role="listbox" hidden></ul></label>
+      <div data-automation-id="formField-degree">Degree <button type="button" id="education-${k}--degree">Select One</button></div>
+      <div data-automation-id="formField-fieldOfStudy"><label>Field of Study <input id="education-${k}--fieldOfStudy" type="text"><ul role="listbox" hidden></ul></label></div>
+      <label>GPA <input id="education-${k}--gradeAverage" type="text"></label>
+      <!-- Workday wraps each date in elements sharing its id stem; only the input takes text. -->
+      <div id="education-${k}--firstYearAttended">From <input id="education-${k}--firstYearAttended-dateSectionYear-input" type="text" size="4"></div>
+      <div id="education-${k}--lastYearAttended">To <input id="education-${k}--lastYearAttended-dateSectionYear-input" type="text" size="4"></div>
+    </fieldset>`);
+  searchPicker(document.getElementById(`education-${k}--school`), CATALOG.school, true);
+  searchPicker(document.getElementById(`education-${k}--fieldOfStudy`), CATALOG.field, true);
+  dropdown(document.getElementById(`education-${k}--degree`), CATALOG.degree);
+}
+
+function addLang() {
+  const k = next();
+  document.getElementById("lang").insertAdjacentHTML("beforeend", `
+    <fieldset>
+      <div>Language <button type="button" id="language-${k}--language">Select One</button></div>
+      <label><input id="language-${k}--native" type="checkbox"> I am fluent in this language.</label>
+      <div>Reading <button type="button" id="language-${k}--abc123">Select One</button></div>
+      <div>Writing <button type="button" id="language-${k}--def456">Select One</button></div>
+    </fieldset>`);
+  dropdown(document.getElementById(`language-${k}--language`), CATALOG.language);
+  dropdown(document.getElementById(`language-${k}--abc123`), CATALOG.level);
+  dropdown(document.getElementById(`language-${k}--def456`), CATALOG.level);
+}
+
+function addWeb() {
+  const k = next();
+  document.getElementById("web").insertAdjacentHTML("beforeend", `<label>URL <input id="webAddress-${k}--url" type="text"></label>`);
+}
+
+searchPicker(document.getElementById("skills--skills"), CATALOG.skills, false);
+searchPicker(document.getElementById("source--source"), ["Company Careers Site", "LinkedIn", "Employee Referral"], true);
+dropdown(document.getElementById("address--countryRegion"), ["Ohio", "Nevada", "Wisconsin"]);
+dropdown(document.getElementById("phoneNumber--phoneType"), ["Home", "Mobile", "Work"]);
+addWork();
+</script>
+</body>
+</html>

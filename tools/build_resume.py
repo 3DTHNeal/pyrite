@@ -9,8 +9,9 @@ Source syntax (one element per line):
     = Headline                     optional bold line under the name: the title family you're after
     @ contact line                 the line under the name, items separated by " · " (built as " | ")
     ## Section                     heading with a rule (a real Word heading, so parsers and screen readers see it)
-    ### Company | dates            bold line, dates right-aligned
-    #### Role | place | dates      bold role, plain place, dates right-aligned (dates optional)
+    ### Company | dates            the employer of the roles below it; prints nothing of its own
+    #### Role | place | dates      a block of two lines: bold role with the dates right-aligned, then "Company | place"
+                                   (a role without dates takes the company's)
     ~ Label                        italic group label inside a role
     - bullet text                  bullet; **bold** is supported
     anything else                  plain paragraph
@@ -19,7 +20,9 @@ The .txt is the same content as plain text, for the paste boxes on LinkedIn, Wor
 
 Built for the parsers behind applicant tracking systems: one column, no tables, text boxes, headers or
 footers, standard section names, a real bullet character in the body text rather than a Symbol-font
-glyph, and dates spelled "Mar 2026". Keep it that way. After the PDF is made, its text is read back
+glyph, and dates spelled "Mar 2026". Every role is a self-contained block that names its employer, with
+no employer header of its own above it: Workday read a header line that carried the employer's overall
+dates as a job with no title, and the roles under it as jobs with no employer. Keep it that way. After the PDF is made, its text is read back
 and the build fails if the name, contact details, a heading or a date range didn't survive, or if
 the export turned "fi" into a ligature a keyword search can't match. docs/resume-playbook.md says why.
 
@@ -101,6 +104,22 @@ def _split(line: str, prefix: str) -> list[str]:
     return [p.strip() for p in line[len(prefix):].split("|")]
 
 
+def _employer(line: str) -> tuple[str, str]:
+    """The company and its overall dates from a `### Company | dates` line; the dates may be absent."""
+    company, *dates = _split(line, "### ")
+    return company, dates[0] if dates else ""
+
+
+def _role(line: str, company_dates: str) -> tuple[str, str, str]:
+    """Role, place and dates from a `#### Role | place | dates` line; a role without dates takes the company's."""
+    role, place, *dates = _split(line, "#### ")
+    return role, place, dates[0] if dates else company_dates
+
+
+def _employer_line(company: str, place: str) -> str:
+    return " | ".join(p for p in (company, place) if p)
+
+
 def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", paper: str = "letter"):
     paragraph_gap = 9 if letter else 1
     doc = Document()
@@ -118,24 +137,29 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", 
         style.font.size = Pt(BODY_PT)
         style.font.color.rgb = BLACK
 
+    company, company_dates = "", ""
     for raw in source.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line:
             continue
+        if line.startswith("### "):
+            # The employer prints inside each role's block, never as a header: a parser reads a header line that
+            # carries dates as a job of its own, and then nests or merges the roles below it.
+            company, company_dates = _employer(line)
+            continue
         par = doc.add_paragraph()
         if line.startswith("#### "):
-            role, place, *dates = _split(line, "#### ")
-            spacing(par, before=3, after=1)
+            role, place, when = _role(line, company_dates)
+            spacing(par, before=5, after=0)
             par.paragraph_format.keep_with_next = True
             right_tab(par, content_width)
             style_run(par.add_run(role), bold=True)
-            style_run(par.add_run(f" | {place}" + (f"\t{dates[0]}" if dates else "")))
-        elif line.startswith("### "):
-            company, dates = _split(line, "### ")
-            spacing(par, before=4, after=0)
+            if when:
+                style_run(par.add_run(f"\t{when}"))
+            par = doc.add_paragraph()
+            spacing(par, after=1)
             par.paragraph_format.keep_with_next = True
-            right_tab(par, content_width)
-            style_run(par.add_run(f"{company}\t{dates}"), bold=True)
+            style_run(par.add_run(_employer_line(company, place)))
         elif line.startswith("## "):
             # A real heading: it carries an outline level, which parsers and screen readers use to find sections.
             par.style = doc.styles["Heading 1"]
@@ -187,17 +211,17 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", 
 def build_txt(source: Path, out: Path, letter: bool = False):
     """The same content as plain text, shaped for the text boxes that application sites and LinkedIn offer."""
     lines: list[str] = []
+    company, company_dates = "", ""
     for raw in source.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line:
             continue
         text = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
         if text.startswith("#### "):
-            role, place, *dates = _split(text, "#### ")
-            lines.append(f"{role}, {place}" + (f" ({dates[0]})" if dates else ""))
+            role, place, when = _role(text, company_dates)
+            lines.extend(["", f"{role} ({when})" if when else role, _employer_line(company, place)])
         elif text.startswith("### "):
-            company, dates = _split(text, "### ")
-            lines.extend(["", f"{company} ({dates})"])
+            company, company_dates = _employer(text)
         elif text.startswith("## "):
             lines.extend(["", text[3:].upper()])
         elif text.startswith("# "):
@@ -244,6 +268,7 @@ def lint_pdf(source: Path, pdf: Path, letter: bool = False) -> list[str]:
         problems.append("the export turned letter pairs such as 'fi' into ligatures, which a keyword search can't match")
     # The top lines must come out as separate lines: a parser that reads "Headline City, ST" as one line loses both.
     top = [_squash(l) for l in text.splitlines() if l.strip()][:4]
+    company_dates = ""
     for raw in source.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if line.startswith("# "):
@@ -257,9 +282,13 @@ def lint_pdf(source: Path, pdf: Path, letter: bool = False) -> list[str]:
                 problems.append("the contact line is run together with the line above it in the PDF's text")
         elif line.startswith("## ") and not letter:
             wanted = [("heading", line[3:])]
-        elif line.startswith(("### ", "#### ")) and not letter:
-            parts = line.lstrip("# ").split("|")
-            wanted = [("employer or title", parts[0].strip())] + [("date range", parts[-1].strip())] * (len(parts) > 1 and "–" in parts[-1])
+        elif line.startswith("### ") and not letter:
+            # The employer's own dates reach the page only through a role that has none of its own.
+            company, company_dates = _employer(line)
+            wanted = [("employer", company)]
+        elif line.startswith("#### ") and not letter:
+            role, _, when = _role(line, company_dates)
+            wanted = [("title", role)] + [("date range", when)] * ("–" in when)
         else:
             continue
         for label, item in wanted:
@@ -269,30 +298,47 @@ def lint_pdf(source: Path, pdf: Path, letter: bool = False) -> list[str]:
 
 
 def export_pdf(docx: Path):
-    """Use LibreOffice if it's installed, otherwise Word. Either is stopped if it hangs, as Word does behind a dialog nobody can see."""
-    if shutil.which("soffice"):
-        subprocess.run(
-            ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(docx.parent), str(docx)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            timeout=EXPORT_TIMEOUT_SECONDS,
-        )
+    export_pdfs([docx])
+
+
+def export_pdfs(docxs: list[Path]):
+    """Make a PDF beside each .docx, all in one session. LibreOffice if it's installed, otherwise Word.
+
+    One session matters with Word: its first export in a process takes most of a minute (50 seconds
+    measured, against a third of a second for each one after), so a resume and its letter share an
+    instance. Either converter is stopped if it hangs, as Word does behind a dialog nobody can see.
+    """
+    docxs = [docx.resolve() for docx in docxs]
+    if not docxs:
         return
-    # 17 is Word's PDF format, and 0 closes without saving. Paths arrive as environment variables to avoid quoting them.
-    # The ninth argument, IncludeDocProps, is off by default: without it the PDF has no title, author or keywords,
-    # and so no drafter version.
+    timeout = EXPORT_TIMEOUT_SECONDS + 30 * (len(docxs) - 1)
+    if shutil.which("soffice"):
+        for folder in dict.fromkeys(docx.parent for docx in docxs):
+            subprocess.run(
+                ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(folder), *(str(d) for d in docxs if d.parent == folder)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+        return
+    # 17 is Word's PDF format, and 0 closes without saving. Paths arrive in an environment variable, one per line,
+    # to avoid quoting them. The ninth argument, IncludeDocProps, is off by default: without it the PDF has no
+    # title, author or keywords, and so no drafter version.
     script = """
     $word = New-Object -ComObject Word.Application
     try {
         $word.DisplayAlerts = 0
-        $doc = $word.Documents.Open($env:WR_DOCX, $false, $true)
-        $doc.ExportAsFixedFormat($env:WR_PDF, 17, $false, 0, 0, 0, 0, 0, $true)
-        $doc.Close(0)
+        foreach ($path in $env:WR_DOCX -split "`n") {
+            if (-not $path) { continue }
+            $doc = $word.Documents.Open($path, $false, $true)
+            $doc.ExportAsFixedFormat([System.IO.Path]::ChangeExtension($path, ".pdf"), 17, $false, 0, 0, 0, 0, 0, $true)
+            $doc.Close(0)
+        }
     } finally { $word.Quit() }
     """
-    env = {**os.environ, "WR_DOCX": str(docx.resolve()), "WR_PDF": str(docx.resolve().with_suffix(".pdf"))}
+    env = {**os.environ, "WR_DOCX": "\n".join(str(docx) for docx in docxs)}
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True, env=env, stdout=subprocess.DEVNULL,
-                   timeout=EXPORT_TIMEOUT_SECONDS)
+                   timeout=timeout)
 
 
 def main():
@@ -303,24 +349,36 @@ def main():
     ap.add_argument("--author", default="", help="author recorded in the document's properties")
     ap.add_argument("--paper", choices=sorted(PAPER), default="letter", help="page size")
     ap.add_argument("--no-pdf", action="store_true", help="stop after the .docx and .txt")
+    ap.add_argument("--letter-source", type=Path, help="also build this cover letter, through the same PDF session")
+    ap.add_argument("--letter-name", help="output file name for that cover letter, without extension")
     args = ap.parse_args()
+    if bool(args.letter_source) != bool(args.letter_name):
+        ap.error("--letter-source and --letter-name go together")
 
-    out_docx = args.source.parent / f"{args.name}.docx"
-    build_docx(args.source, out_docx, letter=args.letter, author=args.author, paper=args.paper)
-    build_txt(args.source, out_docx.with_suffix(".txt"), letter=args.letter)
+    jobs = [(args.source, args.name, args.letter)]
+    if args.letter_source:
+        jobs.append((args.letter_source, args.letter_name, True))
+    built = []
+    for source, name, letter in jobs:
+        out_docx = source.parent / f"{name}.docx"
+        build_docx(source, out_docx, letter=letter, author=args.author, paper=args.paper)
+        build_txt(source, out_docx.with_suffix(".txt"), letter=letter)
+        built.append((source, out_docx, letter))
     if args.no_pdf:
-        print(f"{out_docx} (drafter {DRAFTER_VERSION})")
+        for _, out_docx, _ in built:
+            print(f"{out_docx} (drafter {DRAFTER_VERSION})")
         return
     try:
-        export_pdf(out_docx)
+        export_pdfs([out_docx for _, out_docx, _ in built])
     except subprocess.TimeoutExpired:
         sys.exit(f"Making the PDF took over {EXPORT_TIMEOUT_SECONDS // 60} minutes, so it was stopped. "
                  "If Word did this, open Word once and close any dialog it shows.")
-    out_pdf = out_docx.with_suffix(".pdf")
-    problems = lint_pdf(args.source, out_pdf, letter=args.letter)
-    if problems:
-        sys.exit(f"{out_pdf.name} would not parse cleanly: " + "; ".join(problems) + ".")
-    print(f"{out_pdf} ({_pages(out_pdf) or 'unknown'} pages, drafter {DRAFTER_VERSION})")
+    for source, out_docx, letter in built:
+        out_pdf = out_docx.with_suffix(".pdf")
+        problems = lint_pdf(source, out_pdf, letter=letter)
+        if problems:
+            sys.exit(f"{out_pdf.name} would not parse cleanly: " + "; ".join(problems) + ".")
+        print(f"{out_pdf} ({_pages(out_pdf) or 'unknown'} pages, drafter {DRAFTER_VERSION})")
 
 
 if __name__ == "__main__":

@@ -73,13 +73,13 @@ function renderSweep() {
   const parts = [];
   if (run) {
     const reposted = run.stats.reposted ? `, ${run.stats.reposted} reposted` : "";
-    parts.push(`Last pan ${ago(run.finished_at)}: ${run.stats.postings.toLocaleString()} postings read across ${run.stats.sources} veins, ${run.stats.new} new${reposted}.`);
+    parts.push(`Boards checked ${ago(run.finished_at)}: ${run.stats.postings.toLocaleString()} postings read across ${run.stats.sources} sources, ${run.stats.new} new${reposted}.`);
   } else {
-    parts.push("No pan has run yet.");
+    parts.push("The boards haven't been checked yet.");
   }
   const nodes = [parts.join(" ")];
   if (run && Date.now() - toDate(run.finished_at).getTime() > 30 * 3.6e6) nodes.push(" ", h("span", { class: "alert" }, "This is out of date, so check the Pyrite Sweep task."));
-  if (failed.length) nodes.push(" ", h("span", { class: "alert" }, `${failed.length} vein${failed.length > 1 ? "s" : ""} failing.`));
+  if (failed.length) nodes.push(" ", h("span", { class: "alert" }, `${failed.length} source${failed.length > 1 ? "s" : ""} failing.`));
   fill($("sweep"), nodes);
 }
 
@@ -88,24 +88,63 @@ function renderKpis() {
   const tile = (value, label, sub, hot) => h("div", { class: `kpi${hot ? " hot" : ""}` },
     h("span", { class: "value" }, value), h("span", { class: "label" }, label), h("span", { class: "sub" }, sub));
   fill($("kpis"),
-    tile(s.ready, "Nuggets", "Passed the assay, ready to send", s.ready > 0),
+    tile(s.ready, "Ready to send", "Passed the fact check", s.ready > 0),
     tile(s.applied, "Applied", `${s.applied_week} in the last 7 days`),
     tile(s.awaiting, "Awaiting reply", s.follow_ups ? `${s.follow_ups} follow-up${s.follow_ups > 1 ? "s" : ""} due` : "No follow-ups due", s.follow_ups > 0),
-    tile(s.response_rate === null ? "–" : `${s.response_rate}%`, "Response rate",
-      s.applied ? `${s.heard} of ${s.applied}${s.median_days_to_reply !== null ? `, median ${s.median_days_to_reply}d` : ""}` : "Nothing sent yet"),
+    // Replies only: a rejection is counted beside it, not inside it, so the rate isn't flattering.
+    tile(s.reply_rate === null || s.reply_rate === undefined ? "–" : `${s.reply_rate}%`, "Reply rate",
+      s.applied ? [`${s.replied} of ${s.applied} replied`, s.rejected ? `${s.rejected} rejected` : "",
+        s.median_days_to_reply !== null ? `median ${s.median_days_to_reply}d` : ""].filter(Boolean).join(", ") : "Nothing sent yet"),
     tile(s.interviews, "Interviews", "Reached interview stage"),
     tile(s.to_triage, "Prospects", `${s.fresh} new, ${s.possible_ghosts} possible ghost${s.possible_ghosts === 1 ? "" : "s"}`, s.fresh > 0));
 }
 
-function renderOrders() {
+// The report names jobs as they stood when it was written. Once you've applied or passed since, fold it away and say so.
+function renderBriefing() {
   const b = state.briefing;
-  fill($("briefing"), b ? [h("span", { class: "when" }, `Field report, ${ago(b.ts)}`), b.body] : []);
+  if (!b) return fill($("briefing"));
+  const since = b.since || {};
+  const moved = [since.applied ? `applied to ${plural(since.applied, "job")}` : "", since.passed ? `passed on ${since.passed}` : ""].filter(Boolean);
+  if (!moved.length) return fill($("briefing"), h("span", { class: "when" }, `Field report, ${ago(b.ts)}`), b.body);
+  return fill($("briefing"), h("details", { class: "stale-report" },
+    h("summary", {}, `Field report from ${ago(b.ts)} is out of date: since then you ${moved.join(" and ")}. The list below is current.`),
+    h("p", {}, b.body)));
+}
+
+// Checking again rebuilds the documents, which can take a minute each, so it runs one at a time and says how far it's got.
+let recheckProgress = "";
+
+async function recheckAll(ids) {
+  for (const [index, id] of ids.entries()) {
+    recheckProgress = ids.length > 1 ? `Checking ${index + 1} of ${ids.length}…` : "Checking…";
+    renderOrders();
+    try {
+      await api(`/api/job/${id}/action`, { action: "recheck" });
+    } catch (err) {
+      runError = `Couldn't check a draft again: ${err.message}`;
+      break;
+    }
+  }
+  recheckProgress = "";
+  await refresh();
+}
+
+function renderOrders() {
+  renderBriefing();
   const kindClass = (kind) => `kind kind-${kind.toLowerCase().replace(/\s+/g, "-")}`;
+  const recheck = state.demo ? [] : state.orders.filter((o) => o.action === "recheck").map((o) => o.job_id);
+  const sluiceIds = state.orders.map((o) => o.job_id).filter(Boolean);
+  const checkButton = (ids, label) => h("button", { class: "btn dismiss", type: "button", disabled: Boolean(recheckProgress),
+    title: "Rebuilds the documents and runs the assay again. Takes up to a minute each.", onclick: () => recheckAll(ids) }, recheckProgress || label);
+  // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
   const items = state.orders.map((o) => h("li", {},
-    h("button", { class: "order", type: "button", onclick: () => openJob(o.job_id) },
+    h("button", { class: "order", type: "button", onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : null) },
       h("span", { class: kindClass(o.kind) }, o.kind),
-      h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail)))));
-  fill($("orders"), items.length ? items : h("li", { class: "empty" }, "Nothing needs you right now."));
+      h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),
+    o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
+    o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null));
+  const all = recheck.length > 1 ? h("li", { class: "order-batch" }, checkButton(recheck, `Check all ${recheck.length} again`)) : null;
+  fill($("orders"), items.length ? [all, ...items] : h("li", { class: "empty" }, "Nothing needs you right now."));
 }
 
 function renderFunnel() {
@@ -123,37 +162,70 @@ function renderFunnel() {
 
 const COLUMNS = [
   { title: "Being tailored", statuses: ["shortlisted", "needs_fix"], hint: "Claude writes these on the next run, or now with the button", batch: true },
-  { title: "Nuggets", statuses: ["ready"], hint: "Read, then apply on the company's site" },
+  { title: "Ready to send", statuses: ["ready"], hint: "Read, then apply on the company's site" },
   { title: "Applied", statuses: ["applied"], hint: "Waiting to hear" },
-  { title: "Heard back", statuses: ["responded"] },
+  { title: "Replied", statuses: ["responded"] },
   { title: "Interviewing", statuses: ["interviewing"] },
   { title: "Offer", statuses: ["offer"] },
 ];
 
-function freshnessPills(job) {
+// `hints` adds the weakest signal, the Workday "-1" link, which only the Prospects table and the job panel have room for.
+function freshnessPills(job, hints = true) {
   const pills = [];
   if (job.is_new && !job.applied_at) pills.push(pill("good", "New", `Posted ${daysAgo(job.age_days)} and never reposted`));
   if (!job.applied_at) for (const name of job.promoted) pills.push(pill("info", name, "A city or industry you asked to rank higher. It raises priority, not the score."));
   if (job.reposts) pills.push(pill(job.reposts > 1 ? "bad" : "warn", `Reposted ${job.reposts}×`, "The same job came back under a new listing, or after being taken down"));
   if (job.redates) pills.push(pill("warn", `Re-dated ${job.redates}×`, "The board moved this listing's posted date forward"));
   if (job.ghost_risk) pills.push(pill("bad", "Possible ghost", `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof.`));
-  if (job.may_be_repost) pills.push(pill("muted", "May be a repost", "This Workday link ends in -1 or similar, which often means the requisition has more than one posting. A hint only."));
+  if (job.may_be_repost && hints) pills.push(pill("muted", "May be a repost", "This Workday link ends in -1 or similar, which often means the requisition has more than one posting. A hint only."));
   return pills;
 }
 
 const FIT_TONE = { strong: "good", good: "good", stretch: "warn", skip: "bad" };
+const NOT_SENT = ["new", "shortlisted", "needs_fix", "ready"];
+const dayName = (iso) => toDate(iso).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 
+// When the posting stops taking applications. Only worth showing until you've sent one.
+function deadlinePill(job) {
+  const days = job.days_to_deadline;
+  if (days === null || days === undefined || !NOT_SENT.includes(job.status)) return null;
+  const on = shortDate(job.deadline);
+  if (days < 0) return pill("muted", `Deadline ${on} passed`, "The posting's stated deadline has passed. \"At least until\" often runs longer, so check the posting is still up.");
+  const label = days === 0 ? "Apply today" : days === 1 ? "Apply by tomorrow" : `Apply by ${on}`;
+  return pill(days <= 2 ? "bad" : days <= 7 ? "warn" : "muted", label, `The posting gives ${dayName(job.deadline)} as its deadline`);
+}
+
+// What you've already sent this employer, so a second listing of the same job or one application too many is caught before it goes out.
+function historyPills(job) {
+  if (job.applied_at) return [];
+  const pills = [];
+  const same = job.same_title_applied;
+  if (same) pills.push(pill("bad", "Same title sent", `You applied for ${same.title} here on ${shortDate(same.applied_at)}. This may be another listing of it.`));
+  if (job.applied_here) {
+    pills.push(pill(job.applied_here >= job.company_limit ? "warn" : "muted", `${job.applied_here} sent here`,
+      `Applications already sent to ${job.company}. Your limit is ${job.company_limit} at a time.`));
+  }
+  return pills;
+}
+
+const blockerPill = (job) => ((job.blockers || []).length
+  ? pill("bad", "Check first", `From the notes, before you apply:\n- ${job.blockers.join("\n- ")}`) : null);
+
+const urgentPills = (job) => [deadlinePill(job), blockerPill(job), ...historyPills(job)].filter(Boolean);
+
+// A card shows what you'd act on. Once a job is sent, its score, fit and listing history no longer matter, so only the exceptions stay.
 function cardMeta(job) {
-  const meta = [];
+  const sent = !NOT_SENT.includes(job.status);
+  const meta = [...urgentPills(job)];
   if (job.possible_reply) meta.push(pill("warn", "Possible reply"));
-  if (job.priority) meta.push(pill("info", "Your pick", "You asked for this one next"));
-  if (job.score) meta.push(h("span", { class: "score", title: "Filter score, out of 100" }, `Score ${job.score}`));
-  if (job.fit) meta.push(pill(FIT_TONE[job.fit] || "muted", job.fit === "skip" ? "Skip" : `${capitalized(job.fit)} fit`, job.fit_reason));
+  if (job.scam_alert) meta.push(pill("bad", "Possible scam", `Mail naming this company looked like a scam: ${job.scam_alert.reasons.join("; ")}`));
+  if (job.priority && !sent) meta.push(pill("info", "Your pick", "You asked for this one next"));
+  if (job.score && !sent) meta.push(h("span", { class: "score", title: "Filter score, out of 100" }, `Score ${job.score}`));
+  if (job.fit && !sent) meta.push(pill(FIT_TONE[job.fit] || "muted", job.fit === "skip" ? "Skip" : `${capitalized(job.fit)} fit`, job.fit_reason));
   if (job.refresh && job.refresh.state === "running") meta.push(pill("info", "Refreshing resume"));
   if (job.prep && job.prep.state === "running") meta.push(pill("info", "Writing interview prep"));
   if (job.status === "needs_fix") meta.push(pill("bad", "Failed assay"));
   if (job.changed_since_check && job.changed_since_check.length) meta.push(pill("bad", "Changed since checked", "Its files changed after the assay passed it"));
-  if (job.frozen) meta.push(pill("muted", "Frozen", "Sent, so the documents are the record of what went out: nothing rebuilds or refreshes them"));
   if (job.changed_after_sending && job.changed_after_sending.length) meta.push(pill("bad", "Changed after sending", `${job.changed_after_sending.join(", ")} no longer match the sent copy`));
   if (job.posting_closed_at) meta.push(pill("bad", "Posting down"));
   if (job.follow_up_due) meta.push(pill("warn", job.next_action === "Follow up" ? "Follow up" : "Next step due", job.next_action));
@@ -162,35 +234,43 @@ function cardMeta(job) {
   if (job.location_kind === "local") meta.push(h("span", {}, "Local"));
   if (job.location_kind === "remote") meta.push(h("span", {}, "Remote"));
   (job.flags || []).forEach((flag) => meta.push(pill("warn", flag)));
-  return [...meta, ...freshnessPills(job)];
+  return [...meta, ...(sent ? [] : freshnessPills(job, false))];
 }
+
+// Sent jobs wait oldest first, since those are the next to need a follow-up. Everything else keeps the server's order.
+const columnOrder = (col, jobs) => (col.statuses.includes("applied")
+  ? [...jobs].sort((a, b) => (a.applied_at || "").localeCompare(b.applied_at || "")) : jobs);
 
 function renderBoard() {
   fill($("board"), COLUMNS.map((col) => {
-    const jobs = state.jobs.filter((j) => col.statuses.includes(j.status));
+    const jobs = columnOrder(col, state.jobs.filter((j) => col.statuses.includes(j.status)));
     const task = (state.tasks || {}).tailor;
     const busy = Boolean(task && task.state === "running");
-    return h("div", { class: "column" },
+    // An empty column shrinks to its heading, so the columns with work in them get the room.
+    return h("div", { class: `column${jobs.length || busy ? "" : " empty"}` },
       h("h3", {}, col.title, h("span", {}, jobs.length)),
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
       col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
         id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo,
         title: "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
         onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
-      h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id) },
+      h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id, jobs.map((j) => j.id)) },
         h("span", { class: "co" }, job.company), h("span", { class: "ti" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
   }));
 }
 
 // ---- Radar ----
 
+const byDeadline = (job) => (job.days_to_deadline === null || job.days_to_deadline === undefined || job.days_to_deadline < 0 ? Infinity : job.days_to_deadline);
 const RADAR_SORTS = {
   priority: (a, b) => b.rank - a.rank,
+  deadline: (a, b) => byDeadline(a) - byDeadline(b) || b.rank - a.rank,
   newest: (a, b) => (a.age_days ?? Infinity) - (b.age_days ?? Infinity) || b.rank - a.rank,
   score: (a, b) => b.score - a.score || b.rank - a.rank,
 };
 const RADAR_SHOWS = {
   "": () => true,
+  unseen: (j) => !j.seen,
   new: (j) => j.is_new,
   promoted: (j) => j.promoted.length,
   clean: (j) => !j.reposts && !j.redates,
@@ -213,23 +293,39 @@ function renderRadar() {
     && RADAR_SHOWS[$("radar-show").value](j))
     .sort(RADAR_SORTS[$("radar-sort").value]);
   const shown = rows.slice(0, 300);
-  $("radar-count").textContent = rows.length > shown.length ? `Showing ${shown.length} of ${rows.length}` : `${rows.length} postings`;
+  const ids = shown.map((j) => j.id);
+  const unseen = state.jobs.filter((j) => j.status === "new" && !j.seen).length;
+  const count = rows.length > shown.length ? `Showing ${shown.length} of ${rows.length}` : `${rows.length} postings`;
+  $("radar-count").textContent = unseen ? `${count}. ${unseen} not looked at yet.` : count;
+  // Tailor and Pass act straight from the row, so a quick no never needs the panel.
+  const quick = (j, label, action, cls) => h("button", { class: cls, type: "button",
+    onclick: (e) => { e.stopPropagation(); triage(j, action, false); } }, label);
   fill($("radar"),
     h("thead", {}, h("tr", {},
       h("th", { class: "num", title: "Score plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost" }, "Priority"),
       h("th", { class: "num", title: "Filter score, out of 100" }, "Score"),
-      ["Company", "Title", "Location", "Track", "Pay", "Posted", "Signals"].map((c) => h("th", {}, c)))),
-    h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
+      ["Company", "Title", "Location", "Track", "Pay", "Posted", "Signals"].map((c) => h("th", {}, c)),
+      h("th", {}, h("span", { class: "visually-hidden" }, "Actions")))),
+    h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, class: j.seen ? "" : "unseen", onclick: () => openJob(j.id, ids) },
       h("td", { class: "num" }, j.rank),
       h("td", { class: "num muted" }, j.score),
       h("td", {}, j.company),
-      h("td", {}, h("button", { class: "linkish", type: "button" }, j.title)),
-      h("td", {}, j.location || "Not stated"),
+      h("td", {}, h("button", { class: "linkish", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title)),
+      h("td", {}, h("span", { class: "place", title: j.location || "" }, shortPlace(j.location))),
       h("td", {}, j.track),
       h("td", {}, j.comp),
       h("td", { class: "nowrap", title: shortDate(j.first_posted_at || j.posted_at) }, daysAgo(j.age_days) || "Unknown"),
-      h("td", {}, h("span", { class: "signals" }, freshnessPills(j)))))
-      : h("tr", {}, h("td", { colspan: 9, class: "empty" }, "No prospects match."))));
+      h("td", {}, h("span", { class: "signals" }, urgentPills(j), freshnessPills(j))),
+      h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small"))))
+      : h("tr", {}, h("td", { colspan: 10, class: "empty" }, "No prospects match."))));
+}
+
+// A posting can list dozens of places. Show the first few and keep the rest in the tooltip.
+function shortPlace(location) {
+  if (!location) return "Not stated";
+  const places = [...new Set(location.split(/\s*[|;]\s*/).filter(Boolean))];
+  if (places.length <= 3) return places.join(" | ");
+  return `${places.slice(0, 3).join(" | ")} and ${places.length - 3} more`;
 }
 
 function renderArchive() {
@@ -242,7 +338,7 @@ function renderArchive() {
       h("td", {}, label[j.status]), h("td", {}, j.company),
       h("td", {}, h("button", { class: "linkish", type: "button" }, j.title)),
       h("td", {}, j.applied_at ? shortDate(j.applied_at) : "No"), h("td", {}, j.fit_reason || "")))
-      : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "Nothing in the tailings yet."))));
+      : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "Nothing closed yet."))));
 }
 
 function renderSources() {
@@ -252,10 +348,10 @@ function renderSources() {
   const rows = [...state.sources].sort((a, b) => (b.last_error ? 1 : 0) - (a.last_error ? 1 : 0) || (a.company || "").localeCompare(b.company || ""));
   const failing = rows.filter((r) => r.last_error).length;
   $("source-summary").textContent = rows.length
-    ? `${rows.length - failing} of ${rows.length} veins working. A failing vein is reported here rather than quietly returning nothing.`
-    : "No pan has run yet.";
+    ? `${rows.length - failing} of ${rows.length} sources working. A failing source is reported here rather than quietly returning nothing.`
+    : "The boards haven't been checked yet.";
   fill($("sources"),
-    h("thead", {}, h("tr", {}, ["State", "Company", "Vein", "Postings", "Last good read"].map((c) => h("th", {}, c)))),
+    h("thead", {}, h("tr", {}, ["State", "Company", "Source", "Postings", "Last good read"].map((c) => h("th", {}, c)))),
     h("tbody", {}, rows.map((r) => h("tr", {},
       h("td", {}, h("span", { class: `pill ${r.last_error ? "bad" : "good"}` }, r.last_error ? "Failing" : "Working")),
       h("td", {}, r.company),
@@ -677,7 +773,7 @@ async function loadFacts() {
 // ---- Runs you start yourself ----
 
 const RUNS = {
-  sweep: { button: "run-sweep", idle: "Pan now", busy: "Panning…", name: "Pan" },
+  sweep: { button: "run-sweep", idle: "Check boards now", busy: "Checking boards…", name: "Board check" },
   claude: { button: "run-claude", idle: "Run Claude now", busy: "Claude is working…", name: "Claude run" },
   // Its button sits in the Being tailored column, so renderBoard draws it and renderRuns only reports on it.
   tailor: { button: "run-tailor", idle: "Tailor these now", busy: "Tailoring…", name: "Tailoring batch" },
@@ -759,6 +855,15 @@ async function act(id, body) {
   await openJob(id);
 }
 
+async function dismissAlert(id) {
+  try {
+    await api(`/api/alert/${id}/dismiss`, {});
+    await refresh();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
 // A button that fails says so in the panel. Otherwise a refused or timed-out action looks like nothing happened.
 async function tryAct(id, body, what = "That didn't go through") {
   try {
@@ -768,6 +873,48 @@ async function tryAct(id, body, what = "That didn't go through") {
     $("refresh-error").scrollIntoView({ block: "nearest" });
   }
 }
+
+const autofilling = (job) => Boolean(job.autofill && job.autofill.state === "running");
+
+// Types the fill sheet into the Workday form in a browser window of its own. It stops before Submit, which stays yours.
+async function startAutofill(job) {
+  const question = "Fill this job's Workday form?\n\nA browser window opens on the posting. Sign in there if it asks, click Apply, then Apply Manually, and watch it type each page. It stops before the voluntary disclosures and never submits: you answer what it lists, read the review page and click Submit yourself.";
+  if (!window.confirm(question)) return;
+  try {
+    await act(job.id, { action: "autofill" });
+  } catch (err) {
+    fill($("refresh-error"), h("div", { class: "callout bad" }, h("strong", {}, "Couldn't start filling the form"), h("p", {}, err.message)));
+  }
+}
+
+function autofillButton(job) {
+  if (!job.can_autofill) return null;
+  return h("button", { class: "btn", type: "button", disabled: autofilling(job), onclick: () => startAutofill(job) },
+    autofilling(job) ? "Filling the Workday form…" : "Fill Workday form");
+}
+
+function autofillBlock(job) {
+  const result = job.autofill;
+  if (!result) return null;
+  const lines = (result.detail || "").split("\n").filter(Boolean);
+  const log = job.autofill_log ? h("p", {}, h("a", { href: fileHref(job.autofill_log), target: "_blank", rel: "noopener" }, "The run's log")) : null;
+  if (result.state === "running") {
+    return h("div", { class: "callout" }, h("strong", {}, "Filling the Workday form"),
+      h("p", {}, "A Chromium window opened on the posting, probably behind this one: look for it in the taskbar. Sign in there if asked, click Apply, then Apply Manually. It waits up to 15 minutes for the form. When it stops, finish the form there: answer what it lists, read the review page and click Submit yourself."));
+  }
+  if (result.state === "failed") {
+    return h("div", { class: "callout bad" }, h("strong", {}, `The last fill failed, ${ago(result.at)}`), lines.map((line) => h("p", {}, line)), log);
+  }
+  return h("div", { class: "callout" }, h("strong", {}, `Workday form filled ${ago(result.at)}`),
+    h("p", {}, lines[0] || ""), lines.length > 1 ? h("ul", {}, lines.slice(1).map((line) => h("li", {}, line))) : null,
+    h("p", { class: "muted" }, "The browser window stays open for you to finish and submit. Nothing here submits."), log);
+}
+
+// The Workday paste sheet merged with this job's tailored role text, for you to fill the form from. Nothing submits.
+const fillButton = (job) => (job.can_fill
+  ? h("button", { class: "btn", type: "button", title: "Writes fill-sheet.md in the job's folder: the Workday paste sheet with this resume's role text",
+    onclick: () => tryAct(job.id, { action: "fill_sheet" }, "Couldn't write the fill sheet") }, job.fill_sheet ? "Remake fill sheet" : "Make fill sheet")
+  : null);
 
 const recheckButton = (job) => (job.can_recheck
   ? h("div", { class: "row" }, h("button", { class: "btn", type: "button",
@@ -813,14 +960,18 @@ function actionButtons(job, noteEl) {
   }, label);
   const status = (s) => ({ action: "status", status: s });
   const heard = (kind) => ({ action: "heard_back", kind });
+  // Tailor and Pass move on to the next job in the list you opened this from, since that's what you'd click next anyway.
+  const triageButton = (label, action, cls = "btn", key = "") => h("button", {
+    class: cls, type: "button", title: key ? `Shortcut: ${key}` : null, onclick: () => triage(job, action, true, note()),
+  }, label);
   switch (job.status) {
     case "new":
-      return [button("Tailor a resume next", { action: "tailor_next" }, "btn primary"), button("Pass", status("passed"))];
+      return [triageButton("Tailor a resume next", "tailor_next", "btn primary", "T"), triageButton("Pass", "pass", "btn", "P")];
     case "shortlisted":
     case "needs_fix":
-      return [button("Tailor this one first", { action: "tailor_next" }, "btn primary"), button("Pass", status("passed"))];
+      return [triageButton("Tailor this one first", "tailor_next", "btn primary", "T"), triageButton("Pass", "pass", "btn", "P")];
     case "ready":
-      return [button("I applied", status("applied"), "btn primary"), button("Pass", status("passed"))];
+      return [h("button", { class: "btn primary", type: "button", onclick: () => confirmApplied(job, note()) }, "I applied"), triageButton("Pass", "pass")];
     case "applied":
       return [button("Got a reply", heard("reply"), "btn primary"), button("Interview", heard("interview")),
         button("Rejected", heard("rejected")), button("Ghosted", status("ghosted")), button("Withdraw", status("withdrawn"))];
@@ -832,8 +983,136 @@ function actionButtons(job, noteEl) {
     case "offer":
       return [button("Withdraw or decline", status("withdrawn"))];
     default:
-      return [button("Reopen", { action: "reopen" }, "btn primary")];
+      return [job.can_unpass ? button("Undo pass", { action: "unpass" }, "btn primary") : button("Reopen", { action: "reopen" }, "btn primary")];
   }
+}
+
+// Applying freezes the folder as the record of what was sent, so it asks first, and says so plainly when the check no longer covers the files.
+function confirmApplied(job, note) {
+  const changed = job.changed_since_check || [];
+  const question = changed.length
+    ? `The fact check doesn't cover what's in the folder now: ${changed.join(", ")} changed after it passed.\n\nUse Check again first if you can. Record that you applied to ${job.company} anyway?`
+    : `Record that you applied to ${job.company} today?\n\nThis keeps a read-only copy of the documents as what was sent, freezes the folder and sets a follow-up reminder.`;
+  if (window.confirm(question)) tryAct(job.id, { action: "status", status: "applied", note });
+}
+
+// ---- Triage: pass or tailor, then on to the next ----
+
+let nav = [];
+let toastTimer = null;
+
+function toast(text, undo) {
+  const box = $("toast");
+  fill(box, h("span", {}, text), undo ? h("button", { class: "btn small", type: "button", onclick: async () => {
+    box.hidden = true;
+    try {
+      await undo();
+    } catch (err) {
+      runError = err.message;
+    }
+    await refresh();
+  } }, "Undo") : null);
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, 10000);
+}
+
+function nextInList(id) {
+  const at = nav.indexOf(id);
+  return at < 0 ? null : nav[at + 1] ?? nav[at - 1] ?? null;
+}
+
+async function triage(job, action, fromPanel, note = "") {
+  const body = action === "pass" ? { action: "status", status: "passed", note } : { action: "tailor_next", note };
+  const next = fromPanel ? nextInList(job.id) : null;
+  try {
+    await api(`/api/job/${job.id}/action`, body);
+  } catch (err) {
+    toast(`${job.company}: ${err.message}`);
+    return;
+  }
+  if (action === "pass") {
+    toast(`Passed on ${job.company}: ${job.title}`, () => api(`/api/job/${job.id}/action`, { action: "unpass" }));
+  } else {
+    toast(`${job.company}: ${job.title} is queued for tailoring.`);
+  }
+  nav = nav.filter((id) => id !== job.id);
+  await refresh();
+  if (!fromPanel) return;
+  if (next) await openJob(next);
+  else closeDrawer();
+}
+
+// What could stop this application, gathered where you can't miss it: the deadline, the notes' warnings and what you've already sent there.
+function beforeApplyBlock(job) {
+  if (!NOT_SENT.includes(job.status)) return null;
+  const lines = [];
+  const days = job.days_to_deadline;
+  if (days !== null && days !== undefined) {
+    const on = dayName(job.deadline);
+    lines.push(days < 0 ? `The posting's stated deadline, ${on}, has passed. Check it's still up before you spend time on it.`
+      : days === 0 ? `Apply today. The posting gives ${on} as its deadline.`
+        : `Apply by ${on}${days === 1 ? ", tomorrow" : `, in ${days} days`}.`);
+  }
+  const same = job.same_title_applied;
+  if (same) lines.push(`You applied for ${same.title} here on ${shortDate(same.applied_at)}. This may be another listing of the same job.`);
+  if (job.applied_here >= job.company_limit) lines.push(`You've sent ${job.company} ${job.applied_here} applications already, and your limit is ${job.company_limit}.`);
+  const blockers = job.blockers || [];
+  if (!lines.length && !blockers.length) return null;
+  const urgent = (days !== null && days !== undefined && days >= 0 && days <= 2) || blockers.length || same;
+  return h("div", { class: `callout${urgent ? " bad" : ""}` },
+    h("strong", {}, "Before you apply"),
+    h("ul", {}, lines.map((line) => h("li", {}, line)), blockers.map((line) => h("li", {}, line))),
+    blockers.length ? h("p", { class: "muted" }, "From this job's notes. The full reasoning is under Fit and interview notes.") : null);
+}
+
+const fileLabel = (file) => file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " ");
+const fileLink = (file, label = fileLabel(file), cls = "btn") => h("a", { class: cls, href: fileHref(file), target: "_blank", rel: "noopener" }, label);
+// Workday mangles a PDF's line breaks, so it gets the Word file. Everywhere else the PDF looks the same for every reader.
+const uploadKind = (job) => (/workday/i.test(job.source_key || "") || /myworkdayjobs\.com/i.test(job.url || "") ? ".docx" : ".pdf");
+
+// The posting and the one file of each kind to upload, with every other file a click away.
+function applyRow(job, href) {
+  const docs = job.files.filter((f) => /\.(pdf|docx|txt)$/.test(f));
+  const kind = uploadKind(job);
+  const pick = (name) => docs.find((f) => f.split("/").pop().includes(name) && f.endsWith(kind));
+  const resume = pick("Resume");
+  const letter = pick("Cover_Letter");
+  const others = [...docs.filter((f) => f !== resume && f !== letter),
+    ...[job.prep_file, job.fill_sheet].filter(Boolean)];
+  const otherLabel = (file) => (file === job.prep_file ? "Interview prep brief" : file === job.fill_sheet ? "Fill sheet" : fileLabel(file));
+  return h("div", { class: "stack" },
+    h("div", { class: "row" },
+      href ? h("a", { class: `btn${job.status === "ready" ? " primary" : ""}`, href, target: "_blank", rel: "noopener noreferrer" }, "Open posting") : null,
+      resume ? fileLink(resume, `Resume (${kind})`) : null,
+      letter ? fileLink(letter, `Cover letter (${kind})`) : null,
+      typeof autofillButton === "function" ? autofillButton(job) : null),
+    others.length ? h("details", { class: "more-files" }, h("summary", {}, `All files (${others.length + [resume, letter].filter(Boolean).length})`),
+      h("div", { class: "row" }, others.map((file) => fileLink(file, otherLabel(file))))) : null);
+}
+
+// The tools that rewrite or prepare, which cost a Claude run or change files, kept apart from the path to sending.
+function toolsRow(job) {
+  const tools = [refreshButton(job), prepButton(job), typeof fillButton === "function" ? fillButton(job) : null].filter(Boolean);
+  return tools.length ? h("div", {}, h("h3", {}, "Rewrite or prepare"), h("div", { class: "row" }, tools)) : null;
+}
+
+// A checklist you tick as you go. It isn't saved: it's there so nothing on it is skipped in a hurry.
+function beforeSendBlock(job) {
+  if (job.status !== "ready") return null;
+  const items = ["Read it through: you'll be asked about every line.", ...state.before_send];
+  return h("div", { class: "callout checklist" }, h("strong", {}, "Before you send"),
+    h("ul", {}, items.map((item) => h("li", {}, h("label", {}, h("input", { type: "checkbox" }), " ", item)))));
+}
+
+function navBar(id) {
+  const at = nav.indexOf(id);
+  if (at < 0 || nav.length < 2) return null;
+  const go = (to) => (to === undefined ? null : () => openJob(to));
+  return h("div", { class: "row nav" },
+    h("button", { class: "btn small", type: "button", disabled: at === 0, title: "Shortcut: K", onclick: go(nav[at - 1]) }, "‹ Previous"),
+    h("span", { class: "muted" }, `${at + 1} of ${nav.length}`),
+    h("button", { class: "btn small", type: "button", disabled: at === nav.length - 1, title: "Shortcut: J", onclick: go(nav[at + 1]) }, "Next ›"));
 }
 
 // The sender and subject come from whoever sent the mail, so they stay plain text.
@@ -958,13 +1237,18 @@ async function watchRefresh(id) {
   refreshWatch = setTimeout(() => watchRefresh(id), 5000);
 }
 
-async function openJob(id) {
+// `list` is the order of the list it was opened from, for Previous, Next and moving on after a pass.
+async function openJob(id, list) {
   let job;
   try {
     job = await api(`/api/job/${id}`);
   } catch (err) {
     return;
   }
+  if (list) nav = list;
+  else if (!nav.includes(id)) nav = [];
+  if (job.status === "new" && !job.seen && !state.demo) markSeen(id);
+  const wasOpen = !$("drawer").hidden;
   openJobId = id;
   clearTimeout(refreshWatch);
   if (working(job)) refreshWatch = setTimeout(() => watchRefresh(id), 5000);
@@ -976,7 +1260,6 @@ async function openJob(id) {
   const nextDate = h("input", { type: "date", "aria-label": "Next step date" });
   nextDate.value = job.next_action_date || "";
   const href = safeHref(job.url);
-  const pdfs = job.files.filter((f) => f.endsWith(".pdf") || f.endsWith(".docx") || f.endsWith(".txt"));
 
   const facts = [["Status", job.status.replace("_", " ")], ["Location", job.location || "Not stated"], ["Pay", job.comp],
     ["Track", job.track], ["Fit", job.fit ? `${capitalized(job.fit)}: ${job.fit_reason}` : ""], ["Found", shortDate(job.first_seen)],
@@ -992,30 +1275,27 @@ async function openJob(id) {
     h("div", { class: "drawer-head" },
       h("div", {}, h("h2", {}, job.title), h("p", { class: "muted" }, job.company)),
       h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Close")),
-    h("div", { class: "row" },
-      href ? h("a", { class: "btn", href, target: "_blank", rel: "noopener noreferrer" }, "Open posting") : null,
-      pdfs.map((file) => h("a", { class: "btn", href: fileHref(file), target: "_blank", rel: "noopener" }, file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " "))),
-      job.prep_file ? h("a", { class: "btn", href: fileHref(job.prep_file), target: "_blank", rel: "noopener" }, "Interview prep brief") : null,
-      refreshButton(job),
-      prepButton(job),
-    ),
-    h("div", { id: "refresh-error" }),
-    refreshBlock(job),
-    prepBlock(job),
+    navBar(id),
+    // In the order you apply: what could stop you, the posting and the files to upload, whether the check still holds, then the buttons.
+    beforeApplyBlock(job),
     job.posting_closed_at ? h("div", { class: "callout bad" }, `This posting came down around ${shortDate(job.posting_closed_at)}.`) : null,
     job.ghost_risk ? h("div", { class: "callout bad" }, h("strong", {}, "Possible ghost job"),
       h("p", {}, `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof: some companies keep real openings up all year. Consider asking a recruiter whether it's actively being filled.`)) : null,
-    job.may_be_repost ? h("div", { class: "callout" }, "This Workday link ends in -1 or similar, which often means the requisition has more than one posting. It may have been posted before. This is only a hint, and it doesn't affect priority.") : null,
-    freshnessPills(job).length ? h("div", { class: "signals" }, freshnessPills(job)) : null,
-    job.status === "ready" ? h("div", { class: "callout" },
-      h("strong", {}, "Before you send"),
-      h("ul", {}, ["Read it through: you'll be asked about every line.", ...state.before_send].map((item) => h("li", {}, item)))) : null,
+    applyRow(job, href),
+    h("div", { id: "refresh-error" }),
+    autofillBlock(job),
     replyBlock(job),
     frozenBlock(job),
     changedBlock(job),
     stuckBlock(job),
-    checkBlock(job),
+    beforeSendBlock(job),
     h("div", { class: "stack" }, noteEl, h("div", { class: "row" }, actionButtons(job, noteEl))),
+    checkBlock(job),
+    toolsRow(job),
+    refreshBlock(job),
+    prepBlock(job),
+    job.may_be_repost ? h("div", { class: "callout" }, "This Workday link ends in -1 or similar, which often means the requisition has more than one posting. It may have been posted before. This is only a hint, and it doesn't affect priority.") : null,
+    freshnessPills(job).length ? h("div", { class: "signals" }, freshnessPills(job)) : null,
     h("dl", { class: "facts" }, facts.flatMap(([key, value]) => [h("dt", {}, key), h("dd", {}, value)])),
     (job.flags.length ? h("div", { class: "callout" }, `Flagged: ${job.flags.join(", ")}`) : null),
     h("div", {}, h("h3", {}, "Next step"), h("div", { class: "stack" }, nextText,
@@ -1032,6 +1312,38 @@ async function openJob(id) {
   );
   $("drawer").hidden = false;
   $("scrim").hidden = false;
+  $("drawer").scrollTop = 0;
+  // Focus goes into the panel so the keyboard shortcuts and Tab start there, not on the page behind it.
+  if (!wasOpen || !$("drawer").contains(document.activeElement)) $("drawer").focus();
+}
+
+// The first time you open a prospect. It's only a marker for the Prospects tab, so a failure is ignored.
+function markSeen(id) {
+  api(`/api/job/${id}/action`, { action: "seen" }).catch(() => {});
+  const job = state.jobs.find((j) => j.id === id);
+  if (job) {
+    job.seen = true;
+    renderRadar();
+  }
+}
+
+// J and K step through the list, T tailors and P passes, as long as you aren't typing in a box.
+function drawerKeys(e) {
+  if (!openJobId || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  const key = e.key.toLowerCase();
+  const at = nav.indexOf(openJobId);
+  if ((key === "j" || key === "k") && at >= 0) {
+    const to = nav[at + (key === "j" ? 1 : -1)];
+    if (to !== undefined) openJob(to);
+    e.preventDefault();
+    return;
+  }
+  if (key !== "p" && key !== "t") return;
+  const job = state.jobs.find((j) => j.id === openJobId);
+  // Only before anything is written: a ready draft is passed on with the button, never a stray key.
+  if (!job || !["new", "shortlisted", "needs_fix"].includes(job.status)) return;
+  e.preventDefault();
+  triage(job, key === "p" ? "pass" : "tailor_next", true);
 }
 
 function closeDrawer() {
@@ -1051,7 +1363,10 @@ document.querySelectorAll(".tabs button").forEach((tab) => tab.addEventListener(
 window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen) e.preventDefault(); });
 ["radar-search", "radar-track", "radar-place", "radar-show", "radar-sort"].forEach((id) => $(id).addEventListener("input", renderRadar));
 $("scrim").addEventListener("click", closeDrawer);
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openJobId) closeDrawer(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && openJobId) closeDrawer();
+  else drawerKeys(e);
+});
 
 $("run-sweep").addEventListener("click", () => startRun("sweep"));
 $("run-claude").addEventListener("click", () => startRun("claude"));

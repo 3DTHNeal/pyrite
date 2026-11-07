@@ -348,15 +348,15 @@ def record_matches(conn, jobs: list, messages: list[Message], cfg: dict) -> list
     return found
 
 
-def _record_status(conn, error: str = "", count: int = 0) -> None:
+def _record_status(conn, error: str = "", count: int = 0, source_key: str = SOURCE_KEY, company: str = "Email replies") -> None:
     """Reported beside the job boards: a dead login must not look like a quiet inbox."""
     ts = now()
     conn.execute(
         """INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count)
-           VALUES (?, 'Email replies', ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (source_key) DO UPDATE SET last_run = excluded.last_run, last_error = excluded.last_error,
                last_count = excluded.last_count, last_ok = COALESCE(excluded.last_ok, last_ok)""",
-        (SOURCE_KEY, ts, None if error else ts, error[:300], count),
+        (source_key, company, ts, None if error else ts, error[:300], count),
     )
 
 
