@@ -2081,6 +2081,16 @@ class Security(unittest.TestCase):
             with self.subTest(path):
                 self.assertEqual(self.call(path)[0], 404)
 
+    def test_files_are_served_however_the_workspace_path_was_spelled(self):
+        # Windows can name the same folder by a short name such as RUNNER~1, and resolving a path expands it.
+        # A ".." does the same on any system: the workspace is the same folder, written differently.
+        notes = "applications/2026-11-acme-principal-robotics-software-engineer/notes.md"
+        spelled_differently = store.ROOT / "applications" / ".."
+        with mock.patch.object(server, "ROOT", spelled_differently):
+            self.assertEqual(server.resolve_file(notes), (store.ROOT / notes).resolve())
+            self.assertIsNone(server.resolve_file("profile/facts.md"))
+            self.assertIsNone(server.resolve_file("applications/../profile/facts.md"))
+
     def test_document_served_with_protective_headers(self):
         status, _, headers = self.call("/files/applications/2026-11-acme-principal-robotics-software-engineer/notes.md")
         self.assertEqual(status, 200)

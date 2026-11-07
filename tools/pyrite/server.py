@@ -288,9 +288,14 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
 
 
 def resolve_file(rel: str) -> Path | None:
-    """Only finished application documents can be served, never the database or anything else."""
-    target = (ROOT / rel).resolve()
-    allowed = any(target.is_relative_to(ROOT / folder) for folder in SERVABLE_ROOTS)
+    """Only finished application documents can be served, never the database or anything else.
+
+    Both sides are resolved before they're compared, since one folder can be written more than one way,
+    such as a Windows short name or a path with ".." in it.
+    """
+    root = ROOT.resolve()
+    target = (root / rel).resolve()
+    allowed = any(target.is_relative_to(root / folder) for folder in SERVABLE_ROOTS)
     if allowed and target.is_file() and target.suffix in MIME:
         return target
     return None
