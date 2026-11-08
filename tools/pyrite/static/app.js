@@ -4,6 +4,8 @@
 const $ = (id) => document.getElementById(id);
 let state = null;
 let openJobId = null;
+// The address before a job's panel took it over, as #job-56, which closing the panel puts back.
+let hashBeforeJob = "";
 let refreshWatch = null;
 // Whatever had focus before the job panel opened, so closing it puts you back where you were.
 let drawerOpener = null;
@@ -52,6 +54,37 @@ function daysAgo(days) {
 
 const pill = (tone, label, why) => h("span", { class: `pill ${tone}`, title: why }, label);
 const capitalized = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Long text cut to fit a card or a table cell, at the end of a word. The job panel always shows all of it.
+function clip(text, limit) {
+  if (!text || text.length <= limit) return text || "";
+  return `${text.slice(0, limit).replace(/\s+\S*$/, "").replace(/[,;:]$/, "")}…`;
+}
+
+// Pay as a table can show it: "$255,850.00-361,200.00 USD" reads as $256k–$361k, and "$45 - $60 an hour" as $45–$60/hr.
+// Anything it can't read is shown as the posting wrote it.
+function shortPay(comp) {
+  const text = (comp || "").trim();
+  const amount = String.raw`((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s?([kKmM](?![a-z]))?`;
+  const found = text.match(new RegExp(String.raw`(?<![A-Za-z])([A-Z]{1,2})?([$€£])\s?${amount}(?:\s*(?:-|–|—|to)\s*(?:[A-Z]{1,2})?[$€£]?\s?${amount})?`));
+  if (!found) return text;
+  const [, country, symbol, low, lowScale, high, highScale] = found;
+  // US$ is the plain dollar. CA$ and A$ stay as they are.
+  const prefix = country && country !== "US" ? country : "";
+  const scale = { k: 1e3, m: 1e6 };
+  const value = (digits, unit, other) => Number(digits.replace(/,/g, "")) * (scale[(unit || other || "").toLowerCase()] || 1);
+  // "$150-200k" means thousands at both ends.
+  const values = [value(low, lowScale, highScale), ...(high ? [value(high, highScale, lowScale)] : [])];
+  const per = /\b(hour|hourly|hr)\b|\/\s*h(?:ou)?r\b/i.test(text) ? "/hr"
+    : /\b(week|weekly|wk)\b/i.test(text) ? "/wk" : /\b(month|monthly|mo)\b/i.test(text) ? "/mo" : "";
+  const code = (text.match(/\b(USD|CAD|AUD|NZD|EUR|GBP|CHF|SGD|INR|JPY)\b/) || [])[1];
+  const brief = (n, unit) => `${n < 10 ? n.toFixed(1).replace(/\.0$/, "") : Math.round(n)}${unit}`;
+  const money = (n) => `${prefix}${symbol}${n >= 1e6 ? brief(n / 1e6, "M") : n >= 1e3 ? brief(n / 1e3, "k")
+    : Number.isInteger(n) ? n : n.toFixed(2)}`;
+  const shown = [...new Set(values.map(money))].join("–");
+  // A dollar amount in another country's dollars says which. A euro or pound sign already does.
+  return `${shown}${per}${symbol === "$" && !prefix && code && code !== "USD" ? ` ${code}` : ""}`;
+}
 
 async function api(path, body) {
   const res = await fetch(path, body ? {
@@ -149,9 +182,13 @@ function codePrompt(first, send, cancelled) {
 
 // ---- Top of page ----
 
+// Mail is checked with the boards and listed with them on the Sources tab, but a failing inbox is named apart.
+const isMail = (source) => /^inbox:/.test(source.source_key || "");
+
 function renderSweep() {
   const run = state.last_run;
-  const failed = state.sources.filter((s) => s.last_error);
+  const failed = state.sources.filter((s) => s.last_error && !isMail(s));
+  const mailFailed = state.sources.some((s) => s.last_error && isMail(s));
   const parts = [];
   if (run) {
     const reposted = run.stats.reposted ? `, ${run.stats.reposted} reposted` : "";
@@ -161,9 +198,14 @@ function renderSweep() {
   }
   const nodes = [parts.join(" ")];
   if (run && Date.now() - toDate(run.finished_at).getTime() > 30 * 3.6e6) nodes.push(" ", h("span", { class: "alert" }, "This is out of date, so check the Pyrite Sweep task."));
-  if (failed.length) nodes.push(" ", h("span", { class: "alert" }, `${failed.length} source${failed.length > 1 ? "s" : ""} failing.`));
+  if (failed.length) nodes.push(" ", h("span", { class: "alert" }, `${plural(failed.length, "source")} failing.`));
+  if (mailFailed) nodes.push(" ", h("span", { class: "alert" }, "Mail couldn't be checked: see the Sources tab."));
   fill($("sweep"), nodes);
 }
+
+// A board check you started reports the same numbers as the line above once it's done, so it isn't said twice.
+const sweepShownAbove = (task) => Boolean(task.state === "done" && state.last_run && state.last_run.finished_at
+  && toDate(state.last_run.finished_at).getTime() >= toDate(task.started_at).getTime());
 
 function renderKpis() {
   const s = state.stats;
@@ -275,6 +317,9 @@ function freshnessPills(job, hints = true) {
 }
 
 const FIT_TONE = { strong: "good", good: "good", stretch: "warn", skip: "bad" };
+// How much of a fit reason a card's tooltip and the Closed table show. The job panel shows all of it.
+const CARD_REASON = 300;
+const TABLE_REASON = 160;
 const NOT_SENT = ["new", "shortlisted", "needs_fix", "ready"];
 const dayName = (iso) => toDate(iso).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 
@@ -314,7 +359,7 @@ function cardMeta(job) {
   if (job.scam_alert) meta.push(pill("bad", "Possible scam", `Mail naming this company looked like a scam: ${job.scam_alert.reasons.join("; ")}`));
   if (job.priority && !sent) meta.push(pill("info", "Your pick", "You asked for this one next"));
   if (job.score && !sent) meta.push(h("span", { class: "score", title: "Filter score, out of 100" }, `Score ${job.score}`));
-  if (job.fit && !sent) meta.push(pill(FIT_TONE[job.fit] || "muted", job.fit === "skip" ? "Skip" : `${capitalized(job.fit)} fit`, job.fit_reason));
+  if (job.fit && !sent) meta.push(pill(FIT_TONE[job.fit] || "muted", job.fit === "skip" ? "Skip" : `${capitalized(job.fit)} fit`, clip(job.fit_reason, CARD_REASON)));
   if (job.refresh && job.refresh.state === "running") meta.push(pill("info", "Refreshing resume"));
   if (job.prep && job.prep.state === "running") meta.push(pill("info", "Writing interview prep"));
   if (job.status === "needs_fix") meta.push(pill("bad", "Failed assay"));
@@ -410,7 +455,7 @@ function renderRadar() {
   const query = $("radar-search").value.trim().toLowerCase();
   const place = $("radar-place").value;
   const rows = state.jobs.filter((j) => j.status === "new"
-    && (!query || `${j.company} ${j.title}`.toLowerCase().includes(query))
+    && (!query || `${j.company} ${j.title} ${j.location || ""}`.toLowerCase().includes(query))
     && (!trackSel.value || j.track === trackSel.value)
     && (!place || j.location_kind === place)
     && RADAR_SHOWS[$("radar-show").value](j))
@@ -418,7 +463,7 @@ function renderRadar() {
   const shown = rows.slice(0, 300);
   const ids = shown.map((j) => j.id);
   const unseen = state.jobs.filter((j) => j.status === "new" && !j.seen).length;
-  const count = rows.length > shown.length ? `Showing ${shown.length} of ${rows.length}` : `${rows.length} postings`;
+  const count = rows.length > shown.length ? `Showing ${shown.length} of ${plural(rows.length, "posting")}` : plural(rows.length, "posting");
   $("radar-count").textContent = unseen ? `${count}. ${unseen} not looked at yet.` : count;
   // Tailor and Pass act straight from the row, so a quick no never needs the panel.
   const quick = (j, label, action, cls) => h("button", { class: cls, type: "button",
@@ -441,11 +486,17 @@ function renderRadar() {
       h("td", {}, h("button", { class: "linkish", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title)),
       h("td", {}, h("span", { class: "place", title: j.location || "" }, shortPlace(j.location))),
       h("td", {}, j.track),
-      h("td", {}, j.comp),
+      payCell(j.comp),
       h("td", { class: "nowrap", title: shortDate(j.first_posted_at || j.posted_at) }, daysAgo(j.age_days) || "Unknown"),
       h("td", {}, h("span", { class: "signals" }, urgentPills(j), freshnessPills(j))),
       h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small"))))
       : h("tr", {}, h("td", { colspan: 10, class: "empty" }, "No prospects match."))));
+}
+
+// Compact where it can be read, and as the posting wrote it in the tooltip either way.
+function payCell(comp) {
+  const pay = shortPay(comp);
+  return h("td", { class: pay !== (comp || "").trim() ? "nowrap" : null, title: comp || null }, pay);
 }
 
 // A posting can list dozens of places. Show the first few and keep the rest in the tooltip.
@@ -465,7 +516,7 @@ function renderArchive() {
     h("tbody", {}, rows.length ? rows.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
       h("td", {}, label[j.status]), h("td", {}, j.company),
       h("td", {}, h("button", { class: "linkish", type: "button" }, j.title)),
-      h("td", {}, j.applied_at ? shortDate(j.applied_at) : "No"), h("td", {}, j.fit_reason || "")))
+      h("td", {}, j.applied_at ? shortDate(j.applied_at) : "No"), h("td", { title: (j.fit_reason || "").length > TABLE_REASON ? j.fit_reason : null }, clip(j.fit_reason, TABLE_REASON))))
       : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "Nothing closed yet."))));
 }
 
@@ -531,6 +582,16 @@ function savedPromote() {
   return { city_points: 10, industry_points: 10, mentions_needed: 3, cities: [], industry: [], ...JSON.parse(JSON.stringify(settings.promote || {})) };
 }
 
+// What a city or industry with no points of its own gets: the default as typed in Points, or as saved if that's empty.
+function defaultPoints(key) {
+  const input = $(`default-${key}`);
+  const typed = input ? settingsNumber(input) : null;
+  return typed !== null && Number.isFinite(typed) ? typed : savedPromote()[key];
+}
+
+// A row's own points, or the default it falls back to.
+const effectivePoints = (input, key) => settingsNumber(input) ?? defaultPoints(key);
+
 function settingsField(label, input, hint) {
   return h("label", {}, label, input, hint ? h("span", { class: "muted hint" }, hint) : null);
 }
@@ -585,6 +646,10 @@ function pointsPanel() {
   const city = numberInput(promote.city_points);
   const industry = numberInput(promote.industry_points);
   const mentions = numberInput(promote.mentions_needed);
+  city.id = "default-city_points";
+  industry.id = "default-industry_points";
+  // The cities and industries without points of their own show the default they get, so a change shows there at once.
+  [city, industry].forEach((input) => input.addEventListener("input", () => settingsRedraw.forEach((redraw) => redraw())));
   const root = h("div", { class: "panel" });
   const part = settingsPart(root, (p) => {
     p.city_points = settingsNumber(city);
@@ -634,10 +699,10 @@ function placeOptions() {
     .map(([city, entry]) => h("option", { value: city, label: `${entry.places[0]} · ${plural(entry.count, "posting")}` }));
 }
 
-// What a city name would match right now, by the same whole-word rule the ranking uses.
-function cityFeedback(name, pattern) {
+// What a city name would match right now, by the same whole-word rule the ranking uses, and the points it adds.
+function cityFeedback(name, pattern, points) {
   if (!name) return "";
-  if (pattern) return `${plural(onRadar(name), "prospect")} with your pattern, as last saved`;
+  if (pattern) return `Adds ${points} to ${plural(onRadar(name), "prospect")} with your pattern, as last saved`;
   let whole;
   try {
     whole = new RegExp(`(?<!\\w)${escapeRegExp(name)}(?!\\w)`, "i");
@@ -648,7 +713,7 @@ function cityFeedback(name, pattern) {
   const places = knownPlaces().filter(([place]) => whole.test(place)).map(([place]) => place);
   if (!places.length) return "No posting names this place yet";
   const seen = places.length > 1 ? ` Seen as ${places.slice(0, 3).join(" · ")}${places.length > 3 ? " and more" : ""}.` : "";
-  return `${plural(prospects, "prospect")}.${seen}`;
+  return `Adds ${points} to ${plural(prospects, "prospect")}.${seen}`;
 }
 
 function citiesPanel() {
@@ -660,20 +725,22 @@ function citiesPanel() {
   });
   const addRow = (city) => {
     const name = h("input", { value: city.name || "", list: "place-options", placeholder: "Start typing a city", "aria-label": "City name", autocomplete: "off" });
-    const points = numberInput(city.points, "Default");
+    const points = numberInput(city.points);
     points.setAttribute("aria-label", "Points");
     const match = h("input", { value: city.match || "", placeholder: "Optional", "aria-label": "Pattern", title: "A pattern to use when the name alone isn't enough, as when another state has a city with the same name" });
     const seen = h("td", { class: "muted city-seen" });
     const row = { collect: () => ({ name: name.value, points: settingsNumber(points), match: match.value }) };
-    row.show = () => { seen.textContent = cityFeedback(name.value.trim(), match.value.trim()); };
+    row.show = () => {
+      points.placeholder = `${defaultPoints("city_points")} (default)`;
+      seen.textContent = cityFeedback(name.value.trim(), match.value.trim(), effectivePoints(points, "city_points"));
+    };
     const line = h("tr", {}, h("td", {}, name), h("td", {}, points), h("td", {}, match), seen,
       h("td", {}, h("button", { class: "btn danger", type: "button", "aria-label": "Remove this city", onclick: () => {
         rows.delete(row);
         line.remove();
         part.touch();
       } }, "Remove")));
-    name.addEventListener("input", row.show);
-    match.addEventListener("input", row.show);
+    [name, points, match].forEach((input) => input.addEventListener("input", row.show));
     rows.add(row);
     body.append(line);
     row.show();
@@ -705,7 +772,7 @@ function skillsSummary(match) {
 function industryCard(industry, index, cards) {
   const card = { index };
   const name = h("input", { value: industry.name || "", placeholder: "For example: Robotics" });
-  const points = numberInput(industry.points, "Default");
+  const points = numberInput(industry.points);
   const terms = h("textarea", { rows: "4" });
   terms.value = (industry.terms || []).join("\n");
   const companies = h("textarea", { rows: "4" });
@@ -728,6 +795,7 @@ function industryCard(industry, index, cards) {
   const skills = h("div", {});
   const root = h("details", { class: "panel industry", open: index === null });
   card.describe = () => {
+    points.placeholder = `${defaultPoints("industry_points")} (default)`;
     const saved = card.index === null ? null : savedPromote().industry[card.index];
     const facts = saved && settings.skills[saved.name];
     fill(summary,
@@ -946,7 +1014,7 @@ function renderRuns() {
       button.textContent = busy ? run.busy : run.idle;
       button.title = state.demo ? "Not in the demo, which starts no runs." : why || button.dataset.idleTitle;
     }
-    if (!task) continue;
+    if (!task || (kind === "sweep" && sweepShownAbove(task))) continue;
     const ended = task.finished_at || task.started_at;
     if (busy) lines.push(h("span", {}, `${run.name}, started ${ago(task.started_at)}: ${task.detail}`));
     else if (task.state === "failed") lines.push(h("span", { class: "alert" }, `${run.name} failed ${ago(ended)}: ${task.detail}`));
@@ -1131,12 +1199,20 @@ function frozenBlock(job) {
   const changed = job.changed_after_sending || [];
   const links = (job.sent_files || []).map((file) => h("a", { class: "btn", href: fileHref(file), target: "_blank", rel: "noopener" },
     `Sent ${file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter|resume|cover-letter)/, "").replace(/_/g, " ")}`));
+  const known = job.acknowledged_changes || [];
+  // Got it says the folder as it is now is fine, such as one kept as a model for later applications. The warning
+  // comes back if the folder changes after that.
+  const gotIt = changed.length ? h("button", { class: "btn", type: "button",
+    title: "Stop showing this for the files as they are now. It shows again if they change.",
+    onclick: () => tryAct(job.id, { action: "acknowledge_changes" }, "Couldn't save that") }, "Got it") : null;
   return h("div", { class: changed.length ? "callout bad" : "callout" },
     h("strong", {}, changed.length ? "Changed after sending" : `Frozen since you applied on ${shortDate(job.applied_at)}`),
     h("p", {}, changed.length
       ? `${changed.join(", ")} no longer match the copy kept when you applied. The sent copies below are the record; the files in the folder are not what the company has.`
       : links.length ? "The copies below are what went out. The folder's documents aren't rebuilt or refreshed any more; a new application gets a new job."
         : "No copy of the sent documents is on record for this job, so the folder's files may not match what the company has."),
+    known.length ? h("p", { class: "muted" }, `${known.join(", ")} changed after sending, and you said that's fine. The sent copies are still the record.`) : null,
+    gotIt ? h("div", { class: "row" }, gotIt) : null,
     links.length ? h("div", { class: "row" }, links) : null);
 }
 
@@ -1445,20 +1521,26 @@ async function watchRefresh(id) {
   refreshWatch = setTimeout(() => watchRefresh(id), 5000);
 }
 
-// `list` is the order of the list it was opened from, for Previous, Next and moving on after a pass.
+// `list` is the order of the list it was opened from, for Previous, Next and moving on after a pass. Returns whether
+// the job could be opened.
 async function openJob(id, list) {
   let job;
   try {
     job = await api(`/api/job/${id}`);
   } catch (err) {
-    return;
+    return false;
   }
   if (list) nav = list;
   else if (!nav.includes(id)) nav = [];
   if (job.status === "new" && !job.seen && !state.demo) markSeen(id);
   const wasOpen = !$("drawer").hidden;
-  if (!wasOpen) drawerOpener = document.activeElement;
+  if (!wasOpen) {
+    drawerOpener = document.activeElement;
+    hashBeforeJob = tabAddress();
+  }
   openJobId = id;
+  // The address names the job while its panel is open, so it can be bookmarked or linked from a note.
+  if (location.hash !== `#job-${id}`) history.replaceState(null, "", `#job-${id}`);
   clearTimeout(refreshWatch);
   if (working(job)) refreshWatch = setTimeout(() => watchRefresh(id), 5000);
   const noteEl = h("input", { placeholder: "Add a note to this update (optional)", "aria-label": "Note for this update", style: "width:100%" });
@@ -1491,7 +1573,8 @@ async function openJob(id, list) {
 
   fill($("drawer"),
     h("div", { class: "drawer-head" },
-      h("div", {}, h("h2", {}, job.title), h("p", { class: "muted" }, job.company)),
+      h("div", {}, h("h2", {}, job.title), h("p", { class: "muted" }, job.company, " · ",
+        h("span", { class: "job-number", title: `The number pyrite commands take, as in pyrite status ${job.id}` }, `Job ${job.id}`))),
       h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Close")),
     navBar(id),
     // In the order you apply: what could stop you, the posting and the files to upload, whether the check still holds, then the buttons.
@@ -1535,6 +1618,7 @@ async function openJob(id, list) {
   $("drawer").scrollTop = 0;
   // Focus goes into the panel so the keyboard shortcuts and Tab start there, not on the page behind it.
   if (!wasOpen || !$("drawer").contains(document.activeElement)) $("drawer").focus();
+  return true;
 }
 
 // The first time you open a prospect. It's only a marker for the Prospects tab, so a failure is ignored.
@@ -1570,6 +1654,9 @@ function closeDrawer() {
   openJobId = null;
   $("drawer").hidden = true;
   $("scrim").hidden = true;
+  // Back to the tab's own address, as it was before the panel opened.
+  if (/^#job-\d+$/.test(location.hash)) history.replaceState(null, "", hashBeforeJob || location.pathname + location.search);
+  hashBeforeJob = "";
   // A pass or a refresh may have redrawn the list it came from, and then there's nothing left to return to.
   if (drawerOpener && drawerOpener.isConnected) drawerOpener.focus();
   drawerOpener = null;
@@ -1789,7 +1876,9 @@ function showTab(name, focus = false) {
   if (focus) tab.focus();
   const section = tab.dataset.tab === "profile" ? profileShow(rest.join("/")) : "";
   const hash = tab === tabs[0] ? "" : `#${tab.dataset.tab}${section ? `/${section}` : ""}`;
-  if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
+  // While a job's panel is open the address is the job's, and the tab's waits for the panel to close.
+  if (openJobId) hashBeforeJob = hash;
+  else if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
   if (tab.dataset.tab === "settings" && !dirtyParts.size) loadSettings();
   if (tab.dataset.tab === "facts" && !factsOpen) loadFacts();
   if (tab.dataset.tab === "industries") loadIndustries();
@@ -1797,6 +1886,12 @@ function showTab(name, focus = false) {
 
 // Coming back to the Profile tab returns to the section you left it on.
 const tabTarget = (tab) => (tab.dataset.tab === "profile" && profileAt ? `profile/${profileAt}` : tab.dataset.tab);
+
+// The address of the tab on show, as showTab writes it, for when a job's panel closes over it.
+function tabAddress() {
+  const tab = tabs.find((t) => t.getAttribute("aria-selected") === "true") || tabs[0];
+  return tab === tabs[0] ? "" : `#${tabTarget(tab)}`;
+}
 tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tabTarget(tab))));
 // Arrow keys, Home and End move along the tabs, as in any other tab list.
 document.querySelector(".tabs").addEventListener("keydown", (e) => {
@@ -1807,7 +1902,20 @@ document.querySelector(".tabs").addEventListener("keydown", (e) => {
   e.preventDefault();
   showTab(tabTarget(tabs[(to + tabs.length) % tabs.length]), true);
 });
-window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+// #job-56 opens job 56's panel over the tab you're on. Anything else is a tab.
+const jobInAddress = () => Number((location.hash.match(/^#job-(\d+)$/) || [])[1]) || null;
+
+async function followAddress() {
+  const id = jobInAddress();
+  if (!id) {
+    if (openJobId) closeDrawer();
+    showTab(location.hash.slice(1));
+  } else if (id !== openJobId && !await openJob(id)) {
+    showTab("");  // No such job, so the address goes back to the first tab rather than naming it.
+  }
+}
+
+window.addEventListener("hashchange", followAddress);
 window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen || drafts.size || profilePending) e.preventDefault(); });
 $("radar-search").addEventListener("input", renderRadar);
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
@@ -1854,8 +1962,10 @@ $("add-form").addEventListener("submit", async (e) => {
 });
 
 restoreRadarFilters();
-showTab(location.hash.slice(1));
-refresh();
+// A job's address opens its panel once the page has loaded what the panel needs, over the first tab.
+const startJob = jobInAddress();
+if (!startJob) showTab(location.hash.slice(1));
+refresh().then(() => (startJob ? followAddress() : null));
 // Pick up what the morning run does while the page sits open, and catch up at once when you come back to the tab.
 setInterval(() => { if (!document.hidden) refresh(); }, 60000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });

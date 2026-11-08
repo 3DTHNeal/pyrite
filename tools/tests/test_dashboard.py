@@ -65,6 +65,14 @@ class Dashboard(Base):
         self.assertEqual([o["text"] for o in state["orders"] if o["kind"] == "New listing"], ["Acme: New"])
         self.assertEqual(sorted((j["title"] for j in state["jobs"]), key=lambda t: -next(j["rank"] for j in state["jobs"] if j["title"] == t)), ["New", "Back", "Old"])
 
+    def test_a_long_fit_reason_is_kept_whole_and_shortened_on_the_to_do_list(self):
+        reason = "Strong on firmware and fleet tooling. " * 10 + "The gap: your record shows program rather than product management."
+        job = self.add(status="ready", fit="stretch", fit_reason=reason)
+        send = next(o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Send")
+        self.assertTrue(send["detail"].endswith("…"))
+        self.assertLessEqual(len(send["detail"]), server.ORDER_REASON + 1)
+        self.assertEqual(server.job_detail(self.conn, job, CFG)["fit_reason"], reason)
+
     def test_adding_a_link_already_tracked_opens_that_job_instead(self):
         # Added again, it would go to the front of the next run and be tailored a second time.
         sent = self.add(source_id="r1", title="Firmware Lead", status="applied", url="https://jobs.example.com/acme/R-100")

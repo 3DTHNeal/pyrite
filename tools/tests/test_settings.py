@@ -362,6 +362,27 @@ class OlderDatabase(unittest.TestCase):
                 self.assertEqual([tuple(r) for r in conn.execute("SELECT source_key, source_id FROM listings")], [("greenhouse:a", "1")])
                 conn.close()
 
+    def test_gains_the_sent_columns_and_marks_reasons_an_old_version_cut(self):
+        cut = ("Strong on firmware, but the posting wants a product owner, and your record shows program rather than product manage"
+               + " and more" * 40)[:300]
+        whole = ("A reason of exactly three hundred characters that ends on a full stop" + " so" * 90)[:299] + "."
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            path = Path(folder) / "old.db"
+            conn = store.connect(path)
+            for source_id, reason in (("1", cut), ("2", whole), ("3", "Short and whole.")):
+                conn.execute("""INSERT INTO jobs (source_key, source_id, company, title, first_seen, last_seen, fit_reason)
+                                VALUES ('greenhouse:a', ?, 'A', 'T', 'x', 'x', ?)""", (source_id, reason))
+            conn.execute("ALTER TABLE jobs DROP COLUMN sent_files")
+            conn.execute("ALTER TABLE jobs DROP COLUMN sent_ack")
+            conn.commit()
+            conn.close()
+            for _ in range(2):  # Marked once: the second connection finds nothing left to mark.
+                conn = store.connect(path)
+                self.assertLessEqual({"sent_files", "sent_ack"}, {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")})
+                reasons = [r[0] for r in conn.execute("SELECT fit_reason FROM jobs ORDER BY source_id")]
+                self.assertEqual(reasons, [cut + "…", whole, "Short and whole."])
+                conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

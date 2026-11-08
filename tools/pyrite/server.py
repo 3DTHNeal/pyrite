@@ -30,7 +30,6 @@ from .store import (
     ROOT,
     STATUSES,
     TAILOR_REQUESTED,
-    changed_after_sending,
     connect,
     fix_attempts,
     get_job,
@@ -40,8 +39,10 @@ from .store import (
     now,
     possible_replies,
     quiet_days_since,
+    sent_changes,
     sent_copies,
     set_status,
+    shorten,
 )
 
 STATIC = Path(__file__).parent / "static"
@@ -76,6 +77,8 @@ DEFAULT_MAX_PER_COMPANY = 3
 # How alike two titles at one company must be to count as the same job, such as a second requisition of it.
 SAME_TITLE = 0.9
 SOON = 2  # Days. A deadline this close puts a job near the top of the Sluice.
+# A to-do item shows the start of a long fit reason. The job panel has all of it.
+ORDER_REASON = 200
 
 
 def safe_url(url: str) -> str:
@@ -139,7 +142,10 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept
     job["changed_since_check"] = _changed_since_check(job, cfg)
     # Once sent, the documents are a record, not a draft: nothing rebuilds or refreshes them.
     job["frozen"] = bool(job["applied_at"])
-    job["changed_after_sending"] = changed_after_sending(row) if job["frozen"] else []
+    changed, acknowledged = sent_changes(row) if job["frozen"] else ([], False)
+    job["changed_after_sending"] = [] if acknowledged else changed
+    # Changes you've said are fine. They show again, as changed_after_sending, if the folder changes after that.
+    job["acknowledged_changes"] = changed if acknowledged else []
     job["sent_files"] = ([p.relative_to(ROOT).as_posix() for p in sent_copies(ROOT / job["app_folder"])]
                          if job["frozen"] and job["app_folder"] else [])
     # The whole row, because priority reads the description even when the page isn't sent it.
@@ -313,7 +319,8 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
                            "text": f"{job['company']}: {job['title']}",
                            "detail": joined(_deadline_text(job), "Its files changed after the assay passed it, so check it again before you send.", first)})
             continue
-        detail = joined(_deadline_text(job), first, _history_text(job)) or job["fit_reason"] or job["notes"] or "Read it through, then send."
+        detail = (joined(_deadline_text(job), first, _history_text(job)) or shorten(job["fit_reason"] or "", ORDER_REASON)
+                  or job["notes"] or "Read it through, then send.")
         orders.append({"rank": 1 if soon(job) else 2, "kind": "Send", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}", "detail": detail})
     listed = {o["job_id"] for o in orders}
@@ -498,6 +505,8 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         set_status(conn, job_id, HEARD_BACK[kind], note, follow_up)
     elif action == "dismiss_reply":
         log_event(conn, job_id, REPLY_DISMISSED, note)
+    elif action == "acknowledge_changes":
+        store.acknowledge_sent_changes(conn, job_id)
     elif action == "tailor_next":
         conn.execute("UPDATE jobs SET priority = 1 WHERE id = ?", (job_id,))
         # Also the marker that gives a draft the daily run gave up on a fresh set of tries.

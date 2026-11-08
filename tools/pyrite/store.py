@@ -233,9 +233,17 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 def _migrate(conn) -> None:
     """Bring an older database up to date. Its listing history starts from what it already knows."""
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
-    if "sent_files" not in columns:
-        conn.execute("ALTER TABLE jobs ADD COLUMN sent_files TEXT")
-        conn.commit()
+    # The sent copy's fingerprints, and the folder's as they were when you said its changes since were fine.
+    for column in ("sent_files", "sent_ack"):
+        if column not in columns:
+            try:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError as err:
+                if "duplicate column" not in str(err):
+                    raise
+                # Another process added it first.
+            conn.commit()
+    _mark_cut_reasons(conn)
     if "reposts" in columns:
         return
     conn.execute("BEGIN IMMEDIATE")
@@ -255,6 +263,25 @@ def _migrate(conn) -> None:
            WHERE source_key NOT IN ('seed', 'manual')"""
     )
     conn.commit()
+
+
+# Early versions cut a triage reason at 300 characters, often through a word and with nothing to say so.
+CUT_REASON = "length(fit_reason) = 300 AND substr(fit_reason, -1) NOT IN ('.', '!', '?', '…', ')', '\"', '''')"
+
+
+def _mark_cut_reasons(conn) -> None:
+    """End each reason those versions cut with an ellipsis, so it reads as cut rather than finished. A marked reason is
+    a character longer and never matches again, so this writes only while there's something left to mark."""
+    if conn.execute(f"SELECT 1 FROM jobs WHERE {CUT_REASON} LIMIT 1").fetchone():
+        conn.execute(f"UPDATE jobs SET fit_reason = fit_reason || '…' WHERE {CUT_REASON}")
+        conn.commit()
+
+
+def shorten(text: str, limit: int) -> str:
+    """Text cut to fit a small space, at the end of a word rather than through one, with an ellipsis to say so."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 SENT_FOLDER = "sent"
@@ -305,23 +332,54 @@ def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]
     return fingerprints
 
 
-def changed_after_sending(job) -> list[str]:
-    """Files in the folder that no longer match the sent copy. Empty when nothing was recorded."""
+def _recorded(job, column: str) -> dict:
+    return json.loads(job[column] or "{}") if column in job.keys() else {}  # noqa: SIM118  sqlite3.Row has no __contains__ for names.
+
+
+def _folder_fingerprints(job, names) -> dict[str, str | None]:
+    """The fingerprint of each named file in the job's folder as it is now, or None for one that's gone."""
     import hashlib
 
-    recorded = json.loads(job["sent_files"] or "{}") if "sent_files" in job.keys() else {}  # noqa: SIM118  sqlite3.Row has no __contains__ for names.
-    if not recorded or not job["app_folder"]:
-        return []
     folder = ROOT / job["app_folder"]
-    changed = []
-    for name, digest in recorded.items():
+    found: dict[str, str | None] = {}
+    for name in names:
         try:
-            current = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+            found[name] = hashlib.sha256((folder / name).read_bytes()).hexdigest()
         except OSError:
-            current = None
-        if current != digest:
-            changed.append(name)
-    return sorted(changed)
+            found[name] = None
+    return found
+
+
+def sent_changes(job) -> tuple[list[str], bool]:
+    """Files in the folder that no longer match the sent copy, and whether you've said that's fine for the folder as
+    it is now. A change after that shows again. Nothing changed when nothing was recorded."""
+    recorded = _recorded(job, "sent_files")
+    if not recorded or not job["app_folder"]:
+        return [], False
+    current = _folder_fingerprints(job, recorded)
+    changed = sorted(name for name, digest in recorded.items() if current[name] != digest)
+    return changed, bool(changed) and _recorded(job, "sent_ack") == current
+
+
+def changed_after_sending(job) -> list[str]:
+    """Files that no longer match the sent copy, unless you've already said the folder as it is now is fine."""
+    changed, acknowledged = sent_changes(job)
+    return [] if acknowledged else changed
+
+
+def acknowledge_sent_changes(conn, job_id: int) -> list[str]:
+    """Say the folder's changes since sending are fine as they are, so they stop being flagged until it changes again.
+    The sent copy stays the record either way. Returns the files that differ from it."""
+    job = get_job(conn, job_id)
+    changed, acknowledged = sent_changes(job)
+    if not changed:
+        raise ValueError("Every file still matches the sent copy, so there's nothing to acknowledge.")
+    if not acknowledged:
+        current = _folder_fingerprints(job, _recorded(job, "sent_files"))
+        conn.execute("UPDATE jobs SET sent_ack = ? WHERE id = ?", (json.dumps(current), job_id))
+        log_event(conn, job_id, "sent_changes_acknowledged",
+                  f"You kept the changes to {', '.join(changed)}. The copy in {SENT_FOLDER}/ is still what was sent.")
+    return changed
 
 
 def record_listing(conn, job_id: int, source_key: str, source_id: str, location: str, posted_at: str | None, ts: str) -> None:
