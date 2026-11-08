@@ -105,7 +105,7 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     return cursor.lastrowid
 
 
-def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> dict:
+def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept_at: str | None = None) -> dict:
     job = job_dict(row, include_description)
     run = cfg["run"]
     job["days_since_applied"] = quiet_days_since(job["applied_at"])
@@ -120,7 +120,7 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> di
     job["sent_files"] = ([p.relative_to(ROOT).as_posix() for p in sent_copies(ROOT / job["app_folder"])]
                          if job["frozen"] and job["app_folder"] else [])
     # The whole row, because priority reads the description even when the page isn't sent it.
-    job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today)))
+    job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today), swept_at))
     # The posting's own closing date first; the notes written from it are the fallback.
     noted, blockers = deadline.read_notes(ROOT / job["app_folder"]) if job["app_folder"] else (None, [])
     job["deadline"] = deadline.from_posting(row["description"] or "") or noted
@@ -244,6 +244,10 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
                        "detail": "; ".join(alert["reasons"]) + ". Don't reply, click or pay. Dismiss this if it's genuine."})
     for job in jobs:
         name = f"{job['company']}: {job['title']}"
+        if job["scam_signs"] and job["status"] in NOT_SENT:
+            orders.append({"rank": 0, "kind": "Possible scam", "job_id": job["id"], "text": name,
+                           "detail": "The posting itself: " + "; ".join(job["scam_signs"]).lower()
+                           + ". Real employers don't. Check it on the company's own site before you apply, or pass on it."})
         if job["possible_reply"]:
             orders.append({"rank": 0, "kind": "Possible reply", "job_id": job["id"], "text": name,
                            "detail": job["possible_reply"]["detail"]})
@@ -314,7 +318,9 @@ def _setup_orders(cfg: dict) -> list[dict]:
 def build_state(conn, cfg) -> dict:
     today = date.today().isoformat()
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
-    jobs = [_enrich(r, cfg, today) for r in rows]
+    last_run = last_full_sweep(conn)
+    swept_at = last_run["started_at"] if last_run else None
+    jobs = [_enrich(r, cfg, today, swept_at=swept_at) for r in rows]
     replies, refreshes, preps, tries = possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn)
     alerts = mail.open_alerts(conn)
     scams = _scam_alerts(alerts)
@@ -387,7 +393,7 @@ def build_state(conn, cfg) -> dict:
         "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),
-        "last_run": last_full_sweep(conn),
+        "last_run": last_run,
         "briefing": briefing,
         "before_send": cfg.get("dashboard", {}).get("before_send", []),
         "usage": claude_code.usage(conn),
@@ -397,7 +403,9 @@ def build_state(conn, cfg) -> dict:
 
 
 def job_detail(conn, job_id: int, cfg: dict) -> dict:
-    job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True)
+    last_run = last_full_sweep(conn)
+    job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True,
+                  swept_at=last_run["started_at"] if last_run else None)
     _attach_runs(job, possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn),
                  _scam_alerts(mail.open_alerts(conn)))
     _attach_history(job, _applied_by_company(conn), cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY))

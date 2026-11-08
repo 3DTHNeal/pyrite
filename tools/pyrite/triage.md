@@ -24,7 +24,7 @@ Both files are given in full below, under "The files":
 
 Check the location yourself, against `run-notes.md`. The filter can be fooled: "Remote" may mean one state or country, and a city name may belong to another state. Be selective, since a long list of weak matches costs more of the candidate's time than a short list of good ones.
 
-A listing marked as a possible ghost has been up a long time or keeps coming back. That's a reason for doubt, not a reason to skip on its own: say so in your reason when it applies.
+A listing marked as a possible ghost has been up a long time, keeps coming back, or says in its own words that it stays up for ongoing hiring. That's a reason for doubt, not a reason to skip on its own: say so in your reason when it applies. A listing with scam signs asks for money or a chat app: give it skip and say why.
 
 ## Answer
 

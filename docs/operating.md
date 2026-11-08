@@ -223,15 +223,21 @@ A pan that finds a sent application's posting gone shows **Posting down** on its
 
 Prospects, the to-do list and the daily run put the newest listings first, ahead of older ones with a similar score. **Priority** is the filter score plus points for age and for a preferred city or industry, minus a penalty for each repost. The weights are under `[freshness]` and `[promote]` in `search.toml`. Priority only changes the order, and the filter score still decides what's kept and tailored.
 
-- **New:** posted in the last 7 days and never reposted.
-- **Reposted:** the same job came back under a new listing, or the same listing came back after being taken down. The same job in another city isn't a repost. Age keeps counting from the earliest date on record, so a repost doesn't look new again.
+- **New:** posted in the last 7 days, never reposted, seen by the latest pan, and with nothing else on this list against it.
+- **Reposted:** the same job came back under a new listing, or the same listing came back after being taken down. The same job in another city isn't a repost. Age keeps counting from the earliest date on record, so a repost doesn't look new again. A board can also move a date forward without a pan seeing it happen, so a listing is never younger than the day a pan first found it.
 - **Re-dated:** a board moved a listing's posted date forward. Only Workday and Ashby are checked, since Greenhouse and Lever report the date a listing was created.
-- **Possible ghost:** up 90 days or more, reposted or re-dated twice, or reposted and up 45 days or more. It's a prompt to look closer, not proof: some companies keep real openings up all year.
+- **Possible ghost:** up 90 days or more, reposted or re-dated twice, or reposted and up 45 days or more. The posting's own words count too: "an evergreen role we keep open on an ongoing basis", or "a pipeline role". It's a prompt to look closer, not proof: some companies keep real openings up all year. A listing with no date that a pan first found 90 days ago or more counts as up that long.
+- **Not rechecked:** the latest full pan didn't see the listing. Its board failed, you took the board off your watch list, or Workday didn't answer about it in time. It may be down.
+- **Possible scam:** the posting asks you to pay a fee, to talk or interview over WhatsApp, Telegram, Signal or WeChat, or says it will send you a check. A posting that says it would never do these things is warning you about scams, so it doesn't count. Postings on a company's own board almost never do this; a posting you added yourself might. It also goes on the to-do list.
 - **May be a repost:** a Workday link ending in `-1` or similar, which often means a requisition has more than one posting. It's a hint only and costs no priority.
+
+**Only listings that look real**, under Show on Prospects, hides possible ghosts, scams and listings not rechecked.
+
+Some postings aren't openings at all, and a pan drops them as it drops a title or place you don't want: a "General Application", "Expression of Interest" or "Talent Community", or a posting that says it has no open position right now. So does a posting with a scam's tells. `pyrite rescore` drops ones already on your list that you haven't acted on. These checks were tried against about 9,000 postings from real boards, and ordinary phrases that share a word, such as "evergreen content", "building a talent pipeline" or "applications are reviewed on a rolling basis", don't count.
 
 A board's first pan sets a baseline, so repost counts stay at zero until a later pan sees something come back.
 
-Two postings count as one job only when their text nearly matches throughout, so openings that share a title and an "about us" paragraph stay separate. Workday's search returns only some of a site's postings, so each pan asks it directly about the tracked ones it left out. A posting is marked down only when Workday confirms it's gone, and one it confirms is still up isn't mistaken for a repost when the same job appears in another city.
+Two postings count as one job only when their text nearly matches throughout, so openings that share a title and an "about us" paragraph stay separate. On Workday, two postings under the same requisition id with mostly the same title are one job too, since a repost there often comes back rewritten under the old id with `-1` added. Titles are compared with short forms spelled out, so "Sr. Firmware Engr" is "Senior Firmware Engineer". Workday's search returns only some of a site's postings, so each pan asks it directly about the tracked ones it left out. A posting is marked down only when Workday confirms it's gone, and one it confirms is still up isn't mistaken for a repost when the same job appears in another city.
 
 ## Preferred cities and industries
 
