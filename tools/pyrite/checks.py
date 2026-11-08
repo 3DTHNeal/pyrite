@@ -552,9 +552,17 @@ def polish_requests(report: dict, letter: bool = True) -> list[str]:
     """
     asks = [warning for warning in report.get("warnings", [])
             if any(marker in warning for marker in POLISH_MARKERS) and (letter or not warning.startswith("Cover letter"))]
-    overlap = report.get("overlap") or {}
+    copied = reads_as_copied(report.get("overlap"))
+    if copied:
+        asks.append(f"{copied} Aim for {OVERLAP_TARGET}: keep the terms the candidate's record backs best and say the rest in plain words. "
+                    f"It uses: {', '.join(report['overlap']['covered'])}.")
+    return asks
+
+
+def reads_as_copied(overlap: dict | None) -> str:
+    """A sentence saying the resume uses too many of the posting's skill terms, or "" when it doesn't."""
+    overlap = overlap or {}
     pct, covered = overlap.get("pct"), overlap.get("covered") or []
     if pct is not None and pct > OVERLAP_MAX and len(covered) + len(overlap.get("missing") or []) >= OVERLAP_MIN_TERMS:
-        asks.append(f"The resume uses {pct}% of the posting's skill terms, which reads as copied from it. Aim for {OVERLAP_TARGET}: "
-                    f"keep the terms the candidate's record backs best and say the rest in plain words. It uses: {', '.join(covered)}.")
-    return asks
+        return f"The resume uses {pct}% of the posting's skill terms, which reads as copied from it."
+    return ""

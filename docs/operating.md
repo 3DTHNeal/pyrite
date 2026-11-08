@@ -36,14 +36,20 @@ my-job-search/
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
 
-Copy `example/profile/` to start, and replace everything in it:
+`init` makes one from the example's profile and points this folder at it:
+
+```bash
+.venv/Scripts/python.exe tools/pyrite.py init ../my-job-search --name "Your Name"
+```
+
+It leaves out the example's `seed.toml` and clears its `allowed_hosts`, and changes nothing if the folder already has a `profile/`. Then replace everything else in `profile/`:
 
 - `facts.md`, `approved-terms.txt` and `run-notes.md` with your own.
 - `resume.md` and `cover-letter.md` with your master resume and letter. The `[guard]` section of `search.toml` names them as the sources every draft is checked against, and `resume.md` as the one whose employers, titles and dates a draft must match.
-- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks and the companies to watch. Clear the example's `allowed_hosts` under `[dashboard]`, since those are names the dashboard would answer to.
-- `seed.toml` with the applications you made before Pyrite, or delete it.
+- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks and the companies to watch, and under `[guard]` your own confidential and unsupported terms and `expected_on_resume`. `allowed_hosts` under `[dashboard]` lists names the dashboard would answer to, so add only ones you use.
+- `seed.toml`, if you want it, with the applications you made before Pyrite. `pyrite seed` imports them: one with `applied_on` as applied, and one without under Being tailored, where `pyrite finish` checks it.
 
-Then point the code at your workspace. Either set `PYRITE_HOME`, or put the path on one line in a file called `.pyrite-home` in this folder, which git ignores. A Git Bash path such as `/c/Users/you/my-job-search` works too. Check it with:
+To do it by hand instead, copy `example/profile/` into a folder outside this repository and point the code at it. Either set `PYRITE_HOME`, or put the path on one line in a file called `.pyrite-home` in this folder, which git ignores. A Git Bash path such as `/c/Users/you/my-job-search` works too. Check it with:
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py where
@@ -55,7 +61,7 @@ Then ask what's left:
 .venv/Scripts/python.exe tools/pyrite.py doctor
 ```
 
-It lists every profile file that's still the example's, each source under `[guard]` that isn't in your workspace, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
+It lists every profile file that's still the example's, the example's settings left in `search.toml`, each source under `[guard]` that isn't in your workspace, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
 
 With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder`, `finish` and `serve`, then refuse to run, so nothing real ends up inside this repository. `pyrite demo` is the way to look around without a workspace.
 

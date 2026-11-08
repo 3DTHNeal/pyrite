@@ -4,6 +4,24 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ## [Unreleased]
 
+### Added
+
+- `pyrite init <folder>` makes a workspace from the example's profile, without its fictional applications or allowed hosts, and points `.pyrite-home` at it.
+- `pyrite doctor` and the dashboard's Finish setup list also name the example's settings left in `search.toml`: its local places, confidential and unsupported terms, ordinary words, the degree every resume is expected to name, preferred cities and mail domains.
+- `pyrite --help` lists where to start, and each job id argument says what it is.
+
+### Changed
+
+- `pyrite seed` refuses a `seed.toml` that's still the example's. An application it imports with no `applied_on` goes under Being tailored, where `pyrite finish` checks it, instead of Ready to send, so ready still means the assay passed it.
+- `pyrite add` says which job it added and what to run next, and a posting file it can't read stops it with a message instead of a traceback.
+- `pyrite finish` says it's building before Word's slow first export, and `finish` and `check` say in words when a resume uses so many of the posting's skill terms that it reads as copied.
+- `pyrite where` says when it has fallen back to the example.
+- The demo's Check boards now and Run Claude now buttons are disabled, since the demo starts no runs.
+
+### Fixed
+
+- On Windows, a second dashboard on a port already in use no longer starts beside the first, with requests going to either one. It stops and says the port is taken.
+
 ## [0.1.0] - 2026-11-09
 
 The first public release.

@@ -6,8 +6,10 @@ requests from other websites can neither read this data nor change it.
 import hashlib
 import json
 import re
+import socket
 import sqlite3
 import statistics
+import sys
 import tomllib
 import traceback
 from collections.abc import Sequence
@@ -689,8 +691,32 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
 
+class DashboardServer(ThreadingHTTPServer):
+    """The dashboard's server, which won't share its port.
+
+    HTTPServer turns on SO_REUSEADDR. On Windows that lets a second process listen on a port that's already taken, so a
+    second dashboard would start without complaint and requests would go to either one. Any other program on this
+    machine could do the same to answer in the dashboard's place. Windows gets an exclusive port instead, and elsewhere
+    SO_REUSEADDR only lets a restart reuse the port of one that just closed.
+    """
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def make_server(port: int) -> DashboardServer:
+    try:
+        return DashboardServer(("127.0.0.1", port), Handler)
+    except OSError as err:
+        raise SystemExit(f"Port {port} is already in use, so the dashboard didn't start ({err.strerror or err}).\n"
+                         f"If Pyrite is already running, open http://127.0.0.1:{port}. Otherwise pick another port with --port.") from None
+
+
 def serve(port: int = 8787) -> None:
     connect().close()
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = make_server(port)
     print(f"Pyrite: http://127.0.0.1:{port}", flush=True)
     server.serve_forever()
