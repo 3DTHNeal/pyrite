@@ -722,7 +722,8 @@ def _saved_posting(folder: str) -> str:
 JOB_ID = "a job's number, as the dashboard's job panel, `pyrite add` and `pyrite queue` show it"
 START_HERE = f"""new here:
   pyrite demo                   look around the fictional example
-  {INIT_EXAMPLE}  make your own workspace from it, beside this folder
+  {INIT_EXAMPLE}
+                                make your own workspace from it, beside this folder
   pyrite doctor                 list what's left to set up
 
 Until `pip install -e .` adds the pyrite command, type `python tools/pyrite.py`
@@ -851,7 +852,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it")
     p.add_argument("folder", help="where your workspace goes, outside this repository")
-    p.add_argument("--name", default="", help='your name, as it goes on your documents, in quotes: --name "Alex Rivera"')
+    p.add_argument("--name", default="", help='required: your name, as it goes on your documents, in quotes: --name "Sam Doe"')
     p.set_defaults(func=cmd_init)
     sub.add_parser("doctor", help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 

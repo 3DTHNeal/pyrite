@@ -47,10 +47,9 @@ def _facts_still_example() -> bool:
     return "profile/facts.md" in doctor.still_example(ROOT)
 
 
-def refusal(conn, kind: str) -> str | None:
-    """Why this run can't start right now, if there's a reason."""
-    if kind not in LABELS:
-        return "Unknown kind of run."
+def not_ready(kind: str) -> str | None:
+    """Why this kind of run can't start in this workspace at all, whatever else is going on. The dashboard disables
+    the run's button with this as its reason, rather than asking to spend your Claude plan and then refusing."""
     if IS_EXAMPLE:
         if kind == SWEEP:
             return "The demo doesn't read real job boards. In your own workspace, this pans them and checks your mail."
@@ -60,7 +59,17 @@ def refusal(conn, kind: str) -> str | None:
     if kind in WRITERS and _facts_still_example():
         return ("profile/facts.md is still the fictional example's, so Claude would judge and write for someone else. "
                 "Make it yours first: `pyrite doctor` lists what else is left.")
-    running = {name for name, run in latest(conn).items() if run["state"] == "running"}
+    return None
+
+
+def refusal(conn, kind: str) -> str | None:
+    """Why this run can't start right now, if there's a reason."""
+    if kind not in LABELS:
+        return "Unknown kind of run."
+    why = not_ready(kind)
+    if why:
+        return why
+    running ={name for name, run in latest(conn).items() if run["state"] == "running"}
     if kind in running or (kind == SWEEP and _scheduled_sweep_running(conn)):
         return f"A {LABELS[kind]} is already going."
     if kind in WRITERS:

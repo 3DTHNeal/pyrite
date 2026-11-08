@@ -43,6 +43,10 @@ EXAMPLE_SETTINGS = (
     (("inbox", "domains"), "[inbox.domains]", None),
 )
 CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
+# A line of the example this long is the fictional candidate's own writing, and this many of them left in a file means
+# it's still the example's, edited here and there. Shorter lines, such as a term in approved-terms.txt, could be anyone's.
+EXAMPLE_LINE_WORDS = 5
+EXAMPLE_LINES_LEFT = 3
 
 
 def _and(items: list[str]) -> str:
@@ -78,14 +82,38 @@ def _example_config() -> dict:
         return tomllib.load(handle)
 
 
+def _example_lines(text: str) -> list[str]:
+    """The lines of an example file that only the fictional candidate would write: whole sentences, not headings or
+    one-word terms, which a real person could share with the example by chance."""
+    lines = (row.strip() for row in text.splitlines())
+    return [row for row in lines if row and not row.startswith("#") and len(row.split()) >= EXAMPLE_LINE_WORDS]
+
+
+def example_lines_left(root: Path, rel: str) -> list[str]:
+    """The example's own lines still in this workspace file, in the example's order. Empty if the file is missing."""
+    mine, example = _text(root / rel), _text(EXAMPLE_ROOT / rel)
+    if mine is None or example is None:
+        return []
+    kept = {row.strip() for row in mine.splitlines()}
+    return [row for row in _example_lines(example) if row in kept]
+
+
 def still_example(root: Path) -> list[str]:
-    """The profile files that are still word for word the fictional example's."""
+    """The profile files that are still the fictional example's: word for word, or edited only here and there.
+
+    Changing one line, such as the note at the top of facts.md that says it's fictional, mustn't count as making a
+    file yours while the fictional employers and numbers are still in it. So a file counts as the example's while it
+    keeps EXAMPLE_LINES_LEFT of the example's sentences, or all of them where the example has fewer."""
     if root.resolve() == EXAMPLE_ROOT:
         return []
     same = []
     for rel in OWN_FILES:
         mine, example = _text(root / rel), _text(EXAMPLE_ROOT / rel)
-        if mine is not None and mine == example:
+        if mine is None or example is None:
+            continue
+        own_lines = _example_lines(example)
+        left = example_lines_left(root, rel)
+        if mine == example or (own_lines and len(left) >= min(EXAMPLE_LINES_LEFT, len(own_lines))):
             same.append(rel)
     return same
 
@@ -94,7 +122,8 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up."""
     if root.resolve() == EXAMPLE_ROOT:
         return [{"what": "No workspace is set, so this is the fictional example.",
-                 "fix": "Run `pyrite init ../my-job-search` to make yours beside this repository, or name another folder "
+                 "fix": "Run `pyrite init ../my-job-search --name \"Your Name\"`, with your own name, to make yours beside this "
+                        "repository, or name another folder "
                         f"outside it. {SETUP_DOCS}"}]
     if cfg is None:
         return [{"what": "profile/search.toml is missing.", "fix": f"Copy example/profile/ into your workspace to start. {SETUP_DOCS}"}]
@@ -103,9 +132,14 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     if same:
         # One finding for all of them, since the fix is the same, with the first named in full so it's easy to find.
         names = [same[0], *(Path(rel).name for rel in same[1:])]
-        todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.",
-                      "fix": "Replace each with your own, starting with facts.md. Claude writes from these files, and the "
-                             "assay checks against them."})
+        fix = "Replace each with your own, starting with facts.md. Claude writes from these files, and the assay checks against them."
+        # A file that was edited but still reads as the example's would otherwise look like a mistake, so show what's left.
+        edited = next((rel for rel in same if _text(root / rel) != _text(EXAMPLE_ROOT / rel)), None)
+        if edited:
+            fix += f' {edited} has been edited but still has the example\'s lines, such as: {example_lines_left(root, edited)[0]}'
+        # The dashboard's Facts tab edits facts.md and approved-terms.txt, so the to-do item can open it.
+        todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.", "fix": fix,
+                      **({"tab": "facts"} if {"profile/facts.md", "profile/approved-terms.txt"} & set(same) else {})})
     for rel, fix in OPTIONAL_FILES.items():
         mine = _text(root / rel)
         if mine is not None and mine == _text(EXAMPLE_ROOT / rel):
@@ -154,9 +188,10 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     contact = next((row.strip() for rel in guard.get("approved_sources", [])
                     for row in (_text(root / rel) or "").splitlines() if row.startswith("@ ")), None)
     todos = []
+    same = still_example(root)
     for rel, kind in ((guard.get("heading_source", ""), "resume"), ("profile/cover-letter.md", "letter")):
         text = _text(root / rel) if rel else None
-        if text is None or text == _text(EXAMPLE_ROOT / rel):
+        if text is None or text == _text(EXAMPLE_ROOT / rel) or rel in same:
             continue  # Missing or still the example's, and either is named already.
         lines = [row.strip() for row in text.splitlines()]
         problems = []
@@ -194,7 +229,7 @@ def unguarded_terms(facts: str, forbidden: list[str]) -> list[str]:
 
 def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
     facts = _text(root / "profile" / "facts.md")
-    if facts is None or facts == _text(EXAMPLE_ROOT / "profile" / "facts.md"):
+    if facts is None or "profile/facts.md" in still_example(root):
         return []
     terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []))
     if not terms:
