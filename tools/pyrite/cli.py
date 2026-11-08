@@ -2,7 +2,9 @@
 import argparse
 import functools
 import json
+import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -51,6 +53,10 @@ def _with_db(command: Callable[[argparse.Namespace, sqlite3.Connection], None]) 
 
 def _print_json(data) -> None:
     print(json.dumps(data, indent=2, default=str))
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
 
 
 @_with_db
@@ -241,13 +247,22 @@ def cmd_finish(args, conn):
     """Build the documents, run the fact checker, and only then mark a job ready."""
     if not get_job(conn, args.id)["app_folder"]:
         sys.exit("No application folder. Run `pyrite folder <id>` first.")
-    report = finish_job(conn, load_config(), args.id)
+    report = finish_job(conn, load_config(), args.id, say_building=True)
     _print_json(report)
+    _overlap_note(report)
     if not report["ok"]:
         sys.exit(1)
 
 
-def finish_job(conn, cfg: dict, job_id: int) -> dict:
+def _overlap_note(report: dict) -> None:
+    """Say in words what the dashboard says beside the result: a resume that uses nearly every skill term the posting
+    names reads as copied from it. The JSON on stdout stays as it is, for the runs that read it."""
+    copied = checks.reads_as_copied(report.get("overlap"))
+    if copied:
+        print(f"Note: {copied} Screeners mark that down, so aim for {checks.OVERLAP_TARGET}.", file=sys.stderr)
+
+
+def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict:
     job = get_job(conn, job_id)
     folder = ROOT / job["app_folder"]
 
@@ -264,6 +279,9 @@ def finish_job(conn, cfg: dict, job_id: int) -> dict:
         prefix, author = _file_prefix(cfg), cfg["candidate"]["name"]
         paper = cfg.get("documents", {}).get("paper", "letter")
         letter = folder / "cover-letter.md"
+        if say_building:
+            # Word's first PDF export in a process takes most of a minute, which looks like a hang with nothing said.
+            print("Building the documents. With Word, the first PDF takes most of a minute.", file=sys.stderr, flush=True)
         try:
             print(_build(folder / "resume.md", f"{prefix}_Resume_{token}", author, paper,
                          (letter, f"{prefix}_Cover_Letter_{token}") if letter.exists() else None))
@@ -374,6 +392,7 @@ def cmd_check(args):
     folder = Path(args.folder).resolve()
     report = checks.check_application(folder, cfg, args.company, args.title)
     _print_json(report)
+    _overlap_note(report)
     if not report["ok"]:
         sys.exit(1)
 
@@ -467,10 +486,18 @@ def cmd_add(args, conn):
     """Add a posting you found yourself, such as one from LinkedIn."""
     from .server import add_manual_job
 
-    description = Path(args.description_file).read_text(encoding="utf-8") if args.description_file else ""
-    job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description)
+    description = ""
+    if args.description_file:
+        try:
+            description = Path(args.description_file).read_text(encoding="utf-8")
+        except OSError as err:
+            sys.exit(f"Can't read the posting from {args.description_file}: {err.strerror or err}. Nothing was added.")
+    try:
+        job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description)
+    except ValueError as err:
+        sys.exit(str(err))
     conn.commit()
-    print(job_id)
+    print(f"Job {job_id}: {args.company.strip()}, {args.title.strip()}. `pyrite folder {job_id}` makes its application folder.")
 
 
 @_with_db
@@ -489,8 +516,51 @@ def cmd_serve(args):
 
 
 def cmd_where(args):
-    """Which workspace this command would read and write."""
+    """Which workspace this command would read and write. The path alone goes to stdout, for scripts."""
     print(ROOT)
+    if store.IS_EXAMPLE:
+        print("No workspace is set, so this is the fictional example. `pyrite init <folder>` makes yours.", file=sys.stderr)
+
+
+# Copied from the example by `pyrite init`, and changed on the way. Each line is checked to be in the example's
+# search.toml, so a change there that would leave one behind fails the tests rather than a new user's setup.
+INIT_EXAMPLE_NAME = 'name = "Alex Rivera"'
+INIT_EXAMPLE_HOSTS = "allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']"
+# Its applications are the fictional candidate's, so a new workspace starts with none.
+INIT_SKIP = ("seed.toml",)
+
+
+def cmd_init(args):
+    """Make a new workspace from the example's profile, and point this copy of Pyrite at it."""
+    folder = Path(args.folder).expanduser().resolve()
+    if folder == CODE_ROOT or CODE_ROOT in folder.parents:
+        sys.exit(f"{folder} is inside this repository. Make your workspace outside it, so nothing personal can be committed here.")
+    if (folder / "profile").exists():
+        use = "It's already the workspace in use." if folder == ROOT else f"To use it, put its path in {store.HOME_POINTER}."
+        sys.exit(f"{folder} already has a profile/ folder, so nothing was changed. {use}")
+    profile = folder / "profile"
+    shutil.copytree(store.EXAMPLE_ROOT / "profile", profile, ignore=shutil.ignore_patterns(*INIT_SKIP, "*.previous.*"))
+    config = profile / "search.toml"
+    text = config.read_text(encoding="utf-8")
+    if args.name:
+        text = text.replace(INIT_EXAMPLE_NAME, f"name = {json.dumps(args.name.strip(), ensure_ascii=False)}", 1)
+    # The dashboard has no login, so it answers to no names but localhost until you add one.
+    text = text.replace(INIT_EXAMPLE_HOSTS, "allowed_hosts = []", 1)
+    config.write_text(text, encoding="utf-8")
+    (folder / "applications").mkdir(exist_ok=True)
+    print(f"Made a workspace at {folder}, from the fictional example's profile.")
+
+    pointer = store.HOME_POINTER
+    current = os.environ.get("PYRITE_HOME", "").strip()
+    if current:
+        print(f"PYRITE_HOME is set to {current}, which wins over .pyrite-home. Set it to {folder} to use this workspace.")
+    elif pointer.exists() and pointer.read_bytes().strip():
+        print(f"{pointer} already names a workspace, so it was left alone. Put {folder} in it to use this one.")
+    else:
+        pointer.write_text(f"{folder}\n", encoding="utf-8")
+        print(f"Pointed Pyrite at it in {pointer}.")
+    print("\nNext: make the files in its profile/ yours, starting with facts.md and resume.md. `pyrite doctor` lists what's left.\n"
+          "Keep the workspace private. A private git repository of its own is a good home for it.")
 
 
 def cmd_demo(args):
@@ -513,6 +583,11 @@ def cmd_seed(args, conn):
     seed_path = ROOT / "profile" / "seed.toml"
     if not seed_path.exists():
         sys.exit(f"Nothing to import: {seed_path} doesn't exist.")
+    from . import doctor
+
+    if doctor.seed_still_example(ROOT):
+        sys.exit(f"{seed_path} is still the fictional example's, so its applications aren't yours and nothing was imported.\n"
+                 "List the applications you made before Pyrite there, or delete it.")
     with seed_path.open("rb") as handle:
         seeds = tomllib.load(handle).get("application", [])
     added, skipped = 0, []
@@ -532,14 +607,16 @@ def cmd_seed(args, conn):
             files = _collect_files(ROOT / folder)
         else:
             files = sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob(pattern)) if pattern else []
+        # Not ready: only the assay makes a draft ready, and nothing here has been through it. One with no record of being
+        # sent waits under Being tailored, where `pyrite finish` checks it, and nothing tailors it unless you ask.
         cursor = conn.execute(
             """INSERT INTO jobs (source_key, source_id, company, title, location, url, description, first_seen, last_seen,
-                   score, track, status, status_changed_at, ready_at, app_folder, files, notes)
-               VALUES ('seed', ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'ready', ?, ?, ?, ?, ?)""",
-            (source_id, company, title, location, url, _saved_posting(folder), ts, ts, ts, ts, folder, json.dumps(files), note),
+                   score, track, status, status_changed_at, app_folder, files, notes)
+               VALUES ('seed', ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'shortlisted', ?, ?, ?, ?)""",
+            (source_id, company, title, location, url, _saved_posting(folder), ts, ts, ts, folder, json.dumps(files), note),
         )
         job_id = cast(int, cursor.lastrowid)  # Set by the INSERT above.
-        log_event(conn, job_id, "ready", note)
+        log_event(conn, job_id, "shortlisted", note or "Imported from profile/seed.toml")
         if applied_on:
             # Only the day is on record, and noon UTC falls on that same calendar day across the US.
             applied_at = f"{applied_on}T12:00:00+00:00"
@@ -552,7 +629,7 @@ def cmd_seed(args, conn):
             log_event(conn, job_id, "applied", note)
         added += 1
     conn.commit()
-    print(f"Added {added} existing applications.")
+    print(f"Added {_plural(added, 'existing application')}.")
     for line in skipped:
         print(f"Skipped {line}. Fix its path in profile/seed.toml, or remove `folder`, and run this again.")
     if skipped:
@@ -588,8 +665,18 @@ def _saved_posting(folder: str) -> str:
     return checks.saved_posting(ROOT / folder) if folder else ""
 
 
+JOB_ID = "a job's number, as the dashboard's job panel, `pyrite add` and `pyrite queue` show it"
+START_HERE = """new here:
+  pyrite demo           look around the fictional example
+  pyrite init <folder>  make your own workspace from it
+  pyrite doctor         list what's left to set up
+
+docs/operating.md covers the rest."""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pyrite", description=__doc__)
+    parser = argparse.ArgumentParser(prog="pyrite", description=__doc__, epilog=START_HERE,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     # A metavar of its own, or the list of choices in the usage line would show the hidden `task` worker too.
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
@@ -611,30 +698,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_queue)
 
     p = sub.add_parser("job", help="print one posting")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.set_defaults(func=cmd_job)
 
     p = sub.add_parser("triage", help="record a fit judgment")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--fit", required=True, choices=["strong", "good", "stretch", "skip"])
     p.add_argument("--reason", required=True)
     p.set_defaults(func=cmd_triage)
 
     p = sub.add_parser("folder", help="create an application folder")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.set_defaults(func=cmd_folder)
 
     p = sub.add_parser("finish", help="build documents, run the assay, mark ready")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.set_defaults(func=cmd_finish)
 
     p = sub.add_parser("refresh", help="have Claude rewrite a draft resume, kept only if it passes the assay")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_refresh)
 
     p = sub.add_parser("prep", help="have Claude write an interview prep brief, kept only if it passes the assay")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_prep)
 
@@ -660,19 +747,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("autofill", help="experimental, off unless [workday] autofill = true: type a job's fill sheet into its "
                                         "Workday form in a browser you sign in to; stops before Submit")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--url", default="", help="the apply page, when the job's link isn't it")
     p.add_argument("--no-pause", action="store_true", help="don't wait for a look at each page before it's saved")
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_autofill)
 
     p = sub.add_parser("sent", help="keep a read-only copy of what was sent for a job you've applied to, if none exists yet")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--from", dest="source", default="", help="a subfolder of the job's folder to copy from, for applications made before this existed")
     p.set_defaults(func=cmd_sent)
 
     p = sub.add_parser("status", help="move a job to a status. Ready and needs_fix come only from `finish`")
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("status", choices=[status for status in STATUSES if status not in store.CHECKER_ONLY])
     p.add_argument("--note", default="")
     p.set_defaults(func=cmd_status)
@@ -682,7 +769,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", required=True)
     p.add_argument("--url", default="")
     p.add_argument("--location", default="")
-    p.add_argument("--description-file")
+    p.add_argument("--description-file", help="a text file holding the posting, which the assay and tailoring read")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("brief", help="save the morning briefing")
@@ -695,6 +782,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("seed", help="import applications listed in profile/seed.toml").set_defaults(func=cmd_seed)
     sub.add_parser("where", help="print which workspace is in use").set_defaults(func=cmd_where)
+
+    p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it")
+    p.add_argument("folder", help="where your workspace goes, outside this repository")
+    p.add_argument("--name", default="", help="your name, as it goes on your documents")
+    p.set_defaults(func=cmd_init)
     sub.add_parser("doctor", help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("demo", help="serve the fictional example, without touching your own data")

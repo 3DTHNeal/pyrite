@@ -259,7 +259,8 @@ function renderBoard() {
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
       col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
         id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo,
-        title: "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
+        title: state.demo ? "Not in the demo, which starts no runs."
+          : "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
         onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
       h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id, jobs.map((j) => j.id)) },
         h("span", { class: "co" }, job.company), h("span", { class: "ti" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
@@ -799,8 +800,10 @@ function renderRuns() {
     running = running || busy;
     const button = $(run.button);
     if (button) {
-      button.disabled = busy;
+      // The demo starts no runs, so its buttons say so rather than asking to spend your Claude plan and then refusing.
+      button.disabled = busy || Boolean(state.demo);
       button.textContent = busy ? run.busy : run.idle;
+      if (state.demo) button.title = "Not in the demo, which starts no runs.";
     }
     if (!task) continue;
     const ended = task.finished_at || task.started_at;
@@ -1272,7 +1275,7 @@ async function openJob(id, list) {
     ["Track", job.track], ["Fit", job.fit ? `${capitalized(job.fit)}: ${job.fit_reason}` : ""], ["Found", shortDate(job.first_seen)],
     ["Posted", job.posted_at ? shortDate(job.posted_at) : ""],
     ["First posted", job.first_posted_at && job.first_posted_at !== job.posted_at ? `${shortDate(job.first_posted_at)} (${daysAgo(job.age_days)})` : ""],
-    ["Listed for", !job.first_posted_at || job.first_posted_at === job.posted_at ? (job.age_days === null ? "" : job.age_days === 0 ? "Posted today" : `${job.age_days} days`) : ""],
+    ["Listed for", !job.first_posted_at || job.first_posted_at === job.posted_at ? (job.age_days === null ? "" : job.age_days === 0 ? "Posted today" : plural(job.age_days, "day")) : ""],
     ["Reposted", job.reposts ? `${job.reposts} time${job.reposts > 1 ? "s" : ""}${job.last_reposted_at ? `, last ${shortDate(job.last_reposted_at)}` : ""}` : ""],
     ["Re-dated", job.redates ? `${job.redates} time${job.redates > 1 ? "s" : ""}` : ""],
     ["Applied", job.applied_at ? `${shortDate(job.applied_at)} (${daysAgo(job.days_since_applied)})` : ""],

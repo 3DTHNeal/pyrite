@@ -112,7 +112,17 @@ This project runs on my real job search, and it has to be public without showing
 
 ## Running it yourself
 
-[docs/operating.md](docs/operating.md) covers creating your own workspace, scheduling, reply detection and the commands. Once you've made a workspace, `pyrite doctor` lists what's still the example's and which programs are missing. To run the tests:
+Your resumes, fact bank and database live in a workspace folder outside this repository. Make one from the example, then make its files yours:
+
+```bash
+python tools/pyrite.py init ../my-job-search --name "Your Name"
+```
+
+```bash
+python tools/pyrite.py doctor
+```
+
+`doctor` lists what's still the example's and which programs are missing, and the dashboard (`python tools/pyrite.py serve`) shows the same at the top of its to-do list until it's done. [docs/operating.md](docs/operating.md) covers the venv, the workspace's files, scheduling, reply detection and the commands. To run the tests:
 
 ```bash
 python -m unittest discover -s tools/tests

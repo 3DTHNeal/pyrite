@@ -17,6 +17,19 @@ from .store import EXAMPLE_ROOT
 # The profile files a new workspace copies from the example and must then make its own.
 OWN_FILES = ("profile/facts.md", "profile/approved-terms.txt", "profile/run-notes.md", "profile/resume.md", "profile/cover-letter.md")
 SETUP_DOCS = 'See "Your workspace" in docs/operating.md.'
+# Settings in search.toml that describe the fictional candidate rather than how Pyrite works. Left as they are, they
+# quietly shape a real search: which places count as local, which words the assay blocks or lets through, what every
+# resume is expected to name, and whose mail counts as a reply.
+EXAMPLE_SETTINGS = (
+    ("location", "local", "local under [location]"),
+    ("location", "local_exact", "local_exact under [location]"),
+    ("guard", "forbidden", "forbidden under [guard]"),
+    ("guard", "unsupported", "unsupported under [guard]"),
+    ("guard", "ordinary_words", "ordinary_words under [guard]"),
+    ("guard", "expected_on_resume", "expected_on_resume under [guard]"),
+    ("promote", "cities", "cities under [promote]"),
+    ("inbox", "domains", "[inbox.domains]"),
+)
 
 
 def _text(path: Path) -> str | None:
@@ -74,15 +87,27 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     if leftover:
         todos.append({"what": f"allowed_hosts under [dashboard] still lists the example's {', '.join(leftover)}.",
                       "fix": "Remove them. The dashboard has no login, so it should answer only to names you use."})
+    same = [label for section, key, label in EXAMPLE_SETTINGS
+            if cfg.get(section, {}).get(key) and cfg.get(section, {}).get(key) == example.get(section, {}).get(key)]
+    if same:
+        todos.append({"what": f"profile/search.toml still has the example's {', '.join(same)}.",
+                      "fix": "They describe the fictional candidate: where they live, their confidential terms, and what their resume names. "
+                             "Set them for your own search, or empty them."})
     todos += _seed_todos(root)
     return todos
+
+
+def seed_still_example(root: Path) -> bool:
+    """Whether profile/seed.toml is word for word the example's, whose applications belong to the fictional candidate."""
+    path = root / "profile" / "seed.toml"
+    return root.resolve() != EXAMPLE_ROOT and path.exists() and _text(path) == _text(EXAMPLE_ROOT / "profile" / "seed.toml")
 
 
 def _seed_todos(root: Path) -> list[dict]:
     path = root / "profile" / "seed.toml"
     if not path.exists():
         return []
-    if _text(path) == _text(EXAMPLE_ROOT / "profile" / "seed.toml"):
+    if seed_still_example(root):
         return [{"what": "profile/seed.toml is still the fictional example's.",
                  "fix": "List the applications you made before Pyrite there, or delete it. `pyrite seed` imports it."}]
     try:
@@ -113,7 +138,7 @@ def tool_checks(cfg: dict | None) -> list[dict]:
     found = []
     has_docx = importlib.util.find_spec("docx") is not None
     found.append({"ok": has_docx, "what": "python-docx, which builds the documents",
-                  "fix": "" if has_docx else "Run: pip install -r tools/requirements.txt, with this venv's Python."})
+                  "fix": "" if has_docx else f'Run: "{sys.executable}" -m pip install -r tools/requirements.txt'})
     if shutil.which("soffice"):
         found.append({"ok": True, "what": "LibreOffice, which makes the PDFs", "fix": ""})
     elif _word_installed():
