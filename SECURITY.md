@@ -6,7 +6,7 @@ Pyrite runs on your own machine and holds a job search: resumes, a fact bank, re
 
 Use [GitHub's private advisory form](https://github.com/3DTHNeal/pyrite/security/advisories/new), not a public issue. Say what you ran, what happened and what an attacker gains. Leave your own data out: the fictional workspace in `example/` (`pyrite demo`) can show almost anything.
 
-This is a personal project, so there's no bounty and no promised response time. I'll confirm I've seen a report, and credit you in the fix unless you'd rather I didn't.
+I'll reply within a week. This is a personal project, so there's no bounty, but I'll credit you in the fix unless you'd rather I didn't.
 
 Only the latest `main` is supported.
 
