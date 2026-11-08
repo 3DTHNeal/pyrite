@@ -31,10 +31,17 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - `pyrite finish` says it's building before Word's slow first export, and `finish` and `check` say in words when a resume uses so many of the posting's skill terms that it reads as copied.
 - `pyrite where` says when it has fallen back to the example.
 - The demo's Check boards now and Run Claude now buttons are disabled, since the demo starts no runs.
+- The dashboard keeps the tab you're on in the address, so a reload or a bookmark comes back to it, and the arrow keys move along the tabs. The Prospects filters and sort are remembered in the browser.
+- The browser tab's title shows how many things are on the to-do list, and the dashboard catches up as soon as you come back to its tab instead of on the next minute.
+- `/` jumps to the Prospects search. Enter in the Add a posting form adds it.
+- Closing the job panel puts focus back on the card or row that opened it.
 
 ### Fixed
 
 - On Windows, a second dashboard on a port already in use no longer starts beside the first, with requests going to either one. It stops and says the port is taken.
+- Notes and a next step typed in the job panel but not saved are no longer thrown away when another button redraws the panel, when you step to the next job or when you close it. They show "Not saved yet" until saved, and leaving the page asks first.
+- A double click or a held key can no longer send the same action twice: the job panel's buttons, the Prospects row's Tailor and Pass, and Add a posting wait for the first one to finish.
+- Escape in the Add a posting form no longer closes the job panel behind it as well.
 
 ## [0.1.0] - 2026-11-09
 

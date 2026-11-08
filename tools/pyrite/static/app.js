@@ -5,6 +5,8 @@ const $ = (id) => document.getElementById(id);
 let state = null;
 let openJobId = null;
 let refreshWatch = null;
+// Whatever had focus before the job panel opened, so closing it puts you back where you were.
+let drawerOpener = null;
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -285,10 +287,39 @@ const RADAR_SHOWS = {
   "no-ghost": (j) => !j.ghost_risk,
 };
 
+// The Prospects filters you last used, kept in this browser only. Storage can be switched off, so a failed read or write is ignored.
+const RADAR_FILTERS = ["radar-track", "radar-place", "radar-show", "radar-sort"];
+const RADAR_STORE = "pyrite.radar-filters";
+
+function restoreRadarFilters() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(RADAR_STORE) || "{}") || {};
+  } catch (err) {
+    return;
+  }
+  for (const id of RADAR_FILTERS) {
+    const value = saved[id];
+    if (typeof value !== "string") continue;
+    // The track list is built from the jobs, so it has no options until the first render, which picks this up.
+    if (id === "radar-track") $(id).dataset.saved = value;
+    else if ([...$(id).options].some((o) => o.value === value)) $(id).value = value;
+  }
+}
+
+function saveRadarFilters() {
+  try {
+    localStorage.setItem(RADAR_STORE, JSON.stringify(Object.fromEntries(RADAR_FILTERS.map((id) => [id, $(id).value]))));
+  } catch (err) {
+    // Nothing to do: the filters just won't be remembered.
+  }
+}
+
 function renderRadar() {
   const tracks = [...new Set(state.jobs.map((j) => j.track).filter(Boolean))].sort();
   const trackSel = $("radar-track");
-  const picked = trackSel.value;
+  const picked = trackSel.value || trackSel.dataset.saved || "";
+  delete trackSel.dataset.saved;
   fill(trackSel, h("option", { value: "" }, "Any track"), tracks.map((t) => h("option", { value: t }, t)));
   trackSel.value = tracks.includes(picked) ? picked : "";
 
@@ -307,7 +338,12 @@ function renderRadar() {
   $("radar-count").textContent = unseen ? `${count}. ${unseen} not looked at yet.` : count;
   // Tailor and Pass act straight from the row, so a quick no never needs the panel.
   const quick = (j, label, action, cls) => h("button", { class: cls, type: "button",
-    onclick: (e) => { e.stopPropagation(); triage(j, action, false); } }, label);
+    onclick: (e) => {
+      e.stopPropagation();
+      const button = e.currentTarget;
+      button.disabled = true;
+      triage(j, action, false).finally(() => { button.disabled = false; });
+    } }, label);
   fill($("radar"),
     h("thead", {}, h("tr", {},
       h("th", { class: "num", title: "Score plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost" }, "Priority"),
@@ -836,6 +872,8 @@ async function startRun(kind) {
 
 function render() {
   $("demo-tag").hidden = !state.demo;
+  // The to-do count shows in the browser tab, so a background tab says when something needs you.
+  document.title = state.orders.length ? `(${state.orders.length}) Pyrite` : "Pyrite";
   renderSweep();
   renderRuns();
   renderKpis();
@@ -859,10 +897,51 @@ async function refresh() {
 
 // ---- Job drawer ----
 
-async function act(id, body) {
-  await api(`/api/job/${id}/action`, body);
-  await refresh();
-  await openJob(id);
+// The panel's buttons stay disabled while a request is out, so a second click can't send it twice.
+async function holdButtons(root, work) {
+  const held = [...root.querySelectorAll("button:not(:disabled)")];
+  held.forEach((button) => { button.disabled = true; });
+  try {
+    return await work();
+  } finally {
+    held.forEach((button) => { button.disabled = false; });
+  }
+}
+
+// What you've typed into a job's panel and not saved, by job and field. Redrawing the panel, Next or Close
+// would otherwise throw it away. It lives only as long as the page.
+const drafts = new Map();
+
+function keepDraft(id, field, el, saved, status) {
+  const draft = drafts.get(id) || {};
+  el.value = field in draft ? draft[field] : saved;
+  const show = () => { if (status) status.textContent = el.value === saved ? "" : "Not saved yet"; };
+  el.addEventListener("input", () => {
+    const now = drafts.get(id) || {};
+    if (el.value === saved) delete now[field];
+    else now[field] = el.value;
+    if (Object.keys(now).length) drafts.set(id, now);
+    else drafts.delete(id);
+    show();
+  });
+  show();
+}
+
+function forgetDraft(id, fields) {
+  const draft = drafts.get(id);
+  if (!draft) return;
+  fields.forEach((field) => { delete draft[field]; });
+  if (!Object.keys(draft).length) drafts.delete(id);
+}
+
+// `saves` names the draft fields this action stores, which are dropped once it succeeds.
+async function act(id, body, saves = []) {
+  await holdButtons($("drawer"), async () => {
+    await api(`/api/job/${id}/action`, body);
+    forgetDraft(id, saves);
+    await refresh();
+    await openJob(id);
+  });
 }
 
 async function dismissAlert(id) {
@@ -875,9 +954,9 @@ async function dismissAlert(id) {
 }
 
 // A button that fails says so in the panel. Otherwise a refused or timed-out action looks like nothing happened.
-async function tryAct(id, body, what = "That didn't go through") {
+async function tryAct(id, body, what = "That didn't go through", saves = []) {
   try {
-    await act(id, body);
+    await act(id, body, saves);
   } catch (err) {
     fill($("refresh-error"), h("div", { class: "callout bad" }, h("strong", {}, what), h("p", {}, err.message)));
     $("refresh-error").scrollIntoView({ block: "nearest" });
@@ -966,7 +1045,7 @@ function stuckBlock(job) {
 function actionButtons(job, noteEl) {
   const note = () => noteEl.value.trim();
   const button = (label, body, cls = "btn") => h("button", {
-    class: cls, type: "button", onclick: () => tryAct(job.id, { ...body, note: note() }),
+    class: cls, type: "button", onclick: () => tryAct(job.id, { ...body, note: note() }, undefined, ["update"]),
   }, label);
   const status = (s) => ({ action: "status", status: s });
   const heard = (kind) => ({ action: "heard_back", kind });
@@ -1003,7 +1082,7 @@ function confirmApplied(job, note) {
   const question = changed.length
     ? `The fact check doesn't cover what's in the folder now: ${changed.join(", ")} changed after it passed.\n\nUse Check again first if you can. Record that you applied to ${job.company} anyway?`
     : `Record that you applied to ${job.company} today?\n\nThis keeps a read-only copy of the documents as what was sent, freezes the folder and sets a follow-up reminder.`;
-  if (window.confirm(question)) tryAct(job.id, { action: "status", status: "applied", note });
+  if (window.confirm(question)) tryAct(job.id, { action: "status", status: "applied", note }, undefined, ["update"]);
 }
 
 // ---- Triage: pass or tailor, then on to the next ----
@@ -1032,7 +1111,20 @@ function nextInList(id) {
   return at < 0 ? null : nav[at + 1] ?? nav[at - 1] ?? null;
 }
 
+// Jobs with a pass or tailor still on its way, so a held-down key or a double click sends it once.
+const triaging = new Set();
+
 async function triage(job, action, fromPanel, note = "") {
+  if (triaging.has(job.id)) return;
+  triaging.add(job.id);
+  try {
+    await (fromPanel ? holdButtons($("drawer"), () => triageNow(job, action, true, note)) : triageNow(job, action, false, note));
+  } finally {
+    triaging.delete(job.id);
+  }
+}
+
+async function triageNow(job, action, fromPanel, note) {
   const body = action === "pass" ? { action: "status", status: "passed", note } : { action: "tailor_next", note };
   const next = fromPanel ? nextInList(job.id) : null;
   try {
@@ -1041,6 +1133,7 @@ async function triage(job, action, fromPanel, note = "") {
     toast(`${job.company}: ${err.message}`);
     return;
   }
+  forgetDraft(job.id, ["update"]);
   if (action === "pass") {
     toast(`Passed on ${job.company}: ${job.title}`, () => api(`/api/job/${job.id}/action`, { action: "unpass" }));
   } else {
@@ -1259,19 +1352,29 @@ async function openJob(id, list) {
   else if (!nav.includes(id)) nav = [];
   if (job.status === "new" && !job.seen && !state.demo) markSeen(id);
   const wasOpen = !$("drawer").hidden;
+  if (!wasOpen) drawerOpener = document.activeElement;
   openJobId = id;
   clearTimeout(refreshWatch);
   if (working(job)) refreshWatch = setTimeout(() => watchRefresh(id), 5000);
   const noteEl = h("input", { placeholder: "Add a note to this update (optional)", "aria-label": "Note for this update", style: "width:100%" });
+  keepDraft(id, "update", noteEl, "");
+  const notesStatus = h("span", { class: "muted part-status", role: "status" });
   const notesEl = h("textarea", { rows: 3, "aria-label": "Your notes" });
-  notesEl.value = job.notes || "";
+  keepDraft(id, "notes", notesEl, job.notes || "", notesStatus);
+  const nextStatus = h("span", { class: "muted part-status", role: "status" });
   const nextText = h("input", { placeholder: "e.g. Phone screen with the hiring manager", "aria-label": "Next step" });
-  nextText.value = job.next_action || "";
+  keepDraft(id, "nextText", nextText, job.next_action || "");
   const nextDate = h("input", { type: "date", "aria-label": "Next step date" });
-  nextDate.value = job.next_action_date || "";
+  keepDraft(id, "nextDate", nextDate, job.next_action_date || "");
+  // The text and the date save together, so either one unsaved shows on the one status.
+  const nextUnsaved = () => {
+    nextStatus.textContent = nextText.value !== (job.next_action || "") || nextDate.value !== (job.next_action_date || "") ? "Not saved yet" : "";
+  };
+  [nextText, nextDate].forEach((el) => el.addEventListener("input", nextUnsaved));
+  nextUnsaved();
   const href = safeHref(job.url);
 
-  const facts = [["Status", job.status.replace("_", " ")], ["Location", job.location || "Not stated"], ["Pay", job.comp],
+  const facts = [["Status", job.status.replaceAll("_", " ")], ["Location", job.location || "Not stated"], ["Pay", job.comp],
     ["Track", job.track], ["Fit", job.fit ? `${capitalized(job.fit)}: ${job.fit_reason}` : ""], ["Found", shortDate(job.first_seen)],
     ["Posted", job.posted_at ? shortDate(job.posted_at) : ""],
     ["First posted", job.first_posted_at && job.first_posted_at !== job.posted_at ? `${shortDate(job.first_posted_at)} (${daysAgo(job.age_days)})` : ""],
@@ -1310,15 +1413,17 @@ async function openJob(id, list) {
     (job.flags.length ? h("div", { class: "callout" }, `Flagged: ${job.flags.join(", ")}`) : null),
     h("div", {}, h("h3", {}, "Next step"), h("div", { class: "stack" }, nextText,
       h("div", { class: "row" }, nextDate, h("button", { class: "btn", type: "button",
-        onclick: () => tryAct(job.id, { action: "next_action", text: nextText.value, date: nextDate.value }) }, "Save")))),
+        onclick: () => tryAct(job.id, { action: "next_action", text: nextText.value, date: nextDate.value }, undefined, ["nextText", "nextDate"]) }, "Save"),
+      nextStatus))),
     h("div", {}, h("h3", {}, "Your notes"), h("div", { class: "stack" }, notesEl, h("div", { class: "row" },
-      h("button", { class: "btn", type: "button", onclick: () => tryAct(job.id, { action: "note", notes: notesEl.value }) }, "Save notes")))),
+      h("button", { class: "btn", type: "button", onclick: () => tryAct(job.id, { action: "note", notes: notesEl.value }, undefined, ["notes"]) }, "Save notes"),
+      notesStatus))),
     job.notes_md ? h("div", {}, h("h3", {}, "Fit and interview notes"), h("div", { class: "prose" }, job.notes_md)) : null,
     job.score_reasons.length ? h("div", {}, h("h3", {}, `Why it scored ${job.score}`), h("p", { class: "muted" }, job.score_reasons.join(" · "))) : null,
     job.freshness_reasons.length ? h("div", {}, h("h3", {}, `Why its priority is ${job.rank}`), h("p", { class: "muted" }, [`Score ${job.score}`, ...job.freshness_reasons].join(" · "))) : null,
     job.description ? h("div", {}, h("h3", {}, "Posting"), h("div", { class: "prose" }, job.description)) : null,
     h("div", {}, h("h3", {}, "Timeline"), h("ul", { class: "timeline" }, job.events.map((e) => h("li", {},
-      h("time", {}, shortDate(e.ts)), e.kind.replace("_", " "), e.detail ? h("span", { class: "detail" }, e.detail) : null)))),
+      h("time", {}, shortDate(e.ts)), e.kind.replaceAll("_", " "), e.detail ? h("span", { class: "detail" }, e.detail) : null)))),
   );
   $("drawer").hidden = false;
   $("scrim").hidden = false;
@@ -1360,43 +1465,87 @@ function closeDrawer() {
   openJobId = null;
   $("drawer").hidden = true;
   $("scrim").hidden = true;
+  // A pass or a refresh may have redrawn the list it came from, and then there's nothing left to return to.
+  if (drawerOpener && drawerOpener.isConnected) drawerOpener.focus();
+  drawerOpener = null;
 }
 
 // ---- Wiring ----
 
-document.querySelectorAll(".tabs button").forEach((tab) => tab.addEventListener("click", () => {
-  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b === tab)));
+const tabs = [...document.querySelectorAll(".tabs button")];
+
+// The tab you're on is in the address, so a reload or a bookmark comes back to it.
+function showTab(name, focus = false) {
+  const tab = tabs.find((t) => t.dataset.tab === name) || tabs[0];
+  tabs.forEach((b) => {
+    b.setAttribute("aria-selected", String(b === tab));
+    b.tabIndex = b === tab ? 0 : -1;
+  });
   document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== `view-${tab.dataset.tab}`; });
+  if (focus) tab.focus();
+  const hash = tab === tabs[0] ? "" : `#${tab.dataset.tab}`;
+  if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
   if (tab.dataset.tab === "settings" && !dirtyParts.size) loadSettings();
   if (tab.dataset.tab === "facts" && !factsOpen) loadFacts();
-}));
-window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen) e.preventDefault(); });
-["radar-search", "radar-track", "radar-place", "radar-show", "radar-sort"].forEach((id) => $(id).addEventListener("input", renderRadar));
+}
+
+tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));
+// Arrow keys, Home and End move along the tabs, as in any other tab list.
+document.querySelector(".tabs").addEventListener("keydown", (e) => {
+  const at = tabs.indexOf(document.activeElement);
+  if (at < 0) return;
+  const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  showTab(tabs[(to + tabs.length) % tabs.length].dataset.tab, true);
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen || drafts.size) e.preventDefault(); });
+$("radar-search").addEventListener("input", renderRadar);
+RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
+  // A dialog on top handles its own keys, Escape included.
+  if ($("add-dialog").open) return;
   if (e.key === "Escape" && openJobId) closeDrawer();
-  else drawerKeys(e);
+  else if (e.key === "/" && !openJobId && !e.ctrlKey && !e.metaKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+    e.preventDefault();
+    showTab("radar");
+    $("radar-search").focus();
+    $("radar-search").select();
+  } else drawerKeys(e);
 });
 
 $("run-sweep").addEventListener("click", () => startRun("sweep"));
 $("run-claude").addEventListener("click", () => startRun("claude"));
 $("add-open").addEventListener("click", () => { $("add-error").textContent = ""; $("add-dialog").showModal(); });
 $("add-cancel").addEventListener("click", () => $("add-dialog").close());
-$("add-save").addEventListener("click", async () => {
+// A form, so Enter in any one-line box adds the posting, and Company and Title are asked for before anything is sent.
+$("add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
   const field = (name) => $(`add-${name}`).value;
+  const save = $("add-save");
+  if (save.disabled) return;
+  save.disabled = true;
+  $("add-error").textContent = "";
   try {
     const { id } = await api("/api/jobs", {
       company: field("company"), title: field("title"), url: field("url"), location: field("location"), description: field("description"),
     });
-    ["company", "title", "url", "location", "description"].forEach((name) => { $(`add-${name}`).value = ""; });
+    $("add-form").reset();
     $("add-dialog").close();
     await refresh();
     await openJob(id);
   } catch (err) {
     $("add-error").textContent = err.message;
+  } finally {
+    save.disabled = false;
   }
 });
 
+restoreRadarFilters();
+showTab(location.hash.slice(1));
 refresh();
-// Pick up what the morning run does while the page sits open.
+// Pick up what the morning run does while the page sits open, and catch up at once when you come back to the tab.
 setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
