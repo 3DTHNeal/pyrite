@@ -65,9 +65,18 @@ def discover(stats: dict, new_jobs: list[dict]) -> str:
 
 
 def rescore(result: dict) -> str:
-    total = result["kept"] + result["dropped"]
-    return (f"Applied your filters again to {plural(total, 'posting')} you haven't acted on. "
-            f"Kept {result['kept']:,}, dropped {result['dropped']:,}.")
+    """What `rescore` did to the prospects, naming the ones it dropped, since nothing else of them is left."""
+    held = result.get("held", 0)
+    total = result["kept"] + result["dropped"] + held
+    line = (f"Applied your filters again to {plural(total, 'prospect')}. "
+            f"Kept {result['kept']:,} with new scores, dropped {result['dropped']:,} that no longer pass")
+    if held:
+        line += f", and kept {held:,} you've acted on that no longer pass"
+    removed = result.get("removed", [])
+    lines = [line + "."] + [f"Dropped: {plain(name)}" for name in removed[:NAMED]]
+    if len(removed) > NAMED:
+        lines.append(f"And {len(removed) - NAMED:,} more.")
+    return "\n".join(lines)
 
 
 def _queue_line(job: dict) -> str:

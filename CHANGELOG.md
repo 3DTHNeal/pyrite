@@ -6,6 +6,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- **Reached out** in the job panel of a sent application logs a note to the hiring manager or a recruiter: the day, and who and what if you like. It shows in the timeline and on the card, an application one to three days old with nothing logged gets a **Reach out** to-do item, and the follow-up reminder moves to a week after the note. `pyrite outreach <id>` logs one from the command line.
+- The database records which scoring its prospects have. When an update changes how postings are scored, the next pan rescores the prospects you haven't acted on, so none keeps an old score or reason, and names any it dropped beside the sweep's result.
 - A **Profile** tab, the start of one place for the fact bank and the search settings. It lists each section with what it holds now, a **Needs you** list of what setup still needs with a button to the section that fixes it, and a **History** of every save it makes, where any file's earlier copy can be compared and put back. Sections whose editors aren't built yet say where to make the change meanwhile. The Facts and Settings tabs work as before.
 - Editors on the Profile tab for **Name and contact**, **Work history**, **Off limits** and **Skills and terms**. Each change is entered once and written everywhere it belongs: a role to the Timeline in `facts.md` and the headings of `profile/resume.md`, a blocked term to "Do not use" and the `forbidden` pattern that blocks it. Before you save, each shows what will change in every file, worked out by the same code a save uses, and Off limits has a box that shows how the assay reads any sentence. Taking anything off Off limits, or approving a term, asks for a code.
 - Profile tab editors for **Achievements**, with an achievement builder that writes one fact line and keeps where it was measured as a wording rule in `run-notes.md`, and **Master resume**, which edits the master resume and letter a block at a time and runs the fact check on them as you type, naming anything only the master says.
@@ -28,6 +30,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- `rescore` no longer drops a prospect you've acted on (a note, a next step, a pick, a fit verdict or a status of your own, such as one put back by **Undo pass**). It says how many it kept that way, and names the ones it dropped.
 - **New** needs the latest pan to have seen the listing and nothing marking it as a possible ghost.
 - A listing is never younger than the day a pan first found it, so a date a board moved forward without a pan seeing it can't make it look new.
 - Two Workday postings under the same requisition id with mostly the same title are one job, so a rewritten repost is counted as one, and titles are compared with short forms such as "Sr." and "Engr" spelled out.
@@ -56,9 +59,12 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - The browser tab's title shows how many things are on the to-do list, and the dashboard catches up as soon as you come back to its tab instead of on the next minute.
 - `/` jumps to the Prospects search. Enter in the Add a posting form adds it.
 - Closing the job panel puts focus back on the card or row that opened it.
+- Workday autofill takes the one entry that starts with, or contains, the sheet's wording when a list has none with that wording exactly, such as `Supply Chain & Logistics Management` for a field of study of `Supply Chain and Logistics`, and lists it under picks to check. Entries that only share words with it, such as `Electronic and Electrical Engineering` for `Electrical and Computer Engineering Technology`, are suggested, never picked. The entries a field left for you lists are each in quotes, so `'Business Administration, Management'` reads as one entry, not two.
 
 ### Fixed
 
+- Refresh resume and Interview prep no longer depend on Claude Code honoring an edit rule for one file, which headless runs on one Windows machine refused. Claude gets no tools, hands the document back in its closing message, and Pyrite writes it. An answer with no document in it is asked for again, then fails with the reason on the dashboard instead of looking like a run that changed nothing.
+- The pre-push hook works in a `git worktree` that has no `.venv` of its own: it uses the main checkout's venv, then `python3` or `python` if one is 3.11 or newer, and skips the Microsoft Store's placeholder. With none of those it says how to point it at a Python with `git config pyrite.python`, instead of failing on the Store's message.
 - `pyrite check` on the folder of a job with a sent copy no longer says to rebuild documents from an older drafter. It says which drafter the sent documents came from, since what was sent is the record and rebuilding would only make the folder differ from it.
 - A job number that isn't in the database, given to `pyrite job`, `status`, `sent`, `refresh`, `prep`, `triage`, `folder`, `finish`, `fill` or `autofill`, gets one line saying so and a non-zero exit, instead of a Python traceback. The line points at the dashboard, which lists every job, and at what `pyrite queue` actually shows: the ones waiting on a run.
 - Finish setup no longer takes words from an explanation under "Do not use" for secret names. It used to name your own name, a site mentioned in passing and an instruction such as "Say", and suggest forbidding them, which would have failed every draft. Asides in parentheses, quoted wording, the first word of each sentence and the words of `[candidate] name` are skipped.

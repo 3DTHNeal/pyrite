@@ -444,13 +444,16 @@ def _picked_name(option, wanted: list[str]) -> str:
 
 
 def pick_search(page, selector, wanted: list[str], report: Report, what: str, must: bool = False, keep_text: bool = False,
-                terms: list[str] | None = None) -> str:
+                terms: list[str] | None = None, closest: bool = True) -> str:
     """Type into one of Workday's search pickers and tick the entry that matches. Returns what was picked.
 
     `selector` is a CSS selector, or a locator already in hand. Each wanted name is searched for in turn, best first,
     and a name is accepted among the results once its own search has come round, so a search for "Python" can turn up
     "Python (Programming Language)" but a last-resort name is never taken while a better one is still to be searched.
     `terms` are further searches to try, such as the first words of a school's name, that must still turn up a wanted name.
+    When no search turned up a wanted name in any spelling, and exactly one entry the searches found starts with, or
+    contains, a wanted name of two words or more, that entry is taken and reported for a look (see `_containing`).
+    `closest` false skips that, for the search that picks it.
     With `must`, the nearest entry offered is taken and reported for a look. With `keep_text`, a name the list lacks
     stays typed in the box, since some tenants accept one that way, and is reported for a look. Otherwise the box
     is cleared and the field is left to the candidate.
@@ -493,25 +496,67 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
             report.filled.append(f"{what}: {near}")
             return near
     shown = [t.strip() for t in _options(page).all_inner_texts() if t.strip() and "press delete" not in t.lower()][:8]
+    found = seen or shown
+    target, matches = _containing(found, wanted) if closest else ("", [])
+    if len(matches) == 1:
+        # Searched for by its own name, so it's the one ticked even if a later search's list no longer shows it.
+        picked = pick_search(page, box, matches, Report(), what, closest=False)
+        if picked:
+            report.decisions.append(f"{what}: no entry called {wanted[0]!r}, so picked {picked!r}, "
+                                    f"the only one that starts with or contains {target!r}")
+            return picked
     if must and shown:
         _options(page).first.click()
         page.wait_for_timeout(300)
-        report.decisions.append(f"{what}: no entry called {wanted[0]!r}, picked {shown[0]!r}. Others: {', '.join(shown[1:6])}")
+        report.decisions.append(f"{what}: no entry called {wanted[0]!r}, picked {shown[0]!r}. Others: {_quoted(shown[1:6])}")
         return shown[0]
-    # Entries sharing words with the wanted names lead, so a whole A-to-Z list a tenant showed can't crowd them out,
-    # and "; " keeps a name with a comma in it, such as "Business Administration, Management", in one piece.
-    offered = f". Workday offers: {'; '.join(_closest_first(seen or shown, wanted)[:12])}" if (seen or shown) else ""
+    # The entries that start with or contain a wanted name lead, then those sharing words with one, so a whole A-to-Z
+    # list a tenant showed can't crowd them out. Each is quoted, since a name such as "Business Administration,
+    # Management" has a comma in it.
+    many = f", and {len(matches)} entries start with or contain {target!r}" if len(matches) > 1 else ""
+    ordered = matches + [name for name in _closest_first(found, wanted) if name not in matches]
+    offered = f". Workday offers: {_quoted(ordered[:12])}" if found else ""
     if not offered and said_none:
-        offered = f". Nothing came up for: {', '.join(said_none)}"
+        offered = f". Nothing came up for: {_quoted(said_none)}"
     if keep_text:
         box.fill(wanted[0])
         _close_list(page, box)
-        report.skipped.append(f"{what}: this employer's list has no {wanted[0]!r}, so it's typed as is. Check what the page did with it{offered}")
+        report.skipped.append(f"{what}: this employer's list has no {wanted[0]!r}, so it's typed as is. Check what the page did with it{many}{offered}")
     else:
-        report.skipped.append(f"{what}: no entry called {wanted[0]!r}{offered}")
+        report.skipped.append(f"{what}: no entry called {wanted[0]!r}{many}{offered}")
         box.fill("")
         _close_list(page, box)  # A search left open reads as a pick still to finish, and covers the buttons below it.
     return ""
+
+
+def _containing(names: list[str], wanted: list[str]) -> tuple[str, list[str]]:
+    """The entries among `names` that start with, or else contain, a wanted name word for word, and that name.
+
+    Compared as `_same` reads them, so case, punctuation and "&" for "and" don't matter, and a name must match whole
+    words: "Supply Chain and Logistics" starts "Supply Chain & Logistics Management", but "Java" is in no "JavaScript".
+    Wanted names are tried best first, and the first with exactly one entry wins. Failing that, the first with several
+    is returned, for the report to list. A name of one word is never tried, since "Go" starts "Go To Market Strategy".
+    Nor are entries that merely share words: "Electronic and Electrical Engineering" for "Electrical and Computer
+    Engineering Technology" is a different field, so it's only suggested, never picked.
+    """
+    entries = {name: f" {_same(name)} " for name in dict.fromkeys(names)}
+    several: tuple[str, list[str]] = ("", [])
+    for name in wanted:
+        target = _same(name)
+        if len(target.split()) < 2:
+            continue
+        starts = [entry for entry, words in entries.items() if words.startswith(f" {target} ")]
+        inside = starts or [entry for entry, words in entries.items() if f" {target} " in words]
+        if len(inside) == 1:
+            return name, inside
+        if inside and not several[1]:
+            several = (name, inside)
+    return several
+
+
+def _quoted(names: list[str]) -> str:
+    """Names listed so each reads as one, commas and all: 'Business Administration, Management'; 'Marketing'."""
+    return "; ".join(repr(name) for name in names)
 
 
 def _closest_first(names: list[str], wanted: list[str]) -> list[str]:
@@ -532,8 +577,9 @@ def _close_list(page, box) -> None:
 
 def _same(text: str) -> str:
     """A name reduced to its words, so spellings of one name compare equal: "Test-Driven Development" and "Test Driven
-    Development (TDD)", "Electrical & Computer Engineering Technologies" and "Electrical and Computer Engineering Technology"."""
-    text = re.sub(r"\([^)]*\)", " ", (text or "").lower()).replace("&", " and ")
+    Development (TDD)", "Electrical & Computer Engineering Technologies" and "Electrical and Computer Engineering Technology",
+    "Master's" and "Masters"."""
+    text = re.sub(r"\([^)]*\)", " ", (text or "").lower()).replace("&", " and ").replace("'", "").replace("’", "")
     return " ".join(_stem(w) for w in re.findall(r"[a-z0-9+#]+", text))
 
 
@@ -559,7 +605,8 @@ def _popup(page):
 
 
 def choose(page, button, wanted: list[str], report: Report, what: str) -> str:
-    """Open one of Workday's dropdown buttons and click the entry that matches, trying each wanted name in turn."""
+    """Open one of Workday's dropdown buttons and click the entry that matches, trying each wanted name in turn, and
+    failing those the only entry that starts with or contains one (see `_containing`), reported for a look."""
     page.keyboard.press("Escape")
     button.click()
     deadline = time.monotonic() + 4
@@ -578,6 +625,9 @@ def choose(page, button, wanted: list[str], report: Report, what: str) -> str:
             listbox = _popup(page)
         if listbox is not None:
             break
+    shown: list[str] = []
+    matches: list[str] = []
+    target = ""
     if listbox is not None:
         for name in wanted:
             entry = listbox.get_by_text(re.compile(rf"^\s*{_literal(name)}\s*$", re.I))
@@ -586,9 +636,22 @@ def choose(page, button, wanted: list[str], report: Report, what: str) -> str:
                 page.wait_for_timeout(300)
                 report.filled.append(f"{what}: {name}")
                 return name
-    shown = [t.strip() for t in listbox.all_inner_texts()][:1] if listbox is not None else []
+        # No entry has a wanted name in full, so one that starts with or contains it is taken, if it's the only one.
+        entries = listbox.get_by_role("option")
+        if not entries.count():
+            entries = listbox.locator("li")
+        shown = [text.strip() for text in _texts(entries) if text.strip()]
+        target, matches = _containing(shown, wanted)
+        if len(matches) == 1:
+            entries.nth(shown.index(matches[0])).click()
+            page.wait_for_timeout(300)
+            report.decisions.append(f"{what}: none of {_quoted(wanted[:3])} is offered, so picked {matches[0]!r}, "
+                                    f"the only one that starts with or contains {target!r}")
+            return matches[0]
     page.keyboard.press("Escape")
-    report.skipped.append(f"{what}: none of {', '.join(wanted[:3])} is offered" + (f". The list starts: {shown[0][:120]!r}" if shown else ""))
+    many = f", and {len(matches)} entries start with or contain {target!r}" if len(matches) > 1 else ""
+    ordered = matches + [name for name in _closest_first(shown, wanted) if name not in matches]
+    report.skipped.append(f"{what}: none of {_quoted(wanted[:3])} is offered{many}" + (f". The list offers: {_quoted(ordered[:12])}" if ordered else ""))
     return ""
 
 

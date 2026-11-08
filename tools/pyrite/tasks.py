@@ -131,6 +131,8 @@ def _sweep(conn, cfg: dict, task_id: int) -> str:
     stats = discover.run(conn=conn, cfg=cfg)
     said = (f"{stats['postings']:,} postings read across {stats['sources']} sources, {stats['new']} new"
             + (f", {stats['failed']} failing" if stats["failed"] else "") + ".")
+    if stats.get("rescored"):
+        said += " " + discover.rescore_summary(stats["rescored"])
     progress(conn, task_id, "Checking mail for replies")
     try:
         result = mail.check(conn, cfg)

@@ -612,7 +612,7 @@ class Autofill(ClaudeRun):
                                            "field": "Underwater Welding Technology", "gpa": "", "from": "2004", "to": "2008"}], report)
             field = page.evaluate("(() => { const e = document.querySelector('[id$=\"--fieldOfStudy\"]'); return [e.value, e.dataset.selected || ''] })()")
             self.assertEqual(field, ["", ""])
-            self.assertIn("education 1 field of study: no entry called 'Underwater Welding Technology'. Workday offers: Coastal and Ocean Engineering Technology",
+            self.assertIn("education 1 field of study: no entry called 'Underwater Welding Technology'. Workday offers: 'Coastal and Ocean Engineering Technology'",
                           report.skipped)
             # A "/" in a name ends the pattern Playwright writes out unless it's escaped, and the search dies with a selector error.
             page.evaluate("document.body.insertAdjacentHTML('beforeend', '<ul role=\"listbox\"><li role=\"option\">Electrical/Electronic Engineering Technology</li></ul>')")
@@ -647,8 +647,74 @@ class Autofill(ClaudeRun):
             browser.close()
         self.assertEqual(field, "")
         self.assertIn("education 1 field of study: no entry called 'Coastal Welding Technology'. "
-                      "Workday offers: Coastal and Ocean Engineering Technology", report.skipped)
+                      "Workday offers: 'Coastal and Ocean Engineering Technology'", report.skipped)
         self.assertEqual(still_open, 0, "a late answer opened the list again")
+
+    def test_the_one_entry_that_starts_with_or_contains_a_name_is_found(self):
+        def found(names, wanted):
+            return workday._containing(names, wanted)
+        # Case, punctuation and "&" for "and" don't matter, and whole words do.
+        self.assertEqual(found(["Supply Chain & Logistics Management", "Marketing"], ["Supply Chain and Logistics"]),
+                         ("Supply Chain and Logistics", ["Supply Chain & Logistics Management"]))
+        self.assertEqual(found(["Applied Data Science, General"], ["data science"]), ("data science", ["Applied Data Science, General"]))
+        self.assertEqual(found(["Data Sciences Institute"], ["Data Science"])[1], ["Data Sciences Institute"])
+        self.assertEqual(found(["Big Data Scienceware"], ["Data Science"])[1], [])
+        # One that starts with the name beats one that only contains it.
+        self.assertEqual(found(["Applied Data Science", "Data Science Methods"], ["Data Science"])[1], ["Data Science Methods"])
+        # Two that start with it are for the person, as in the issue: both are listed.
+        self.assertEqual(found(["Business Administration, Management", "Business Administration & Business Psychology"], ["Business Administration"]),
+                         ("Business Administration", ["Business Administration, Management", "Business Administration & Business Psychology"]))
+        # A less preferred name with one entry is still taken, and a one-word name never is.
+        self.assertEqual(found(["Business Administration, Management", "Business Administration & Policy", "Bachelor's Degree or Equivalent"],
+                               ["Business Administration", "Bachelor's Degree"])[1], ["Bachelor's Degree or Equivalent"])
+        self.assertEqual(found(["Go To Market Strategy", "Python IDLE"], ["Go", "Python"]), ("", []))
+        # Entries that only share words are never picked, however many they share.
+        self.assertEqual(found(["Electronic and Electrical Engineering"], ["Electrical and Computer Engineering Technology"]), ("", []))
+        self.assertEqual(workday._quoted(["Business Administration, Management", "Marketing"]), "'Business Administration, Management'; 'Marketing'")
+
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_a_field_of_study_with_no_exact_entry_takes_the_only_close_one(self):
+        report = workday.Report()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            workday.SETTLE_MS = 100
+            school = {"school": "Western Prairie University", "degree": "Bachelor of Science", "gpa": "", "from": "2004", "to": "2008"}
+            workday.fill_education(page, [dict(school, field="Supply Chain and Logistics"), dict(school, field="Public Administration"),
+                                          dict(school, field="Electrical and Computer Engineering Technology")], report)
+            fields = page.evaluate("[...document.querySelectorAll('[id$=\"--fieldOfStudy\"]')].map(e => e.dataset.selected || '')")
+            # A dropdown takes the only entry that starts with a wanted name too, when none is named exactly.
+            page.evaluate("""() => { document.body.insertAdjacentHTML('beforeend', '<button id="level" type="button">Select One</button>');
+                dropdown(document.getElementById('level'), ["Associate's Degree or Equivalent", "Bachelor's Degree or Equivalent", "Doctorate"]); }""")
+            degree = workday.Report()
+            picked = workday.choose(page, page.locator("#level"), workday.degree_candidates("Bachelor of Science"), degree, "degree")
+            level = page.locator("#level").inner_text()
+            page.evaluate("""() => { document.body.insertAdjacentHTML('beforeend', '<button id="kind" type="button">Select One</button>');
+                dropdown(document.getElementById('kind'), ["Full Time, Permanent", "Full Time, Contract", "Part Time"]); }""")
+            picked_kind = workday.choose(page, page.locator("#kind"), ["Full Time"], degree, "kind")
+            browser.close()
+        # "&" for "and": the only entry starting with the sheet's wording is ticked, and the summary says which, for what.
+        self.assertEqual(fields[0], "Supply Chain & Logistics Management")
+        self.assertIn("education 1 field of study: no entry called 'Supply Chain and Logistics', so picked 'Supply Chain & Logistics Management', "
+                      "the only one that starts with or contains 'Supply Chain and Logistics'", report.decisions)
+        self.assertIn("Check this pick: education 1 field of study: no entry called 'Supply Chain and Logistics', so picked "
+                      "'Supply Chain & Logistics Management'", report.detail())
+        # Two entries start with it, so it's left, and each entry reads as one despite the commas in them.
+        self.assertEqual(fields[1], "")
+        self.assertIn("education 2 field of study: no entry called 'Public Administration', and 2 entries start with or contain 'Public Administration'. "
+                      "Workday offers: 'Public Administration, Management'; 'Public Administration & Policy'; 'Business Administration'", report.skipped)
+        # Sharing most of their words doesn't make two fields the same: the near miss is only suggested.
+        self.assertEqual(fields[2], "")
+        miss = next(s for s in report.skipped if s.startswith("education 3 field of study"))
+        self.assertIn("'Electronic and Electrical Engineering'", miss)
+        self.assertEqual(len(report.decisions), 1, report.decisions)
+        self.assertEqual((picked, level), ("Bachelor's Degree or Equivalent", "Bachelor's Degree or Equivalent"))
+        self.assertIn("degree: none of 'Bachelor of Science'; 'Bachelors'; 'Bachelor' is offered, so picked \"Bachelor's Degree or Equivalent\", "
+                      "the only one that starts with or contains \"Bachelor's Degree\"", degree.decisions)
+        self.assertEqual(picked_kind, "")
+        self.assertIn("kind: none of 'Full Time' is offered, and 2 entries start with or contain 'Full Time'. "
+                      "The list offers: 'Full Time, Permanent'; 'Full Time, Contract'; 'Part Time'", degree.skipped)
 
     @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
     def test_what_is_typed_or_ticked_is_checked_on_the_page(self):

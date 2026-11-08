@@ -6,6 +6,7 @@ job search, whatever workspace this machine normally uses.
 """
 import atexit
 import gc
+import json
 import os
 import shutil
 import subprocess
@@ -156,7 +157,9 @@ class ClaudeRun(Base):
         self.addCleanup(patcher.stop)
 
     def claude(self, *drafts, summary="Led with the QA work."):
-        """A stand-in for Claude Code that writes each draft in turn and records the prompts it was given."""
+        """A stand-in for Claude Code that hands back each draft in turn, as `writes`, in its closing message, and
+        records the prompts it was given. None hands back the summary alone, and a CompletedProcess is returned as is.
+        A summary that is a JSON result gets the draft in its `result`."""
         drafts = iter(drafts)
         self.prompts = []
 
@@ -165,9 +168,12 @@ class ClaudeRun(Base):
             draft = next(drafts)
             if isinstance(draft, subprocess.CompletedProcess):
                 return draft
-            if draft is not None:
-                (self.folder / self.writes).write_text(draft, encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, stdout=summary, stderr="")
+            block = f'<document name="{self.writes}">\n{draft}</document>\n\n' if draft is not None else ""
+            if summary.startswith("{"):
+                result = json.loads(summary)
+                result["result"] = block + result["result"]
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(result), stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=block + summary, stderr="")
         patcher = mock.patch.object(claude_code.subprocess, "run", side_effect=fake)
         patcher.start()
         self.addCleanup(patcher.stop)

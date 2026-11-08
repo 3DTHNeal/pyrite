@@ -1,15 +1,16 @@
 """Redo a draft resume on request: Claude rewrites it, and the fact checker decides whether the rewrite stays.
 
-The posting is untrusted text from the internet, so this Claude gets no shell and no web access, can only
-change the draft's own files, and never runs the checker or the build. A rewrite that doesn't pass is thrown
-away and the earlier draft goes back. State lives in the job's events, so no schema change was needed.
+The posting is untrusted text from the internet, so this Claude gets no tools at all: no shell, no web access
+and nothing that writes. It hands the rewrite back in its closing message, the code writes the draft's own files,
+and Claude never runs the checker or the build. A rewrite that doesn't pass is thrown away and the earlier draft
+goes back. State lives in the job's events, so no schema change was needed.
 """
 import time
 from datetime import datetime
 from pathlib import Path
 
 from . import checks, claude_code
-from .claude_code import ClaudeFailed, find_claude, sign_in_help, spawn_worker
+from .claude_code import ClaudeFailed, NoDocument, find_claude, sign_in_help, spawn_worker
 from .cli import finish_job, write_posting
 from .store import IS_EXAMPLE, ROOT, get_job, log_event
 
@@ -18,6 +19,7 @@ STATE_NAMES = {STARTED: "running", DONE: "done", FAILED: "failed"}
 # Once you've applied, the resume on file is the one you sent, so it stays as it is.
 REFRESHABLE = ("ready", "needs_fix")
 PREVIOUS = "resume.previous.md"
+DRAFT, NOTES = "resume.md", "notes.md"
 ATTEMPTS = 3
 TIME_LIMIT_MINUTES = 20
 STALE_MINUTES = TIME_LIMIT_MINUTES + 5
@@ -79,20 +81,37 @@ def start(conn, job_id: int) -> None:
         raise ValueError(f"Couldn't start the refresh: {err}") from err
 
 
-def command(claude: str, folder: str) -> list[str]:
-    """Claude may read the workspace, and change only this draft's resume and notes."""
-    return claude_code.command(claude, [f"{folder}/resume.md", f"{folder}/notes.md"])
+def command(claude: str) -> list[str]:
+    """No tools: everything Claude needs is in the prompt, and the rewrite comes back in its closing message."""
+    return claude_code.command(claude, [])
 
 
-def prompt(job, folder: str, feedback: str = "", polish: str = "") -> str:
+def prompt(job, folder: str, feedback: str = "", polish: str = "", unusable: bool = False) -> str:
+    """The instructions and the files. `feedback` is the checker's errors, or with `unusable`, why the last answer was no use."""
     text = INSTRUCTIONS.read_text(encoding="utf-8").replace("{folder}", folder)
-    text += claude_code.files_section(ROOT, folder, ("resume.md", "notes.md"))
+    text += claude_code.files_section(ROOT, folder, (DRAFT, NOTES))
     text += claude_code.job_line(job) + f"Today is {datetime.now().date().isoformat()}.\n"
     if feedback:
-        text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{feedback}\n"
+        heading = "Your last answer couldn't be used:" if unusable else "The fact checker blocked your last draft. Fix the draft:"
+        text += f"\n{heading}\n{feedback}\n"
     if polish:
         text += f"\n{checks.POLISH_ASK}\n{polish}\n"
-    return text
+    return text + claude_code.hand_back(DRAFT, (NOTES,))
+
+
+def _ask(conn, job_id: int, folder: str, claude: str, text: str, deadline: float) -> str:
+    """One run, its rewrite saved in the folder. Returns Claude's sentence for the dashboard.
+
+    An answer with no resume in it counts as a failed run and raises NoDocument, leaving the files as they were.
+    """
+    answer = claude_code.ask(conn, job_id, "refresh", command(claude), text, ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
+    try:
+        found, summary = claude_code.documents(answer, DRAFT, (NOTES,))
+    except NoDocument:
+        claude_code.mark_last_failed(conn, "refresh")
+        raise
+    claude_code.save_documents(ROOT / folder, found)
+    return summary
 
 
 def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, deadline: float) -> None:
@@ -101,11 +120,11 @@ def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, dead
     asks = checks.polish_requests(report, letter=False)
     if not asks or time.monotonic() > deadline:
         return
-    files = [ROOT / folder / name for name in ("resume.md", "notes.md")]
+    files = [ROOT / folder / name for name in (DRAFT, NOTES)]
     kept = {path: path.read_bytes() for path in files if path.exists()}
     try:
         text = prompt(get_job(conn, job_id), folder, polish="\n".join(f"- {ask}" for ask in asks))
-        claude_code.ask(conn, job_id, "refresh", command(claude, folder), text, ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
+        _ask(conn, job_id, folder, claude, text, deadline)
         if get_job(conn, job_id)["status"] not in REFRESHABLE:
             return  # You moved it on during the pass, so its files are yours now.
         if finish_job(conn, cfg, job_id)["ok"]:
@@ -120,10 +139,16 @@ def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, dead
 def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
     deadline = time.monotonic() + TIME_LIMIT_MINUTES * 60
     feedback = ""
+    missing: NoDocument | None = None
     for _ in range(ATTEMPTS):
         job = get_job(conn, job_id)
-        summary = claude_code.ask(conn, job_id, "refresh", command(claude, folder), prompt(job, folder, feedback),
-                                  ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
+        try:
+            summary = _ask(conn, job_id, folder, claude, prompt(job, folder, feedback, unusable=missing is not None), deadline)
+        except NoDocument as err:
+            missing = err
+            feedback = f"- Your answer had no {DRAFT} block, so nothing was saved. Hand back the whole resume, as the end of these instructions says."
+            continue
+        missing = None
         if get_job(conn, job_id)["status"] not in REFRESHABLE:
             raise RefreshFailed("You moved this job on during the refresh, so the resume stays as it was.")
         report = finish_job(conn, cfg, job_id)
@@ -133,6 +158,8 @@ def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
         if any(error.startswith("Build failed") for error in report["errors"]):
             raise RefreshFailed("; ".join(report["errors"]))
         feedback = "\n".join(f"- {error}" for error in report["errors"])
+    if missing:
+        raise RefreshFailed(f"{missing} It was asked {ATTEMPTS} times.")
     raise RefreshFailed(f"The rewrite didn't pass the assay after {ATTEMPTS} tries: {feedback}")
 
 
@@ -164,6 +191,6 @@ def run(conn, cfg, job_id: int, claude: str | None = None) -> bool:
         conn.commit()
         return False
     unchanged = resume.read_bytes() == kept[resume]
-    log_event(conn, job_id, DONE, "Claude left the resume as it was." if unchanged else summary[:500])
+    log_event(conn, job_id, DONE, "Claude left the resume as it was." if unchanged else summary[:500] or "Rewrote the resume.")
     conn.commit()
     return True

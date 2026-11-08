@@ -136,7 +136,7 @@ class SweepDropsWhatIsNoOpening(Base):
     def test_rescore_drops_a_stored_posting_that_says_it_has_no_opening(self):
         self.add(source_id="9", title="Principal Firmware Engineer", location="Madison, WI",
                  description=f"{FIRMWARE}. This posting is for future openings.")
-        self.assertEqual(discover.rescore(self.conn, self.cfg), {"kept": 0, "dropped": 1})
+        self.assertEqual({k: v for k, v in discover.rescore(self.conn, self.cfg).items() if k in ("kept", "dropped")}, {"kept": 0, "dropped": 1})
         self.assertEqual(self.conn.execute("SELECT reason FROM rejected").fetchone()[0], "not_open")
 
 

@@ -25,7 +25,7 @@ from .workspace import INIT_EXAMPLE, INIT_EXAMPLE_HOSTS, INIT_EXAMPLE_NAME, INIT
 BUILD = CODE_ROOT / "tools" / "build_resume.py"
 BUILD_TIMEOUT_SECONDS = 300
 # With no workspace set, these would write into the fictional example inside this repository.
-NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish", "refresh", "prep", "status", "add", "brief", "serve", "seed",
+NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish", "refresh", "prep", "status", "outreach", "add", "brief", "serve", "seed",
                    "sweep", "run", "task", "fill", "autofill"}
 
 
@@ -586,6 +586,20 @@ def cmd_status(args, conn):
 
 
 @_with_db
+def cmd_outreach(args, conn):
+    """Log reaching out about an application you've sent, as the dashboard's Reached out does."""
+    job = get_job(conn, args.id)
+    try:
+        store.log_outreach(conn, args.id, args.on, args.to, args.note, load_config()["run"]["follow_up_days"])
+    except ValueError as err:
+        sys.exit(f"{args.id} {job['company']} - {job['title']}: {err}")
+    conn.commit()
+    reminder = get_job(conn, args.id)
+    when = f" Follow up on {reminder['next_action_date']}." if reminder["next_action"] == "Follow up" and reminder["next_action_date"] else ""
+    print(f"{args.id} {job['company']} - {job['title']}: reached out.{when}")
+
+
+@_with_db
 def cmd_add(args, conn):
     """Add a posting you found yourself, such as one from LinkedIn."""
     from .server import add_manual_job
@@ -891,6 +905,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("status", choices=[status for status in STATUSES if status not in store.CHECKER_ONLY])
     p.add_argument("--note", default="")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("outreach", help="log reaching out about an application you've sent, such as a note to the hiring manager")
+    p.add_argument("id", type=int, help=JOB_ID)
+    p.add_argument("--on", default="", help="the day, as YYYY-MM-DD (today if left out)")
+    p.add_argument("--to", default="", help="who, such as \"the hiring manager\" (optional)")
+    p.add_argument("--note", default="", help="what you sent or asked (optional)")
+    p.set_defaults(func=cmd_outreach)
 
     p = sub.add_parser("add", help="add a posting by hand", formatter_class=argparse.RawDescriptionHelpFormatter,
                        epilog='for example:\n  pyrite add --company "Acme Robotics" --title "Firmware Engineer" '

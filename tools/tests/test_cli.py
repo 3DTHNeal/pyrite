@@ -27,6 +27,7 @@ COMMANDS = (
     ["autofill", "999"],
     ["sent", "999"],
     ["status", "999", "applied"],
+    ["outreach", "999"],
     ["fill", "999"],
 )
 
@@ -152,8 +153,8 @@ class WordsOrJson(Base):
         self.assertEqual(self.command("usage", terminal=True), "Pyrite hasn't started any Claude runs yet.\n")
         self.assertIn("week", json.loads(self.command("usage")))
         self.assertEqual(self.command("rescore", terminal=True),
-                         "Applied your filters again to 0 postings you haven't acted on. Kept 0, dropped 0.\n")
-        self.assertEqual(json.loads(self.command("rescore")), {"kept": 0, "dropped": 0})
+                         "Applied your filters again to 0 prospects. Kept 0 with new scores, dropped 0 that no longer pass.\n")
+        self.assertEqual(json.loads(self.command("rescore")), {"kept": 0, "dropped": 0, "held": 0, "removed": []})
 
 
 class Words(unittest.TestCase):
@@ -171,6 +172,15 @@ class Words(unittest.TestCase):
         self.assertEqual(said[2], "New: #12 Acme, Role 12 (score 12)")
         self.assertEqual(len([line for line in said if line.startswith("New:")]), words.NAMED)
         self.assertEqual(said[-1], "And 2 more. `pyrite queue` lists what's waiting, best first.")
+
+    def test_rescore_names_what_it_dropped_and_counts_what_it_held(self):
+        removed = ["Acme: Lead\x1b[2J (scam)"] + [f"Acme: Role {n} (title)" for n in range(1, 12)]
+        said = words.rescore({"kept": 40, "dropped": 12, "held": 2, "removed": removed}).splitlines()
+        self.assertEqual(said[0], "Applied your filters again to 54 prospects. Kept 40 with new scores, dropped 12 that no longer pass, "
+                                  "and kept 2 you've acted on that no longer pass.")
+        self.assertEqual(said[1], "Dropped: Acme: Lead[2J (scam)")
+        self.assertEqual(len([line for line in said if line.startswith("Dropped:")]), words.NAMED)
+        self.assertEqual(said[-1], "And 2 more.")
 
     def test_usage_totals_each_kind(self):
         totals = {"runs": 3, "failed": 1, "minutes": 12.5, "input_tokens": 120000, "output_tokens": 5000, "cost_usd": 0.42}
@@ -206,3 +216,37 @@ class SentFolder(unittest.TestCase):
         self.assertEqual(report["drafter"], {"resume.docx": "1"})
         self.assertEqual(report["sent_drafter"], {"resume.docx": "1"})
         self.assertIn("Sent with drafter 1. What was sent is the record, so it isn't rebuilt.", words.check(report))
+
+
+class Outreach(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(store, "DB_PATH", Path(tmp.name) / "pyrite.db")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_logs_reaching_out_and_says_when_to_follow_up(self):
+        with contextlib.closing(store.connect()) as conn:
+            ts = store.now()
+            job = conn.execute("INSERT INTO jobs (source_key, source_id, company, title, first_seen, last_seen) VALUES ('manual', '1', 'Acme', 'Lead', ?, ?)",
+                               (ts, ts)).lastrowid
+            store.set_status(conn, job, "applied")
+            conn.commit()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["outreach", str(job), "--to", "the recruiter", "--note", "Asked for a referral"])
+        self.assertIn("reached out. Follow up on", out.getvalue())
+        with contextlib.closing(store.connect()) as conn:
+            detail = conn.execute("SELECT detail FROM events WHERE kind = ?", (store.REACHED_OUT,)).fetchone()[0]
+        self.assertTrue(detail.endswith(", to the recruiter. Asked for a referral"), detail)
+
+    def test_a_job_not_yet_sent_is_refused_in_one_line(self):
+        with contextlib.closing(store.connect()) as conn:
+            ts = store.now()
+            job = conn.execute("INSERT INTO jobs (source_key, source_id, company, title, first_seen, last_seen) VALUES ('manual', '1', 'Acme', 'Lead', ?, ?)",
+                               (ts, ts)).lastrowid
+            conn.commit()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            cli.main(["outreach", str(job)])
+        self.assertIn("application you've sent", str(caught.exception.code))

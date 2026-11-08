@@ -9,7 +9,22 @@ from typing import cast
 
 from . import quality, sources
 from . import score as scoring
-from .store import ACTIVE, STATUSES, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing, set_status
+from .store import (
+    ACTIVE,
+    REPLY_DETECTED,
+    SCORING_VERSION,
+    STATUSES,
+    get_job,
+    load_config,
+    log_event,
+    now,
+    possible_replies,
+    quiet_days_since,
+    record_listing,
+    scoring_version,
+    set_meta,
+    set_status,
+)
 
 # How much of a posting's vocabulary must match for an edited repost to count as the same job.
 NEAR_TWIN_OVERLAP = 0.85
@@ -24,6 +39,11 @@ TITLE_WORDS = {"sr": "senior", "jr": "junior", "mgr": "manager", "engr": "engine
 DEFAULT_GHOST_AFTER_DOWN_DAYS = 14
 # How a ghosted status set by the sweep starts, so a posting that comes back can undo it without touching your own calls.
 AUTO_GHOSTED = "The posting came down"
+# How the sweep notes putting a closed prospect back, so a rescore can tell that from a status you set.
+BACK_UP = "The posting is back up"
+# Events Pyrite logs on a prospect by itself, which say nothing about whether you've acted on it. "seen" is the
+# dashboard's marker for a prospect you've opened, and opening one isn't deciding about it.
+UNPROMPTED_EVENTS = ("found", "linked", "reposted", "redated", "posting_down", "seen", REPLY_DETECTED)
 
 
 def dedupe_key(company: str, title: str, description: str) -> str:
@@ -131,6 +151,8 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
     if fresh:
         conn.execute("DELETE FROM rejected")
     _fill_in_existing(conn, cfg)
+    # Before reading the boards, so a prospect this drops is already among the rejected ones the boards' listings skip.
+    rescored = rescore_if_outdated(conn, cfg)
     conn.commit()
 
     known_rows = conn.execute(
@@ -157,6 +179,8 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
     deadline = time.monotonic() + max_minutes * 60
     stats = {"partial": bool(only), "sources": len(items), "failed": 0, "postings": 0, "new": 0,
              "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0}, "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
+    if rescored:
+        stats["rescored"] = rescored
 
     # Light parallelism on purpose: heavier loads caused DNS failures across whole sources.
     # Results are saved as each source finishes, so an interrupted sweep keeps what it got.
@@ -292,7 +316,7 @@ def _reopen_if_closed(conn, job, ts: str) -> None:
         conn.execute(
             "UPDATE jobs SET status = 'new', status_changed_at = ?, closed_out_at = NULL WHERE id = ?", (ts, job["id"])
         )
-        log_event(conn, job["id"], "new", "The posting is back up")
+        log_event(conn, job["id"], "new", BACK_UP)
     elif job["status"] == "ghosted" and _ghosted_by_sweep(conn, job["id"]):
         # Only the sweep's own call is undone. A job you marked ghosted yourself stays that way.
         set_status(conn, job["id"], "applied", "The posting is back up, so this is waiting to hear again")
@@ -476,10 +500,31 @@ def last_full_sweep(conn):
     return None
 
 
+def acted_on(conn, job) -> bool:
+    """Whether you've done anything with a prospect beyond opening it: a note, a next step, a pick, a folder, a verdict,
+    or any status of your own, such as one put back by Undo pass. Only the sweep's and the inbox's own events don't count.
+    A prospect you've acted on is never dropped by a rescore, so its history stays."""
+    if job["notes"] or job["next_action"] or job["priority"] or job["app_folder"] or job["fit"]:
+        return True
+    for event in conn.execute("SELECT kind, detail FROM events WHERE job_id = ?", (job["id"],)):
+        if event["kind"] == "new" and event["detail"] == BACK_UP:
+            continue
+        if event["kind"] not in UNPROMPTED_EVENTS:
+            return True
+    return False
+
+
 def rescore(conn, cfg=None) -> dict:
-    """Re-apply the current filters to postings you haven't acted on."""
+    """Re-apply the current scoring and filters to prospects: jobs still new, found on a board.
+
+    Each one that passes gets its score and reasons again. One that no longer passes is dropped and remembered as
+    rejected, unless you've acted on it: then it's left as it was and counted as held. `removed` names the dropped ones,
+    since the record of each is gone. Jobs past new, and ones you added or imported, keep the score they were decided on.
+    Records that the prospects now have this code's scoring, so the next sweep doesn't do it again.
+    """
     cfg = cfg or load_config()
-    kept = dropped = 0
+    kept = dropped = held = 0
+    removed = []
     _fill_in_existing(conn, cfg)
     rows = conn.execute(
         "SELECT * FROM jobs WHERE status = 'new' AND source_key NOT IN ('seed', 'manual')"
@@ -493,17 +538,47 @@ def rescore(conn, cfg=None) -> dict:
                 (verdict.score, json.dumps(verdict.reasons), verdict.track, json.dumps(verdict.flags), verdict.location_kind, row["id"]),
             )
             kept += 1
+        elif acted_on(conn, row):
+            held += 1
         else:
             conn.execute("DELETE FROM events WHERE job_id = ?", (row["id"],))
             conn.execute("DELETE FROM listings WHERE job_id = ?", (row["id"],))
+            # A Claude run that failed to judge it still counts toward usage, and a mail warning naming it still stands.
+            conn.execute("UPDATE claude_runs SET job_id = NULL WHERE job_id = ?", (row["id"],))
+            conn.execute("UPDATE mail_alerts SET job_id = NULL WHERE job_id = ?", (row["id"],))
             conn.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
             conn.execute(
                 "INSERT OR REPLACE INTO rejected (source_key, source_id, reason, ts) VALUES (?, ?, ?, ?)",
                 (row["source_key"], row["source_id"], reason, now()),
             )
             dropped += 1
+            removed.append(f"{row['company']}: {row['title']} ({reason.replace('_', ' ')})")
+    set_meta(conn, SCORING_VERSION, str(scoring.VERSION))
     conn.commit()
-    return {"kept": kept, "dropped": dropped}
+    return {"kept": kept, "dropped": dropped, "held": held, "removed": removed}
+
+
+def rescore_if_outdated(conn, cfg: dict) -> dict | None:
+    """Rescore when this code scores postings differently from the scoring the database's prospects were given.
+    Returns what `rescore` did and the versions, or None when the scores are already current."""
+    before = scoring_version(conn)
+    if before >= scoring.VERSION:
+        return None
+    return {**rescore(conn, cfg), "from": before, "to": scoring.VERSION}
+
+
+def rescore_summary(result: dict, names: int = 10) -> str:
+    """What a sweep's automatic rescore did, naming the prospects it dropped, since nothing else of them is left."""
+    def count(number: int) -> str:
+        return f"{number} prospect{'' if number == 1 else 's'}"
+
+    said = [f"Scoring changed in this version, so {count(result['kept'])} got new scores."]
+    if result["dropped"]:
+        named = result["removed"][:names] + ([f"{len(result['removed']) - names} more"] if len(result["removed"]) > names else [])
+        said.append(f"Dropped {count(result['dropped'])} that no longer pass: {'; '.join(named)}.")
+    if result.get("held"):
+        said.append(f"Kept {count(result['held'])} you've acted on that no longer pass.")
+    return " ".join(said)
 
 
 def _ingest(conn, posting, cfg, stats, ts, key, started, baseline):
