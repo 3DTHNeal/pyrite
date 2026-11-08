@@ -181,11 +181,13 @@ const COLUMNS = [
 // `hints` adds the weakest signal, the Workday "-1" link, which only the Prospects table and the job panel have room for.
 function freshnessPills(job, hints = true) {
   const pills = [];
+  if ((job.scam_signs || []).length && !job.applied_at) pills.push(pill("bad", "Possible scam", `The posting itself: ${job.scam_signs.join("; ").toLowerCase()}. Real employers don't.`));
   if (job.is_new && !job.applied_at) pills.push(pill("good", "New", `Posted ${daysAgo(job.age_days)} and never reposted`));
   if (!job.applied_at) for (const name of job.promoted) pills.push(pill("info", name, "A city or industry you asked to rank higher. It raises priority, not the score."));
   if (job.reposts) pills.push(pill(job.reposts > 1 ? "bad" : "warn", `Reposted ${job.reposts}×`, "The same job came back under a new listing, or after being taken down"));
   if (job.redates) pills.push(pill("warn", `Re-dated ${job.redates}×`, "The board moved this listing's posted date forward"));
   if (job.ghost_risk) pills.push(pill("bad", "Possible ghost", `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof.`));
+  if (job.unconfirmed && !job.applied_at) pills.push(pill("warn", "Not rechecked", "The last pan didn't see this listing: its board failed, left your watch list or didn't answer. It may be down."));
   if (job.may_be_repost && hints) pills.push(pill("muted", "May be a repost", "This Workday link ends in -1 or similar, which often means the requisition has more than one posting. A hint only."));
   return pills;
 }
@@ -284,7 +286,7 @@ const RADAR_SHOWS = {
   new: (j) => j.is_new,
   promoted: (j) => j.promoted.length,
   clean: (j) => !j.reposts && !j.redates,
-  "no-ghost": (j) => !j.ghost_risk,
+  "no-ghost": (j) => !j.ghost_risk && !j.unconfirmed && !(j.scam_signs || []).length,
 };
 
 // The Prospects filters you last used, kept in this browser only. Storage can be switched off, so a failed read or write is ignored.

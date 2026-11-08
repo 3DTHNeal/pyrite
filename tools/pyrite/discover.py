@@ -7,12 +7,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import cast
 
+from . import quality, sources
 from . import score as scoring
-from . import sources
 from .store import ACTIVE, STATUSES, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing, set_status
 
 # How much of a posting's vocabulary must match for an edited repost to count as the same job.
 NEAR_TWIN_OVERLAP = 0.85
+# How many of their title words two postings under one requisition id must share. Below it, the id was reused for another job.
+SAME_REQUISITION_TITLE_OVERLAP = 0.5
+# Workday ends a posting's link with its requisition id, and adds -1, -2 and so on when the requisition is posted again.
+WORKDAY_REQUISITION = re.compile(r"_([A-Za-z]*-?\d[\w-]*?)(?:-\d{1,2})?$")
+# Short forms boards use in titles, so "Sr. Firmware Engr" and "Senior Firmware Engineer" read as one title.
+TITLE_WORDS = {"sr": "senior", "jr": "junior", "mgr": "manager", "engr": "engineer", "eng": "engineer", "dir": "director",
+               "assoc": "associate", "tpm": "technical program manager"}
 # Days a sent application's posting can be down, with nothing heard, before it counts as ghosted. 0 turns this off.
 DEFAULT_GHOST_AFTER_DOWN_DAYS = 14
 # How a ghosted status set by the sweep starts, so a posting that comes back can undo it without touching your own calls.
@@ -149,7 +156,7 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
 
     deadline = time.monotonic() + max_minutes * 60
     stats = {"partial": bool(only), "sources": len(items), "failed": 0, "postings": 0, "new": 0,
-             "rejected": {"title": 0, "location": 0, "score": 0}, "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
+             "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0}, "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
 
     # Light parallelism on purpose: heavier loads caused DNS failures across whole sources.
     # Results are saved as each source finishes, so an interrupted sweep keeps what it got.
@@ -319,6 +326,9 @@ def _note_redates(conn, result: dict, cfg: dict, ts: str, stats: dict) -> None:
             continue
         conn.execute("UPDATE listings SET posted_at = ? WHERE source_key = ? AND source_id = ?", (posted, key, source_id))
         if not stored:
+            # A date that turns up later isn't a re-date, but it does give a job that had none an age.
+            conn.execute("UPDATE jobs SET posted_at = COALESCE(posted_at, ?), first_posted_at = COALESCE(first_posted_at, ?) WHERE id = ?",
+                         (posted, posted, listing["job_id"]))
             continue
         job_id = listing["job_id"]
         conn.execute("UPDATE jobs SET posted_at = ? WHERE id = ?", (posted, job_id))
@@ -353,7 +363,36 @@ def _fill_in_existing(conn, cfg: dict) -> None:
 
 
 def _norm_title(title: str) -> str:
-    return re.sub(r"\W+", " ", title).strip().lower()
+    words = re.sub(r"\W+", " ", title).strip().lower().split()
+    return " ".join(TITLE_WORDS.get(word, word) for word in words)
+
+
+def requisition(source_key: str, source_id: str) -> str:
+    """The requisition id in a Workday link, or nothing. Other boards keep it out of the link."""
+    if not source_key.startswith("workday:"):
+        return ""
+    match = WORKDAY_REQUISITION.search(source_id or "")
+    # A bare "_2" is a page counter, not an id.
+    return match.group(1).upper() if match and len(re.sub(r"\D", "", match.group(1))) >= 4 else ""
+
+
+def _requisition_twin(conn, key: str, posting):
+    """A job already tracked under the same Workday requisition. A repost often comes back with its text or title
+    rewritten, but the requisition id stays, so this catches what the text comparison can't."""
+    wanted = requisition(key, posting.source_id)
+    if not wanted:
+        return None
+    words = set(_norm_title(posting.title).split())
+    for row in conn.execute(
+        "SELECT jobs.*, listings.source_id AS listed_id FROM listings JOIN jobs ON jobs.id = listings.job_id WHERE listings.source_key = ?",
+        (key,),
+    ).fetchall():
+        if row["listed_id"] == posting.source_id or requisition(key, row["listed_id"]) != wanted:
+            continue
+        others = set(_norm_title(row["title"]).split())
+        if words and others and len(words & others) / len(words | others) >= SAME_REQUISITION_TITLE_OVERLAP:
+            return get_job(conn, row["id"])
+    return None
 
 
 def _attach_to_existing(conn, posting, ts, key, cfg) -> bool:
@@ -447,7 +486,8 @@ def rescore(conn, cfg=None) -> dict:
     ).fetchall()
     for row in rows:
         verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"])
-        if verdict.keep:
+        reason = quality.rejection(row["title"], row["description"] or "") if verdict.keep else verdict.reason
+        if not reason:
             conn.execute(
                 "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",
                 (verdict.score, json.dumps(verdict.reasons), verdict.track, json.dumps(verdict.flags), verdict.location_kind, row["id"]),
@@ -459,7 +499,7 @@ def rescore(conn, cfg=None) -> dict:
             conn.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
             conn.execute(
                 "INSERT OR REPLACE INTO rejected (source_key, source_id, reason, ts) VALUES (?, ?, ?, ?)",
-                (row["source_key"], row["source_id"], verdict.reason, now()),
+                (row["source_key"], row["source_id"], reason, now()),
             )
             dropped += 1
     conn.commit()
@@ -473,16 +513,19 @@ def _ingest(conn, posting, cfg, stats, ts, key, started, baseline):
         return
 
     verdict = scoring.evaluate(posting.title, posting.location, posting.workplace, posting.description, cfg, posting.company)
-    if not verdict.keep:
-        stats["rejected"][verdict.reason] += 1
+    # A posting can pass every filter and still be no opening: a talent pool, or a scam on a board you added.
+    reason = quality.rejection(posting.title, posting.description) if verdict.keep else verdict.reason
+    if reason:
+        stats["rejected"][reason] = stats["rejected"].get(reason, 0) + 1
         conn.execute(
             "INSERT OR REPLACE INTO rejected (source_key, source_id, reason, ts) VALUES (?, ?, ?, ?)",
-            (key, posting.source_id, verdict.reason, ts),
+            (key, posting.source_id, reason, ts),
         )
         return
 
     fingerprint = dedupe_key(posting.company, posting.title, posting.description)
-    twin = _exact_twin(conn, posting, fingerprint)
+    # One requisition is one job, on the first look at a board too, so its postings for other places don't list it twice.
+    twin = _exact_twin(conn, posting, fingerprint) or _requisition_twin(conn, key, posting)
     if not twin and not baseline:
         twin = _near_twin(conn, posting, started)
     if twin:

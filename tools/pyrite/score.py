@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
 
+from . import quality
+
 FOREIGN = re.compile(
     r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|mexico|brazil|argentina|colombia|"
     r"uk|u\.k\.|united kingdom|england|london|ireland|dublin|germany|munich|berlin|france|paris|spain|madrid|"
@@ -96,16 +98,24 @@ def promotion(job: dict, cfg: dict) -> tuple[int, list, list]:
     return points, names, reasons
 
 
-def freshness(job: dict, cfg: dict, today: date) -> dict:
-    """How new a listing is, how often it has come back, and the priority that gives it.
+def freshness(job: dict, cfg: dict, today: date, swept_at: str | None = None) -> dict:
+    """How new a listing is, how often it has come back, whether it's a real opening, and the priority that gives it.
 
     This only orders what you see. Whether a posting is kept stays with the filter score.
-    Pass the whole row, since preferred industries are judged from the description.
+    Pass the whole row, since preferred industries are judged from the description. `swept_at`
+    is when the latest full sweep started: a listing it didn't see is one nobody has confirmed is up.
     """
     rules = cfg["freshness"]
     # The earliest date on record, so a repost can't make an old job look new.
     first = parse_date(job.get("first_posted_at") or job.get("posted_at"))
+    from_board = job.get("source_key") not in (None, "", "seed", "manual")
+    # A board can move a date forward without Pyrite seeing it happen, but the job was up when the sweep first found it.
+    # That's a floor only: with no date at all, the day it was found says nothing about how new it is.
+    seen = parse_date(job.get("first_seen")) if from_board else None
+    if first and seen and seen < first:
+        first = seen
     age = max((today - first).days, 0) if first else None
+    known_for = max((today - seen).days, 0) if seen else None
     reposts, redates = job.get("reposts") or 0, job.get("redates") or 0
     changes = reposts + redates
 
@@ -123,16 +133,25 @@ def freshness(job: dict, cfg: dict, today: date) -> dict:
     ghost = []
     if age is not None and age >= rules["ghost_age_days"]:
         ghost.append(f"listed for {age} days")
+    elif age is None and known_for is not None and known_for >= rules["ghost_age_days"]:
+        ghost.append(f"listed for at least {known_for} days")
     if changes >= rules["ghost_repost_count"]:
         ghost.append(f"reposted or re-dated {changes} times")
     elif changes and age is not None and age >= rules["ghost_age_if_reposted"]:
         ghost.append(f"reposted or re-dated after {age} days")
+    # In the posting's own words. The sweep drops postings that say there's no opening; these are ones it kept or you added.
+    description = job.get("description") or ""
+    ghost += [said for said in (quality.not_an_opening(job.get("title") or "", description), quality.evergreen(description)) if said]
+    unconfirmed = bool(from_board and swept_at and not job.get("posting_closed_at") and (job.get("last_seen") or "") < swept_at)
 
     return {
         "age_days": age,
         "rank": (job.get("score") or 0) + points - penalty + promoted_points,
         "promoted": promoted,
-        "is_new": age is not None and age <= rules["new_days"] and not changes,
+        "is_new": age is not None and age <= rules["new_days"] and not changes and not ghost and not unconfirmed,
+        # The latest full sweep didn't see it: its board failed, left the watch list, or Workday's search left it out unanswered.
+        "unconfirmed": unconfirmed,
+        "scam_signs": list(quality.scam_signs(description)),
         "ghost_risk": bool(ghost),
         "ghost_reason": ", ".join(ghost),
         # Workday adds -1, -2 and so on to a link when a requisition has more than one posting. A hint, so it costs no points.

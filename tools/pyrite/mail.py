@@ -50,12 +50,21 @@ SHORTENERS = ("bit.ly", "cutt.ly", "goo.gl", "is.gd", "rb.gy", "shorturl.at", "t
 FORMS = ("docs.google.com", "forms.gle", "forms.office.com", "jotform.com", "typeform.com")
 CHAT_APPS = re.compile(
     r"\b(whats\s?app|telegram|signal app|google chat|google hangouts|skype|(?:text|chat|sms)[- ]only interview"
-    r"|interview (?:via|over|through|by) (?:chat|text|sms|messaging)|chat interview)\b", re.I)
+    r"|interviews? (?:will be |is |are )?(?:held |conducted )?(?:via|over|through|by|on) (?:\w+ ){0,2}(?:chat|text|sms|messaging|messenger)"
+    r"|(?:chat|text)[- ]based interview"
+    r"|chat interview)\b", re.I)
 MONEY_OR_ID = re.compile(
     r"\b(gift ?cards?|cashier'?s? check|e-?check|checks? (?:will be |is |are )?(?:mailed|sent|deposited)|deposit (?:the|a|this) check"
+    r"|send you a check|money order"
     r"|wire transfer|processing fee|training fee|application fee|registration fee|bitcoin|crypto(?:currency)?|zelle|cash ?app|venmo"
     r"|social security|ssn|bank (?:account|details|information)|routing number|driver'?s licen[sc]e|passport|date of birth"
-    r"|(?:buy|purchase|order) (?:the |your |some )?(?:equipment|software|materials|supplies)|reimburse\w*)\b", re.I)
+    r"|(?:buy|purchase|order) (?:\S+ ){0,3}?(?:equipment|software|materials|supplies|laptop|computer)|upfront (?:fee|payment|cost)"
+    r"|usdt|reimburse\w*)\b", re.I)
+# Task scams: paid "jobs" rating apps or products, run over chat and paid in crypto.
+TASK_PAY = re.compile(
+    r"\b(simple (?:online )?tasks|complete (?:\d+ )?(?:tasks|orders|sets) (?:a|per|each) day|app (?:optimi[sz]ation|boosting|rating)"
+    r"|(?:rate|review|like) (?:\w+ )?(?:apps|products|videos|hotels) (?:to|and) earn|commission (?:per|for each|on each) (?:task|order)"
+    r"|earn (?:up to )?\$\s?\d[\d,]*\+? (?:per|a|each) (?:day|week))\b", re.I)
 TOO_GOOD = re.compile(
     r"\b(no interview|without (?:an |any )?interview|guaranteed|you(?:'ve| have) been (?:selected|chosen|shortlisted)"
     r"|congratulations.{0,40}(?:hired|selected|offer)|we (?:found|came across|reviewed) your (?:resume|cv|profile)"
@@ -213,6 +222,9 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
     match = MONEY_OR_ID.search(text)
     if match:
         (weak if verified else strong).append(f"Mentions {match.group(1).lower()}: never pay, deposit a check or share ID for a job")
+    match = TASK_PAY.search(text)
+    if match:
+        (weak if verified else strong).append(f"Sounds like a task scam: \"{match.group(1)}\"")
     if not verified:
         match = TOO_GOOD.search(text)
         if match:
