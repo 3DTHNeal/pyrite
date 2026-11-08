@@ -5,7 +5,8 @@ Description=Pyrite dashboard (localhost only)
 # The workspace comes from .pyrite-home in this folder, or set Environment=PYRITE_HOME=...
 WorkingDirectory=%h/pyrite
 # The .venv that docs/operating.md has you create, so building documents works from the dashboard too.
-ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py serve --port 8787
+# The port is port under [dashboard] in search.toml, 8787 if unset.
+ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py serve
 Restart=on-failure
 RestartSec=5
 

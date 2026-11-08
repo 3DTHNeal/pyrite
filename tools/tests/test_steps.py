@@ -277,10 +277,21 @@ class Steps(unittest.TestCase):
         facts = profile.read("facts").replace("- Customer names", "- Customer names, such as Globex")
         (self.root / "profile" / "facts.md").write_bytes(facts.encode())
         self.view = {**profile.view(), **steps.view()}
-        self.assertEqual(self.view["off_limits_lists"]["unguarded"], ["Globex"])
+        # Blocked by name already: the test box shows it, as a draft's check would.
+        self.assertEqual(self.view["off_limits_lists"]["by_name"], {"blocked": ["Globex"], "shared": []})
+        tested = self.draft("offlimits", {"test": "Shipped it for Globex."})["preview"]["test"]
+        self.assertTrue(tested["blocked"])
         result = self.draft("offlimits", {"never": {"add": ["Globex"]}})
         self.assertEqual(set(result["changes"]), {"config"})
-        self.assertEqual(result["preview"]["unguarded"], [])
+        self.assertEqual(result["preview"]["by_name"], {"blocked": [], "shared": []})
+
+    def test_a_listed_name_your_sources_also_state_is_shown_as_not_blocked(self):
+        facts = profile.read("facts").replace("- Customer names", "- Customer names, such as Globex").replace(
+            "- Hired 4 engineers", "- Ran the Globex pilot\n- Hired 4 engineers")
+        (self.root / "profile" / "facts.md").write_bytes(facts.encode())
+        self.view = {**profile.view(), **steps.view()}
+        self.assertEqual(self.view["off_limits_lists"]["by_name"], {"blocked": [], "shared": ["Globex"]})
+        self.assertFalse(self.draft("offlimits", {"test": "Shipped it for Globex."})["preview"]["test"]["blocked"])
 
     def test_taking_something_off_needs_a_code(self):
         line = self.view["off_limits_lists"]["nottrue"]["items"][0]["line"]

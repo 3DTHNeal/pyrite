@@ -14,7 +14,7 @@ from pathlib import Path
 from support import CFG, CODE_ROOT, FACTS_STILL_EXAMPLE, WORKSPACE, WORKSPACE_TODOS, Base
 
 import pyrite
-from pyrite import cli, doctor, score, server, store, tasks
+from pyrite import checks, cli, doctor, launch, score, server, store, tasks, workspace
 from pyrite.workspace import INIT_EXAMPLE_HEADER, INIT_NAMED_FILES
 
 SEED = ('[[application]]\ncompany = "Acme Robotics"\ntitle = "Principal Engineer"\napplied_on = "2026-11-02"\n\n'
@@ -301,40 +301,49 @@ class NewWorkspace(unittest.TestCase):
     def test_a_master_still_the_examples_is_named_once_not_twice(self):
         self.assertFalse([what for what in self.todos() if "can pass the assay" in what])
 
-    def test_do_not_use_terms_that_forbidden_doesnt_block_are_named(self):
+    def test_do_not_use_names_are_read_from_the_fact_bank(self):
         facts = "# Facts\n\n## Do not use\n- Project Nightjar\n- Internal names: Bluebird, the Hive\n- Customer names\n\n## Skills\n- Python\n"
-        self.assertEqual(doctor.unguarded_terms(facts, []), ["Nightjar", "Bluebird", "Hive"])
-        self.assertEqual(doctor.unguarded_terms(facts, ["Bluebird", r"\bhive\b"]), ["Nightjar"])
-        self.assertEqual(doctor.unguarded_terms(facts, [r"project nightjar", "Bluebird", r"\bhive\b"]), [])
-        self.assertEqual(doctor.unguarded_terms("# Facts\n- Python\n", []), [])
+        self.assertEqual(checks.unguarded_terms(facts, []), ["Nightjar", "Bluebird", "Hive"])
+        self.assertEqual(checks.unguarded_terms(facts, ["Bluebird", r"\bhive\b"]), ["Nightjar"])
+        self.assertEqual(checks.unguarded_terms(facts, [r"project nightjar", "Bluebird", r"\bhive\b"]), [])
+        self.assertEqual(checks.unguarded_terms("# Facts\n- Python\n", []), [])
         # At any heading level, with its subsections.
         nested = "# Facts\n\n## Notes\n### Don't use\n- Project Nightjar\n#### Customers\n- Customer: Globex\n### Skills\n- Python Pro\n"
-        self.assertEqual(doctor.unguarded_terms(nested, []), ["Nightjar", "Globex"])
+        self.assertEqual(checks.unguarded_terms(nested, []), ["Nightjar", "Globex"])
+        # A comment saying what goes in the section names nothing.
+        self.assertEqual(checks.unguarded_terms("## Do not use\n<!-- Internal names, Customers and Products -->\n", []), [])
         example = (store.EXAMPLE_ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
-        self.assertEqual(doctor.unguarded_terms(example, self.cfg()["guard"]["forbidden"]), [])
+        self.assertEqual(checks.unguarded_terms(example, self.cfg()["guard"]["forbidden"]), [])
+
+    def test_a_do_not_use_name_needs_no_pattern_unless_your_sources_state_it(self):
         self.make_own("profile/facts.md")
         path = self.root / "profile" / "facts.md"
         path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n"), encoding="utf-8")
-        self.assertTrue(any("Nightjar" in what and "forbidden" in what for what in self.todos()))
+        cfg = self.cfg()
+        read = lambda rel: (self.root / rel).read_text(encoding="utf-8")
+        blocked, shared = checks.listed_terms(cfg, read)
+        self.assertEqual([term for term, _, _ in blocked], ["Nightjar"])  # Blocked by name, so nothing's left to do.
+        self.assertEqual(shared, [])
+        self.assertFalse(any("Nightjar" in what for what in self.todos()))
+        # A name the fact bank also states as fact can't be blocked by name without failing every draft that states it.
+        path.write_text(path.read_text(encoding="utf-8").replace("## Data\n", "## Data\n- Shipped Nightjar on time\n"), encoding="utf-8")
+        self.assertEqual(checks.listed_terms(cfg, read)[1], [("Nightjar", "profile/facts.md")])
+        todo = next(todo for todo in WORKSPACE_TODOS(self.root, cfg) if "Nightjar" in todo["what"])
+        self.assertIn("can't block it by name", todo["what"])
+        self.assertEqual((todo["step"], todo["severity"]), ("offlimits", "bad"))
         # A fact bank that's still the example's is named as that, not picked apart term by term.
         shutil.copy(store.EXAMPLE_ROOT / "profile" / "facts.md", path)
-        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n"), encoding="utf-8")
+        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n")
+                        .replace("## Leadership\n", "## Leadership\n- Shipped Nightjar on time\n"), encoding="utf-8")
         self.assertFalse(any("Nightjar" in what for what in self.todos()))
 
     def test_explanations_instructions_and_your_own_name_arent_taken_for_secret_names(self):
-        # Forbidding any of these would do harm: your own name would fail every draft.
+        # Blocking any of these would do harm: your own name would fail every draft.
         facts = ("# Facts\n\n## Do not use\n"
                  "- Mentions of calibration (Alex Rivera removed them from LinkedIn, 2026-11-06). Say \"Machine Control\" instead.\n"
                  "- Rivera's old team codename Nightjar; Use the plain name.\n"
                  "- Firmware 2.5 Bluebird build\n")
-        self.assertEqual(doctor.unguarded_terms(facts, [], "Alex Rivera"), ["Nightjar", "Bluebird"])
-        path = self.root / "profile" / "facts.md"
-        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n" + facts.split("## Do not use\n")[1]),
-                        encoding="utf-8")
-        todo = next(what for what in self.todos() if "forbidden" in what)
-        self.assertNotIn("Alex", todo)
-        self.assertNotIn("LinkedIn", todo)
-        self.assertNotIn("Say", todo)
+        self.assertEqual(checks.unguarded_terms(facts, [], "Alex Rivera"), ["Nightjar", "Bluebird"])
 
     def test_outside_a_venv_the_fix_makes_one_rather_than_installing_into_that_python(self):
         self.assertIn("-m venv .venv", doctor.install_fix(in_venv=False))
@@ -581,6 +590,121 @@ class Init(unittest.TestCase):
             self.assertIn("PYRITE_HOME", self.init("--name", "Sam Doe"))
         self.assertFalse(self.pointer.exists())
 
+    # ---- --blank ----
+
+    def test_the_comment_lines_a_blank_config_changes_are_in_the_example(self):
+        lines = (store.EXAMPLE_ROOT / "profile" / "search.toml").read_text(encoding="utf-8").splitlines()
+        for old, _ in workspace.BLANK_COMMENTS:
+            self.assertIn(old, lines)
+
+    def test_blank_writes_headings_and_comments_and_nothing_of_the_examples(self):
+        out = self.init("--name", "Sam Doe", "--blank")
+        self.assertIn("blank profile files", out)
+        profile = self.folder / "profile"
+        self.assertEqual(sorted(path.name for path in profile.iterdir()),
+                         ["approved-terms.txt", "cover-letter.md", "facts.md", "resume.md", "run-notes.md", "search.toml"])
+        for path in profile.iterdir():
+            text = path.read_text(encoding="utf-8")
+            for word in ("Alex", "Rivera", "Madison", "Wisconsin", "WI", "Northbridge", "Bluebird", "SkyLift", "Sunnydale", "Hooli",
+                         "Cyberdyne", "firmware", "anthropic"):
+                self.assertNotRegex(text, rf"(?i)\b{word}\b", f"{path.name} still names {word}")
+        for file in INIT_NAMED_FILES:
+            self.assertTrue((profile / file).read_text(encoding="utf-8").startswith("# Sam Doe\n"), file)
+        # search.toml is the example's, with only what describes the fictional candidate emptied.
+        cfg, example = self.cfg(), tomllib.loads((store.EXAMPLE_ROOT / "profile" / "search.toml").read_text(encoding="utf-8"))
+        for table, key in workspace.BLANK_EMPTIED:
+            self.assertEqual(cfg[table][key], [], (table, key))
+            example[table][key] = []
+        for table, key in workspace.BLANK_DROPPED:
+            del example[table][key]
+        for table in workspace.BLANK_CLEARED:
+            outer, inner = table.split(".")
+            example[outer][inner] = {}
+        del example["track"], example["promote"]["industry"]
+        example["candidate"]["name"] = "Sam Doe"
+        self.assertEqual(cfg, example)
+        self.assertIn("# [[track]]", (profile / "search.toml").read_text(encoding="utf-8"))  # The form is shown where they go.
+
+    def test_doctor_reports_what_a_blank_workspace_leaves_empty(self):
+        self.init("--name", "Sam Doe", "--blank")
+        todos = WORKSPACE_TODOS(self.folder, self.cfg())
+        whats = [todo["what"] for todo in todos]
+        self.assertIn("profile/facts.md, run-notes.md, resume.md and cover-letter.md are still blank.", whats)
+        blank = next(todo for todo in todos if "still blank" in todo["what"])
+        self.assertEqual((blank["step"], blank["tab"]), ("basics", "facts"))
+        self.assertIn("profile/search.toml lists no roles under [[track]], so a pan keeps no postings.", whats)
+        self.assertIn("profile/search.toml watches no companies, so a pan reads no job boards.", whats)
+        # Named as blank, so not again as masters the assay can't read, or as the example's.
+        self.assertFalse([what for what in whats if "can pass the assay" in what or "example's" in what or "Do not use" in what])
+        # Filling in a file takes it off. A label with nothing after it, or a comment, is still blank.
+        notes = self.folder / "profile" / "run-notes.md"
+        self.assertIn("profile/run-notes.md", doctor.still_blank(self.folder))
+        notes.write_text(notes.read_text(encoding="utf-8").replace("- **Who:**", "- **Who:** Sam Doe, open to remote roles."), encoding="utf-8")
+        self.assertNotIn("profile/run-notes.md", doctor.still_blank(self.folder))
+
+    def test_a_blank_fact_bank_approves_nothing_and_has_no_contact_line_yet(self):
+        from pyrite import factsdoc
+
+        self.init("--name", "Sam Doe", "--blank")
+        facts = (self.folder / "profile" / "facts.md").read_text(encoding="utf-8")
+        self.assertIsNone(factsdoc.Doc(facts).contact())  # The comment under ## Contact isn't taken for the line.
+        self.assertEqual(checks.claimable(facts).count("<!--"), 0)
+        self.assertNotIn("Education", checks.claimable(facts))  # A word in a comment approves nothing.
+        self.assertEqual(checks.listed_terms(self.cfg(), lambda rel: (self.folder / rel).read_text(encoding="utf-8")), ([], []))
+
+    def test_the_claude_runs_wait_for_a_blank_fact_bank(self):
+        self.init("--name", "Sam Doe", "--blank")
+        with mock.patch.object(tasks, "ROOT", self.folder), mock.patch.object(tasks, "IS_EXAMPLE", False), \
+                mock.patch.object(tasks, "_facts_still_example", return_value=False):
+            self.assertIn("still blank", tasks.not_ready(tasks.CLAUDE))
+            self.assertIsNone(tasks.not_ready(tasks.SWEEP))
+
+    # ---- --git ----
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.folder), *args], capture_output=True, text=True, check=False)
+
+    @unittest.skipUnless(shutil.which("git"), "needs git")
+    def test_git_makes_a_private_repository_that_keeps_the_database_and_leaves_out_working_files(self):
+        out = self.init("--name", "Sam Doe", "--git")
+        self.assertTrue((self.folder / ".git").is_dir())
+        self.assertEqual(self.git("remote").stdout.strip(), "")  # Never a remote.
+        self.assertIn("can't be regenerated", out)
+        self.assertNotIn("--git` makes it one", out)
+        ignored = ["data/pyrite.db-wal", "data/pyrite.db-shm", "data/confirm-code.json", "data/browser/Default/Cookies",
+                   "profile/search.previous.toml", "applications/acme/resume.previous.md", "applications/acme/~$m_Doe_Resume_Acme.docx",
+                   "data/market/area_titles.csv", "data/market/qcew/index.json"]
+        kept = ["data/pyrite.db", "data/history/log.jsonl", "data/market/outlook/robotics.json", "profile/facts.md",
+                "applications/acme/Sam_Doe_Resume_Acme.pdf", "applications/acme/Sam_Doe_Resume_Acme.docx",
+                "applications/acme/sent/Sam_Doe_Resume_Acme.pdf"]
+        for rel in ignored + kept:
+            with self.subTest(rel):
+                self.assertEqual(self.git("check-ignore", "-q", "--no-index", rel).returncode == 0, rel in ignored)
+
+    @unittest.skipUnless(shutil.which("git"), "needs git")
+    def test_git_on_the_workspace_in_use_sets_up_only_the_repository(self):
+        self.init("--name", "Sam Doe")
+        (self.folder / "profile" / "facts.md").write_text("Mine.", encoding="utf-8")
+        with mock.patch.object(store, "ROOT", self.folder.resolve()):
+            out = self.init("--git")
+            self.assertIn("files were left as they are", out)
+            self.assertTrue((self.folder / ".git").is_dir())
+            # Again, it leaves the repository and its .gitignore alone.
+            (self.folder / ".gitignore").write_text("mine\n", encoding="utf-8")
+            out = self.init("--git")
+        self.assertIn("a git repository already", out)
+        self.assertEqual((self.folder / ".gitignore").read_text(encoding="utf-8"), "mine\n")
+        self.assertEqual((self.folder / "profile" / "facts.md").read_text(encoding="utf-8"), "Mine.")
+
+    def test_git_without_git_installed_makes_nothing(self):
+        with mock.patch.object(workspace.shutil, "which", return_value=None), self.assertRaises(SystemExit) as caught:
+            self.init("--name", "Sam Doe", "--git")
+        self.assertIn("needs git", str(caught.exception.code))
+        self.assertFalse(self.folder.exists())
+
+    def test_without_git_it_says_how_to_make_one(self):
+        self.assertIn("--git` makes it one", self.init("--name", "Sam Doe"))
+
 
 class Serve(unittest.TestCase):
     def test_a_port_in_use_stops_a_second_dashboard_with_a_message(self):
@@ -602,6 +726,106 @@ class Serve(unittest.TestCase):
         self.assertIn("Ctrl+C stops it", out.getvalue())
         self.assertTrue(out.getvalue().rstrip().endswith("Stopped."))
         fake.server_close.assert_called_once()
+
+    def test_the_port_comes_from_search_toml_unless_one_is_given(self):
+        self.assertEqual(launch.dashboard_port({}), 8787)
+        self.assertEqual(launch.dashboard_port({"dashboard": {"port": 8790}}), 8790)
+        for wrong in ("8790", 0, 70000, True, 87.9):
+            with self.subTest(wrong), self.assertRaises(SystemExit) as caught:
+                launch.dashboard_port({"dashboard": {"port": wrong}})
+            self.assertIn("port under [dashboard]", str(caught.exception.code))
+        cfg = {**CFG, "dashboard": {**CFG["dashboard"], "port": 8790}}
+        for argv, port in ((["serve"], 8790), (["serve", "--port", "8791"], 8791)):
+            with mock.patch.object(cli, "load_config", return_value=cfg), mock.patch.object(server, "serve") as serve:
+                cli.main(argv)
+            serve.assert_called_once_with(port)
+        with mock.patch.object(cli, "load_config", return_value=cfg), mock.patch.object(launch, "open_dashboard") as opened:
+            cli.main(["open"])
+        opened.assert_called_once_with(8790)
+
+    def test_the_example_config_documents_the_port(self):
+        text = (store.EXAMPLE_ROOT / "profile" / "search.toml").read_text(encoding="utf-8")
+        self.assertIn("# port = 8787", text)
+
+
+class Open(unittest.TestCase):
+    """`pyrite open`, which Pyrite.cmd wraps. Nothing here starts a server, stops a process or opens a browser."""
+
+    def setUp(self):
+        self.opened: list[str] = []
+        self.child = mock.Mock()
+        self.child.poll.return_value = None
+        for name, value in (("start", mock.Mock(return_value=self.child)), ("_stop", mock.Mock()), ("listener", mock.Mock(return_value=None)),
+                            ("command_line", mock.Mock(return_value="")), ("time", mock.Mock(monotonic=mock.Mock(return_value=0.0)))):
+            patcher = mock.patch.object(launch, name, value)
+            setattr(self, name.strip("_"), patcher.start())
+            self.addCleanup(patcher.stop)
+
+    def run_open(self, answers):
+        with mock.patch.object(launch, "answering", side_effect=answers), contextlib.redirect_stdout(io.StringIO()) as out:
+            launch.open_dashboard(8790, browse=self.opened.append)
+        return out.getvalue()
+
+    def test_a_dashboard_already_answering_is_only_opened(self):
+        self.run_open([True])
+        self.assertEqual(self.opened, ["http://127.0.0.1:8790/"])
+        self.start.assert_not_called()
+
+    def test_with_nothing_on_the_port_it_starts_one_and_opens_it_once_it_answers(self):
+        out = self.run_open([False, False, True])
+        self.start.assert_called_once_with(8790)
+        self.assertEqual(self.opened, ["http://127.0.0.1:8790/"])
+        self.assertIn("keeps running", out)
+
+    def test_a_hung_dashboard_is_replaced(self):
+        self.listener.return_value = 4321
+        self.command_line.return_value = r'"C:\pyrite\.venv\Scripts\pythonw.exe" tools\pyrite.py serve'
+        out = self.run_open([False, True])
+        self.stop.assert_called_once_with(4321, 8790)
+        self.start.assert_called_once_with(8790)
+        self.assertIn("stopped answering", out)
+
+    def test_another_program_on_the_port_is_left_alone(self):
+        self.listener.return_value = 4321
+        self.command_line.return_value = "C:\\Program Files\\Something\\server.exe --listen 8790"
+        with self.assertRaises(SystemExit) as caught:
+            self.run_open([False])
+        self.assertIn("in use by another program", str(caught.exception.code))
+        self.assertIn("port under [dashboard]", str(caught.exception.code))
+        self.stop.assert_not_called()
+        self.start.assert_not_called()
+
+    def test_one_that_stops_at_once_is_run_here_to_show_why(self):
+        self.child.poll.return_value = 1
+        with mock.patch.object(server, "serve", side_effect=SystemExit("Port 8790 is already in use")) as serve, \
+                self.assertRaises(SystemExit):
+            self.run_open([False, False])
+        serve.assert_called_once_with(8790)
+        self.assertEqual(self.opened, [])
+
+    def test_only_pyrites_own_serve_counts_as_a_dashboard(self):
+        for line, ours in ((r'"C:\x\.venv\Scripts\pythonw.exe" tools\pyrite.py serve', True),
+                           ("/srv/pyrite/.venv/bin/python tools/pyrite.py serve --port 8790", True),
+                           ("/srv/pyrite/.venv/bin/pyrite serve", True),
+                           ("python -m pyrite serve", True),
+                           (r"C:\x\python.exe tools\pyrite.py demo", False),
+                           ("node /srv/pyrite-site/node_modules/.bin/vite serve", False),
+                           ("", False)):
+            with self.subTest(line):
+                self.assertEqual(bool(launch.SERVE.search(line)), ours)
+
+    def test_the_listener_is_read_from_netstat_whatever_the_systems_language(self):
+        text = ("\nActive Connections\n\n  Proto  Local Address          Foreign Address        State           PID\n"
+                "  TCP    0.0.0.0:135            0.0.0.0:0              ABHÖREN         1656\n"
+                "  TCP    127.0.0.1:8790         127.0.0.1:50000        HERGESTELLT     99\n"
+                "  TCP    127.0.0.1:8790         0.0.0.0:0              ABHÖREN         4321\n")
+        self.assertEqual(launch.netstat_listener(text, 8790), 4321)
+        self.assertIsNone(launch.netstat_listener(text, 8791))
+
+    def test_pyrite_cmd_is_a_wrapper_around_open(self):
+        text = (store.CODE_ROOT / "Pyrite.cmd").read_text(encoding="utf-8")
+        self.assertIn(r"tools\pyrite.py open", text)
+        self.assertNotIn("127.0.0.1:8787", text)  # No port of its own: it uses the one search.toml sets.
 
 
 class CommandOutput(Base):
