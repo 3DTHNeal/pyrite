@@ -6,6 +6,12 @@ from functools import lru_cache
 
 from . import quality
 
+# Which scoring the postings in a database were scored with. Raise it by one in any change that alters what `evaluate`
+# or `quality.rejection` returns for a posting already stored: its score, reasons, flags, track, or whether it's kept.
+# The next sweep then rescores the prospects nobody has acted on, so none keeps an old score or a reason in old words.
+# Changes to `freshness` and `promotion` don't need it, since the dashboard works those out afresh on every load.
+VERSION = 1
+
 FOREIGN = re.compile(
     r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|mexico|brazil|argentina|colombia|"
     r"uk|u\.k\.|united kingdom|england|london|ireland|dublin|germany|munich|berlin|france|paris|spain|madrid|"

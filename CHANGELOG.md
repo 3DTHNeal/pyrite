@@ -6,6 +6,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- **Reached out** in the job panel of a sent application logs a note to the hiring manager or a recruiter: the day, and who and what if you like. It shows in the timeline and on the card, an application one to three days old with nothing logged gets a **Reach out** to-do item, and the follow-up reminder moves to a week after the note. `pyrite outreach <id>` logs one from the command line.
+- The database records which scoring its prospects have. When an update changes how postings are scored, the next pan rescores the prospects you haven't acted on, so none keeps an old score or reason, and names any it dropped beside the sweep's result.
 - A **Profile** tab, the start of one place for the fact bank and the search settings. It lists each section with what it holds now, a **Needs you** list of what setup still needs with a button to the section that fixes it, and a **History** of every save it makes, where any file's earlier copy can be compared and put back. Sections whose editors aren't built yet say where to make the change meanwhile. The Facts and Settings tabs work as before.
 - Editors on the Profile tab for **Name and contact**, **Work history**, **Off limits** and **Skills and terms**. Each change is entered once and written everywhere it belongs: a role to the Timeline in `facts.md` and the headings of `profile/resume.md`, a blocked term to "Do not use" and the `forbidden` pattern that blocks it. Before you save, each shows what will change in every file, worked out by the same code a save uses, and Off limits has a box that shows how the assay reads any sentence. Taking anything off Off limits, or approving a term, asks for a code.
 - Profile tab editors for **Achievements**, with an achievement builder that writes one fact line and keeps where it was measured as a wording rule in `run-notes.md`, and **Master resume**, which edits the master resume and letter a block at a time and runs the fact check on them as you type, naming anything only the master says.
@@ -33,6 +35,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 - The assay blocks each capitalized name listed under "Do not use" in `facts.md`, so a name is written once and needs no pattern under `[guard] forbidden`. The error names where it's listed. A name your sources also state as fact isn't blocked this way, since every draft that states it would fail, and `pyrite doctor` and the Off limits section name it instead of asking for a pattern for every term.
 - `<!-- comments -->` in a fact bank or master approve nothing, and a comment under Contact isn't taken for the contact line.
+- `rescore` no longer drops a prospect you've acted on (a note, a next step, a pick, a fit verdict or a status of your own, such as one put back by **Undo pass**). It says how many it kept that way, and names the ones it dropped.
 - **New** needs the latest pan to have seen the listing and nothing marking it as a possible ghost.
 - A listing is never younger than the day a pan first found it, so a date a board moved forward without a pan seeing it can't make it look new.
 - Two Workday postings under the same requisition id with mostly the same title are one job, so a rewritten repost is counted as one, and titles are compared with short forms such as "Sr." and "Engr" spelled out.
@@ -64,6 +67,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- The pre-push hook works in a `git worktree` that has no `.venv` of its own: it uses the main checkout's venv, then `python3` or `python` if one is 3.11 or newer, and skips the Microsoft Store's placeholder. With none of those it says how to point it at a Python with `git config pyrite.python`, instead of failing on the Store's message.
 - A job number that isn't in the database, given to `pyrite job`, `status`, `sent`, `refresh`, `prep`, `triage`, `folder`, `finish`, `fill` or `autofill`, gets one line saying so and a non-zero exit, instead of a Python traceback. The line points at the dashboard, which lists every job, and at what `pyrite queue` actually shows: the ones waiting on a run.
 - Finish setup no longer takes words from an explanation under "Do not use" for secret names. It used to name your own name, a site mentioned in passing and an instruction such as "Say", and suggest forbidding them, which would have failed every draft. Asides in parentheses, quoted wording, the first word of each sentence and the words of `[candidate] name` are skipped.
 - Reply detection skips the receipts an application sets off, such as "You have successfully applied", "Thank you for applying" and candidate-account password and code mail. "Thank you for your interest" is still flagged, since rejections often say it. When mail matches several applications at one company and its subject names one title, only that application gets it.
