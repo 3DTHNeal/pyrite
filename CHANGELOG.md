@@ -50,6 +50,11 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- Finish setup no longer takes words from an explanation under "Do not use" for secret names. It used to name your own name, a site mentioned in passing and an instruction such as "Say", and suggest forbidding them, which would have failed every draft. Asides in parentheses, quoted wording, the first word of each sentence and the words of `[candidate] name` are skipped.
+- Reply detection skips the receipts an application sets off, such as "You have successfully applied", "Thank you for applying" and candidate-account password and code mail. "Thank you for your interest" is still flagged, since rejections often say it. When mail matches several applications at one company and its subject names one title, only that application gets it.
+- The Gmail mail check tries once more when Claude writes its tool call out as text instead of making it. A run that hands back no usable list is counted as failed in Claude usage, and `pyrite doctor` says when the last mail check failed.
+- The Industries tab counts a rejection as hearing back, not as a reply, the same as the dashboard's Reply rate.
+- **Add a posting** with the link of a job already tracked opens that job instead of adding it again, which would have tailored it a second time.
 - A score's skills reason names the words the posting used, such as "manage a team", instead of a mangled pattern such as "managw+ (a ". A keyword that matched inside another word now shows that word, so the mistake is visible.
 - The example's PID and LLM keywords no longer match inside "rapid" and "enrollment". In a real run of 116 postings, every extra hit they made was one of those two words. Copy the patterns if your `search.toml` started from the example: `'\bpid\b|\bpi control'` and `'\bv?llm|large language model'`.
 - On Windows, a second dashboard on a port already in use no longer starts beside the first, with requests going to either one. It stops and says the port is taken.

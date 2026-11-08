@@ -261,6 +261,21 @@ class NewWorkspace(unittest.TestCase):
         path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n"), encoding="utf-8")
         self.assertTrue(any("Nightjar" in what and "forbidden" in what for what in self.todos()))
 
+    def test_explanations_instructions_and_your_own_name_arent_taken_for_secret_names(self):
+        # Forbidding any of these would do harm: your own name would fail every draft.
+        facts = ("# Facts\n\n## Do not use\n"
+                 "- Mentions of calibration (Alex Rivera removed them from LinkedIn, 2026-11-06). Say \"Machine Control\" instead.\n"
+                 "- Rivera's old team codename Nightjar; Use the plain name.\n"
+                 "- Firmware 2.5 Bluebird build\n")
+        self.assertEqual(doctor.unguarded_terms(facts, [], "Alex Rivera"), ["Nightjar", "Bluebird"])
+        path = self.root / "profile" / "facts.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n" + facts.split("## Do not use\n")[1]),
+                        encoding="utf-8")
+        todo = next(what for what in self.todos() if "forbidden" in what)
+        self.assertNotIn("Alex", todo)
+        self.assertNotIn("LinkedIn", todo)
+        self.assertNotIn("Say", todo)
+
     def test_outside_a_venv_the_fix_makes_one_rather_than_installing_into_that_python(self):
         self.assertIn("-m venv .venv", doctor.install_fix(in_venv=False))
         self.assertNotIn("-m venv", doctor.install_fix(in_venv=True))
