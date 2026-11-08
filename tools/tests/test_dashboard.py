@@ -8,7 +8,7 @@ import unittest
 import unittest.mock as mock
 import urllib.error
 import urllib.request
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -77,6 +77,64 @@ class Dashboard(Base):
         self.assertIsNone(server.tracked_by_url(self.conn, "https://jobs.example.com/acme/R-200"))
         self.assertNotEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", "https://jobs.example.com/acme/R-200"), sent)
         self.assertIsNone(server.tracked_by_url(self.conn, ""))
+
+
+class Outreach(Base):
+    """Reaching out after applying: logged as an event, due on the to-do list a day or so in, and the follow-up keyed to it."""
+
+    def applied(self, days_ago: int, **kw) -> int:
+        job = self.add(**kw)
+        store.set_status(self.conn, job, "applied", follow_up_days=7)
+        when = (datetime.now(UTC) - timedelta(days=days_ago, hours=1)).isoformat(timespec="seconds")
+        self.conn.execute("UPDATE jobs SET applied_at = ?, next_action_date = ? WHERE id = ?",
+                          (when, (date.today() - timedelta(days=days_ago) + timedelta(days=7)).isoformat(), job))
+        return job
+
+    def reach_out_orders(self):
+        return [o["job_id"] for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Reach out"]
+
+    def test_due_a_day_or_so_after_applying_until_logged(self):
+        young, due, late = self.applied(0, source_id="a"), self.applied(2, source_id="b"), self.applied(5, source_id="c")
+        self.assertEqual(self.reach_out_orders(), [due])
+        server.apply_action(self.conn, due, {"action": "reached_out", "to": "the hiring manager", "note": "Asked about the team"}, CFG)
+        self.assertEqual(self.reach_out_orders(), [])
+        self.assertNotIn(young, self.reach_out_orders())
+        self.assertNotIn(late, self.reach_out_orders())
+
+    def test_logged_in_the_timeline_and_follow_up_moves_to_a_week_after_it(self):
+        job = self.applied(2)
+        yesterday = date.today() - timedelta(days=1)
+        server.apply_action(self.conn, job, {"action": "reached_out", "date": yesterday.isoformat(), "to": " the  hiring manager "}, CFG)
+        self.assertEqual(store.get_job(self.conn, job)["next_action_date"], (yesterday + timedelta(days=7)).isoformat())
+        detail = server.job_detail(self.conn, job, CFG)
+        self.assertTrue(detail["reached_out"] and detail["can_reach_out"])
+        self.assertEqual(detail["events"][0], {**detail["events"][0], "kind": "reached_out",
+                                               "detail": f"On {yesterday:%b} {yesterday.day}, to the hiring manager."})
+        self.assertEqual(store.get_job(self.conn, job)["status"], "applied")
+
+    def test_outreach_before_applying_leaves_the_follow_up_on_the_application(self):
+        job = self.applied(1)
+        before = store.get_job(self.conn, job)["next_action_date"]
+        store.log_outreach(self.conn, job, (date.today() - timedelta(days=3)).isoformat(), "a referral")
+        self.assertEqual(store.get_job(self.conn, job)["next_action_date"], before)
+
+    def test_a_next_step_of_your_own_is_left_alone(self):
+        job = self.applied(2)
+        server.apply_action(self.conn, job, {"action": "next_action", "text": "Phone screen", "date": "2030-01-02"}, CFG)
+        server.apply_action(self.conn, job, {"action": "reached_out"}, CFG)
+        self.assertEqual(store.get_job(self.conn, job)["next_action_date"], "2030-01-02")
+
+    def test_refused_before_applying_on_a_closed_job_or_a_day_to_come(self):
+        prospect = self.add(source_id="p")
+        self.assertFalse(server.job_detail(self.conn, prospect, CFG)["can_reach_out"])
+        closed = self.applied(2, source_id="r")
+        store.set_status(self.conn, closed, "rejected")
+        job = self.applied(2, source_id="j")
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        for target, day in ((prospect, ""), (closed, ""), (job, tomorrow), (job, "next week")):
+            with self.subTest(target=target, day=day), self.assertRaises(ValueError):
+                server.apply_action(self.conn, target, {"action": "reached_out", "date": day}, CFG)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM events WHERE kind = 'reached_out'").fetchone()[0], 0)
 
 
 class Security(unittest.TestCase):

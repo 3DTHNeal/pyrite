@@ -228,8 +228,93 @@ class DiscoveryMatching(Discovery):
         ids = {r["source_id"]: r["id"] for r in self.conn.execute("SELECT id, source_id FROM jobs")}
         store.set_status(self.conn, ids["2"], "applied")
         self.conn.execute("UPDATE jobs SET location = 'Berlin, Germany' WHERE id IN (?, ?)", (ids["1"], ids["2"]))
-        self.assertEqual(discover.rescore(self.conn, self.cfg), {"kept": 0, "dropped": 1})
+        self.assertEqual(discover.rescore(self.conn, self.cfg), {"kept": 0, "dropped": 1, "held": 0,
+                                                                 "removed": ["Acme: Principal Firmware Engineer (location)"]})
         self.assertEqual(store.get_job(self.conn, ids["2"])["status"], "applied")
+
+    def test_rescore_keeps_a_prospect_you_acted_on_but_not_one_you_only_opened(self):
+        stub_feed(None, [self.posting("1"), self.posting("2", title="Staff Embedded Engineer", desc="embedded c++ python robot firmware hardware two"),
+                         self.posting("3", title="Staff Firmware Engineer", desc="firmware c++ python robot hardware embedded three")])
+        self.sweep()
+        ids = {r["source_id"]: r["id"] for r in self.conn.execute("SELECT id, source_id FROM jobs")}
+        # Passed, then put back with Undo pass: still new, but a decision of yours.
+        store.set_status(self.conn, ids["1"], "passed")
+        store.set_status(self.conn, ids["1"], "new", "Pass undone")
+        store.log_event(self.conn, ids["2"], "seen")
+        # Closed by the sweep and put back when the posting came back: nothing of yours.
+        store.log_event(self.conn, ids["3"], "new", discover.BACK_UP)
+        self.conn.execute("UPDATE jobs SET location = 'Berlin, Germany'")
+        result = discover.rescore(self.conn, self.cfg)
+        self.assertEqual((result["kept"], result["dropped"], result["held"]), (0, 2, 1))
+        self.assertEqual(store.get_job(self.conn, ids["1"])["status"], "new")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+        for field, value in (("notes", "Ask about the team"), ("next_action", "Read up on them"), ("priority", 1), ("fit", "good")):
+            with self.subTest(field):
+                self.assertTrue(discover.acted_on(self.conn, {**dict(store.get_job(self.conn, ids["1"])), "id": -1, field: value}))
+        self.assertFalse(discover.acted_on(self.conn, {**dict(store.get_job(self.conn, ids["1"])), "id": -1}))
+
+    def test_dropping_a_prospect_keeps_its_claude_runs_and_mail_warnings(self):
+        stub_feed(None, [self.posting("1")])
+        self.sweep()
+        job = self.conn.execute("SELECT id FROM jobs").fetchone()[0]
+        self.conn.execute("INSERT INTO claude_runs (job_id, ts, kind, ok) VALUES (?, ?, 'triage', 0)", (job, store.now()))
+        self.conn.execute("INSERT INTO mail_alerts (message_id, ts, job_id) VALUES ('m1', ?, ?)", (store.now(), job))
+        self.conn.execute("UPDATE jobs SET location = 'Berlin, Germany'")
+        self.assertEqual(discover.rescore(self.conn, self.cfg)["dropped"], 1)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*), MAX(job_id) FROM claude_runs").fetchone()[:], (1, None))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*), MAX(job_id) FROM mail_alerts").fetchone()[:], (1, None))
+
+
+class ScoringVersion(Discovery):
+    """A scoring change in an update reaches the prospects already stored at the next sweep, with no `rescore` by hand."""
+
+    def test_a_new_database_starts_current_and_an_older_one_starts_behind(self):
+        self.assertEqual(store.scoring_version(self.conn), score.VERSION)
+        path = Path(self.tmp.name) / "old.db"
+        with contextlib.closing(store.connect(path)) as old:
+            old.execute("INSERT INTO jobs (source_key, source_id, company, title, first_seen, last_seen) VALUES ('x', '1', 'Acme', 'Lead', '', '')")
+            old.execute("DELETE FROM meta")
+            old.commit()
+        with contextlib.closing(store.connect(path)) as old:
+            self.assertEqual(store.scoring_version(old), 0)
+
+    def test_sweep_rescores_prospects_once_when_the_scoring_is_newer(self):
+        stub_feed(None, [self.posting("1"), self.posting("2", title="Staff Embedded Engineer", desc="embedded c++ python robot firmware hardware two"),
+                         self.posting("3", title="Staff Firmware Engineer", desc="firmware c++ python robot hardware embedded three")])
+        self.assertNotIn("rescored", self.sweep())
+        ids = {r["source_id"]: r["id"] for r in self.conn.execute("SELECT id, source_id FROM jobs")}
+        store.set_status(self.conn, ids["3"], "applied")
+        # As an older version left them: a reason in old words, a posting a fixed filter now drops, and a sent application.
+        self.conn.execute("UPDATE jobs SET score_reasons = '[\"skills +5: technical (leadership\"]' WHERE id IN (?, ?)", (ids["1"], ids["3"]))
+        self.conn.execute("UPDATE jobs SET location = 'Berlin, Germany' WHERE id = ?", (ids["2"],))
+        store.set_meta(self.conn, store.SCORING_VERSION, str(score.VERSION - 1))
+        self.conn.commit()
+        self.clock.advance()
+        stats = self.sweep()
+        self.assertEqual({key: stats["rescored"][key] for key in ("kept", "dropped", "from", "to")},
+                         {"kept": 1, "dropped": 1, "from": score.VERSION - 1, "to": score.VERSION})
+        self.assertEqual(stats["rescored"]["removed"], ["Acme: Staff Embedded Engineer (location)"])
+        self.assertNotIn("technical (leadership", store.get_job(self.conn, ids["1"])["score_reasons"])
+        # A job you've sent keeps the score it was sent with.
+        self.assertIn("technical (leadership", store.get_job(self.conn, ids["3"])["score_reasons"])
+        self.assertEqual(store.scoring_version(self.conn), score.VERSION)
+        # The run's record keeps what was dropped, which the dashboard shows beside the sweep.
+        recorded = json.loads(self.conn.execute("SELECT stats FROM runs ORDER BY id DESC LIMIT 1").fetchone()[0])
+        self.assertEqual(recorded["rescored"]["dropped"], 1)
+        self.clock.advance()
+        self.assertNotIn("rescored", self.sweep())
+
+    def test_manual_rescore_records_the_version_too(self):
+        store.set_meta(self.conn, store.SCORING_VERSION, "0")
+        discover.rescore(self.conn, self.cfg)
+        self.assertEqual(store.scoring_version(self.conn), score.VERSION)
+
+    def test_summary_names_what_was_dropped(self):
+        said = discover.rescore_summary({"kept": 1, "dropped": 2, "held": 1, "removed": ["Acme: Lead (location)", "Acme: Head (score)"]})
+        self.assertEqual(said, "Scoring changed in this version, so 1 prospect got new scores. Dropped 2 prospects that no longer pass: "
+                               "Acme: Lead (location); Acme: Head (score). Kept 1 prospect you've acted on that no longer pass.")
+        many = discover.rescore_summary({"kept": 0, "dropped": 3, "removed": ["a", "b", "c"]}, names=2)
+        self.assertIn("a; b; 1 more.", many)
 
 
 class Reposts(Discovery):
