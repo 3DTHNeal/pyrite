@@ -7,16 +7,26 @@ measured, never use anything on the do-not-use list.
 import hashlib
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from .store import ROOT
 
+# A date alone on its line is a letter's date, which may be any day. A date inside a sentence is a claim like any other.
 DATE_LINE = re.compile(
-    r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b"
+    r"(?m)^[ \t]*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}[ \t]*$"
 )
 NUMBER = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
 PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*%")
-URLISH = re.compile(r"https?://|www\.|\b[\w-]+\.(?:com|io|ai|org|net|co|dev)\b", re.I)
+# Domains people link from a resume, link shorteners and chat handles included, and anything shaped like domain/path.
+# File types a skill list names, such as Node.js/React, aren't domains.
+LINK_TLDS = "com|io|ai|org|net|co|dev|app|me|ly|gg|so|sh|to|tv|cc|gl|xyz|info|biz|us|uk|ca|de|eu|link|site|page|online|tech|blog|bio|fm|im"
+URLISH = re.compile(
+    rf"https?://|www\.|\b[\w-]+\.(?:{LINK_TLDS})\b|\b[\w-]{{2,}}\.(?!(?:js|ts|py|md|rb|go|rs|cs|cpp|java|kt|net)\b)[a-z]{{2,}}/[\w-]",
+    re.I,
+)
+# Markdown emphasis can split a word in two that renders whole: **Blue****bird**, or _40_. Underscores inside a word stay.
+EMPHASIS = re.compile(r"\*+|(?<!\w)_+|_+(?!\w)")
 PLACEHOLDER = re.compile(r"\[[^\]]*\]|\{\{|\bTODO\b|\bTBD\b|\bXXX\b|<[a-z_ ]+>")
 WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#]*(?:[-/.][A-Za-z0-9+#]+)*\+*")
 SENTENCE = re.compile(r"(?<=[.!?])\s+|\n")
@@ -24,10 +34,26 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+|\n")
 EXCLUDED_SECTION = re.compile(r"## (do not use|unsupported)", re.I)
 # A negative only disclaims what follows it in the same clause. "Not only" is no negative at all.
 NOT_A_NEGATIVE = re.compile(r"\b(?:not|no)\s+(?:only|just|merely|less|fewer)\b", re.I)
-CLAUSE_BREAK = re.compile(r";|\b(?:but|however|although|though|whereas)\b", re.I)
+# Punctuation and joining words start a new clause, so "With no added headcount, cut defects by 83%" denies nothing.
+CLAUSE_BREAK = re.compile(
+    r"[;,:()]|\s[-–]\s|—|\b(?:but|however|although|though|whereas|while|and|after|before|when|which|who|where|since|because|then)\b",
+    re.I,
+)
+# A denial sits right before the claim it denies: "I have not yet worked under X", "no X experience".
+# A negative further back is about something else: "Never missed a milestone leading X" is a claim of X.
+DENIAL_REACH = 3
 FIRST_PERSON_DENIAL = re.compile(
     r"\bI\s+(?:have|had|do|did|am|was|would|could|can|will)\s+(?:not|never)\b|\bI\s+have\s+yet\s+to\b|\bI\s+never\b"
     r"|\bI\s+(?:haven|hadn|don|didn|wasn|couldn|wouldn|won|can)['’]t\b|\bI['’]ve\s+(?:not|never)\b"
+)
+# A first-person denial after the claim counts only when it points back at it: "...and I have not done it", "...I haven't."
+# "Led X, and I never missed a deadline" denies the deadline, not X.
+REFERS_BACK = re.compile(r"(?:\s+[\w'’]+){0,4}?\s+(?:it|that|this|them|one|so|either|any|yet)\b|\W*$", re.I)
+# A claim the sentence puts in the posting's mouth isn't yours: "Your posting lists X as a plus, and I have not worked under Y".
+ATTRIBUTED = re.compile(
+    r"\b(?:posting|role|job|position|description|you|your)\b[^.;]{0,60}?"
+    r"\b(?:lists?|asks?|requires?|mentions?|wants?|calls?|prefers?|names?|includes?|needs?)\b(?:\W+\w+){0,3}?\W*$",
+    re.I,
 )
 # Numbers written as words slip past a check on digits. One to ten are too common in prose to police.
 NUMBER_WORD = re.compile(
@@ -171,9 +197,38 @@ def _disclaimed(before: str, after: str, disclaimers: list) -> bool:
     on denies nothing: "Led X with no delays" is still a claim.
     """
     clause = CLAUSE_BREAK.split(NOT_A_NEGATIVE.sub(" ", before))[-1]
-    if any(re.search(pattern, clause, re.I) for pattern in disclaimers):
+    for pattern in disclaimers:
+        for negative in re.finditer(pattern, clause, re.I):
+            if len(clause[negative.end():].split()) <= DENIAL_REACH:
+                return True
+    denials = list(FIRST_PERSON_DENIAL.finditer(after))
+    if any(REFERS_BACK.match(after, denial.end()) for denial in denials):
         return True
-    return FIRST_PERSON_DENIAL.search(after) is not None
+    return bool(denials) and ATTRIBUTED.search(before) is not None
+
+
+def _disguises(text: str, label: str) -> list[str]:
+    """Characters that make a word read one way and match another. None belongs in a resume, a letter or a brief."""
+    errors = []
+    hidden = sorted({f"U+{ord(ch):04X}" for ch in text.lstrip("﻿") if unicodedata.category(ch) == "Cf"})
+    if hidden:
+        errors.append(f"{label} contains invisible characters ({', '.join(hidden[:5])}). Retype the lines that hold them.")
+    mixed = []
+    for word in re.findall(r"[^\W\d_]+", text):
+        scripts = {unicodedata.name(ch, "?").split(" ")[0] for ch in word}
+        if "LATIN" in scripts and len(scripts) > 1 and word not in mixed:
+            mixed.append(word)
+    if mixed:
+        errors.append(f"{label} mixes alphabets inside a word, which hides it from the checks: {', '.join(mixed[:5])}")
+    return errors
+
+
+def _matchable(text: str) -> str:
+    """The text as a reader sees it: compatibility forms folded (full-width digits, no-break spaces), invisible characters
+    and emphasis markers gone. Every check reads this, so a word split by formatting is still that word."""
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return EMPHASIS.sub("", text)
 
 
 def _unsupported(text: str, guard: dict, label: str) -> tuple[list[str], list[str]]:
@@ -200,6 +255,8 @@ def check_text(
     errors, warnings = [], []
     guard = cfg["guard"]
     label = "Resume" if kind == "resume" else "Cover letter"
+    errors += _disguises(text, label)
+    text = _matchable(text)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
 
     # Nothing from the do-not-use list, anywhere.
@@ -213,8 +270,8 @@ def check_text(
     errors += unsupported
 
     if contact_line is None:
-        contact_line = next((l for l in sources.splitlines() if l.startswith("@ ")), None)
-    contact_line = contact_line.strip() if contact_line else None
+        contact_line = next((row for row in sources.splitlines() if row.startswith("@ ")), None)
+    contact_line = _matchable(contact_line).strip() if contact_line else None
     if contact_line and contact_line not in lines:
         errors.append(f"{label} contact line doesn't match the approved one.")
     name_line = f"# {cfg['candidate']['name']}"
@@ -261,7 +318,7 @@ def check_text(
     # Specialist terms need a source. A resume can't name a skill you've never claimed, and a title
     # from a job board is no source: on a resume only the exact title was set aside above. A letter
     # names the role in its own words, and its terms only ever warn.
-    plain = "\n".join(_clean_markup(l.strip()) for l in body.splitlines())
+    plain = "\n".join(_clean_markup(row.strip()) for row in body.splitlines())
     allowed = _vocabulary(company if kind == "resume" else f"{company} {title}")
     allowed |= {w.lower() for w in guard.get("ordinary_words", [])}
     fix = ". Remove them, or add them to profile/approved-terms.txt if they're true."
@@ -308,6 +365,8 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
     """
     errors, warnings = [], []
     guard = cfg["guard"]
+    errors += _disguises(text, "Brief")
+    text = _matchable(text)
 
     for pattern in guard["forbidden"]:
         match = re.search(pattern, text, re.I)
@@ -352,7 +411,8 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
 
 
 def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
-    errors, warnings = [], []
+    errors: list[str] = []
+    warnings: list[str] = []
     source = ROOT / cfg["guard"]["heading_source"]
     if not source.exists():
         # Nothing to compare the employers, titles and dates with, so nothing can pass that check.
@@ -360,14 +420,14 @@ def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
                 "your workspace. Point it at your own master resume."], warnings
     reference = source.read_text(encoding="utf-8")
     # Stripped first, as the builder does: an indented heading still prints as a heading.
-    headings = lambda doc: {l.strip() for l in doc.splitlines() if l.strip().startswith(("### ", "#### "))}
+    headings = lambda doc: {row.strip() for row in doc.splitlines() if row.strip().startswith(("### ", "#### "))}
     approved, present = headings(reference), headings(text)
     for heading in sorted(present - approved):
         errors.append(f"Employer, title or dates differ from your record: {heading!r}")
     for heading in sorted(approved - present):
         warnings.append(f"Left out of the timeline: {heading.lstrip('# ')}")
     for needed in ("## Experience", "## Education"):
-        if not any(l.strip().startswith(needed) for l in text.splitlines()):
+        if not any(row.strip().startswith(needed) for row in text.splitlines()):
             errors.append(f"Resume is missing the {needed[3:]} section.")
     for item in cfg["guard"].get("expected_on_resume", []):
         if item["text"] not in text:
@@ -400,7 +460,7 @@ def fingerprints(folder: Path) -> dict[str, str]:
 def changed_since(folder: Path, checked: dict) -> list[str]:
     """Which of the files that passed have changed or gone since, plus a cover letter added afterwards."""
     names = set(checked) | {"cover-letter.md"}
-    now = {}
+    now: dict[str, str | None] = {}
     for name in names:
         try:
             now[name] = hashlib.sha256((folder / name).read_bytes()).hexdigest()

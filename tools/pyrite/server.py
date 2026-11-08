@@ -10,20 +10,36 @@ import sqlite3
 import statistics
 import tomllib
 import traceback
-from datetime import date, datetime, timezone
+from collections.abc import Sequence
+from datetime import date, datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from . import checks, claude_code, deadline, doctor, facts, fill, mail, prep, refresh, tasks, workday
+from . import checks, claude_code, deadline, doctor, facts, fill, mail, prep, refresh, settings, tasks, workday
 from . import score as scoring
-from . import settings
 from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
 from .store import (
-    DEFAULT_FIX_ATTEMPTS, IS_EXAMPLE, REPLY_DISMISSED, ROOT, STATUSES, TAILOR_REQUESTED, changed_after_sending, connect, fix_attempts,
-    get_job, job_dict, load_config, log_event, now, possible_replies, quiet_days_since, sent_copies, set_status,
+    DEFAULT_FIX_ATTEMPTS,
+    IS_EXAMPLE,
+    REPLY_DISMISSED,
+    ROOT,
+    STATUSES,
+    TAILOR_REQUESTED,
+    changed_after_sending,
+    connect,
+    fix_attempts,
+    get_job,
+    job_dict,
+    load_config,
+    log_event,
+    now,
+    possible_replies,
+    quiet_days_since,
+    sent_copies,
+    set_status,
 )
 
 STATIC = Path(__file__).parent / "static"
@@ -40,7 +56,8 @@ STATIC_FILES = {
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
 }
-CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; "
+       "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 HEARD_BACK = {"reply": "responded", "interview": "interviewing", "offer": "offer", "rejected": "rejected"}
 # What the dashboard's own buttons set. Ready and needs_fix come only from the fact checker.
 USER_STATUSES = ("applied", "passed", "ghosted", "withdrawn")
@@ -66,7 +83,7 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     if not company or not title:
         raise ValueError("Company and title are required.")
     url = safe_url(url)
-    source_id = hashlib.sha1(f"{company}|{title}|{url}".encode()).hexdigest()[:16]
+    source_id = hashlib.sha1(f"{company}|{title}|{url}".encode(), usedforsecurity=False).hexdigest()[:16]
     existing = conn.execute(
         "SELECT id FROM jobs WHERE source_key = 'manual' AND source_id = ?", (source_id,)
     ).fetchone()
@@ -215,7 +232,7 @@ def _gone_text(job: dict, ghost_days: int) -> str:
             "unless you log a reply or set a next step.")
 
 
-def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: list[dict] = (), ghost_days: int = 0) -> list[dict]:
+def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Sequence[dict] = (), ghost_days: int = 0) -> list[dict]:
     """Today's to-do list, most urgent first."""
     orders = []
     for alert in alerts:
@@ -339,7 +356,7 @@ def build_state(conn, cfg) -> dict:
         "to_triage": len(radar),
     }
     # Each job once, at the stage it's at now, so a resume that went out counts as sent and no longer as ready.
-    at = lambda *statuses: sum(j["status"] in statuses for j in jobs)  # noqa: E731
+    at = lambda *statuses: sum(j["status"] in statuses for j in jobs)
     funnel = [
         {"stage": "Prospects", "count": at("new")},
         {"stage": "Being tailored", "count": at("shortlisted", "needs_fix")},
@@ -415,6 +432,21 @@ def job_detail(conn, job_id: int, cfg: dict) -> dict:
     return job
 
 
+def _reopen_target(job) -> str:
+    """Where a reopened job goes back to. Ready only if the assay's last verdict was a pass and nothing has changed since:
+    having once been ready says nothing about the draft on disk now."""
+    if job["applied_at"]:
+        return "applied"
+    if not job["app_folder"]:
+        return "shortlisted"
+    raw = job["check_result"]
+    result = (json.loads(raw) if isinstance(raw, str) and raw else raw) or {}
+    if not result:
+        return "shortlisted"
+    passed = result.get("ok") and result.get("checked") and not checks.changed_since(ROOT / job["app_folder"], result["checked"])
+    return "ready" if passed else "needs_fix"
+
+
 def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
     action = body.get("action")
     note = str(body.get("note") or "").strip()[:2000]
@@ -466,8 +498,7 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
     elif action == "interview_prep":
         prep.start(conn, job_id)
     elif action == "reopen":
-        target = "applied" if job["applied_at"] else "ready" if job["ready_at"] else "shortlisted"
-        set_status(conn, job_id, target, "Reopened", follow_up)
+        set_status(conn, job_id, _reopen_target(job), "Reopened", follow_up)
     elif action == "unpass":
         before = _status_before_pass(conn, job_id) if job["status"] == "passed" else None
         if before is None:
@@ -608,6 +639,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "json only"}, 415)
         try:
             length = int(self.headers.get("Content-Length") or 0)
+            if length < 0:
+                # read(-1) would wait for a close that never comes, holding a thread.
+                return self._json({"error": "bad request"}, 400)
             if length > 500_000:
                 return self._json({"error": "too large"}, 413)
             body = json.loads(self.rfile.read(length) or b"{}")

@@ -36,10 +36,10 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-if sys.version_info < (3, 11):
+if sys.version_info < (3, 11):  # noqa: UP036  Kept so an old Python gets a message, not a traceback.
     sys.exit("The builder needs Python 3.11 or newer, and this is {}.{}. Run it with the venv's Python: "
              "see docs/operating.md.".format(*sys.version_info[:2]))
 try:
@@ -203,7 +203,7 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", 
             add_rich(par, line)
 
     props = doc.core_properties
-    now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
     props.author = author
     props.last_modified_by = author
     props.title = out.stem.replace("_", " ")
@@ -214,7 +214,7 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", 
     props.version = DRAFTER_VERSION
     props.created = props.modified = now
     props.revision = 1
-    doc.save(out)
+    doc.save(str(out))
 
 
 def build_txt(source: Path, out: Path, letter: bool = False):
@@ -276,7 +276,7 @@ def lint_pdf(source: Path, pdf: Path, letter: bool = False) -> list[str]:
     if LIGATURE.search(text):
         problems.append("the export turned letter pairs such as 'fi' into ligatures, which a keyword search can't match")
     # The top lines must come out as separate lines: a parser that reads "Headline City, ST" as one line loses both.
-    top = [_squash(l) for l in text.splitlines() if l.strip()][:4]
+    top = [_squash(row) for row in text.splitlines() if row.strip()][:4]
     company_dates = ""
     for raw in source.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -287,7 +287,7 @@ def lint_pdf(source: Path, pdf: Path, letter: bool = False) -> list[str]:
         elif line.startswith("@ "):
             wanted = [("contact detail", part) for part in line[2:].split(SEPARATOR)]
             first = _squash(line[2:].split(SEPARATOR)[0])
-            if any(first in l and len(l) > len(_squash(line[2:].replace(SEPARATOR, BUILT_SEPARATOR))) + 2 for l in top):
+            if any(first in row and len(row) > len(_squash(line[2:].replace(SEPARATOR, BUILT_SEPARATOR))) + 2 for row in top):
                 problems.append("the contact line is run together with the line above it in the PDF's text")
         elif line.startswith("## ") and not letter:
             wanted = [("heading", line[3:])]

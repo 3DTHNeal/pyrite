@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .store import CODE_ROOT, now
@@ -190,7 +190,7 @@ def latest(conn, names: dict[str, str], stale_minutes: int, stale_detail: str) -
     found = {}
     for row in rows:
         state, detail = names[row["kind"]], row["detail"]
-        minutes = (datetime.now(timezone.utc) - datetime.fromisoformat(row["ts"])).total_seconds() / 60
+        minutes = (datetime.now(UTC) - datetime.fromisoformat(row["ts"])).total_seconds() / 60
         # Past this a run must have died, for instance when the PC went to sleep or restarted.
         if state == "running" and minutes > stale_minutes:
             state, detail = "failed", stale_detail
@@ -225,7 +225,8 @@ def _count(value) -> float | None:
 
 def record(conn, job_id: int, kind: str, result: dict, seconds: float, ok: bool) -> None:
     """Keep what one run used. Committed straight away, so a run that fails and rolls back is still counted."""
-    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    raw_usage = result.get("usage")
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
     tokens_in = [count for count in (_count(usage.get(key)) for key in INPUT_KEYS) if count is not None]
     conn.execute(
         """INSERT INTO claude_runs (job_id, ts, kind, ok, seconds, turns, input_tokens, output_tokens, cost_usd)
@@ -275,7 +276,7 @@ def usage(conn) -> dict:
     A Claude Code session of your own, such as one following daily_run.md, isn't one of them, so it isn't counted."""
     sums = """COUNT(*) AS runs, SUM(ok = 0) AS failed, SUM(seconds) AS seconds, SUM(input_tokens) AS input_tokens,
               SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd"""
-    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+    since = (datetime.now(UTC) - timedelta(days=7)).isoformat(timespec="seconds")
     kinds = conn.execute(f"SELECT kind, {sums} FROM claude_runs GROUP BY kind ORDER BY kind").fetchall()
     return {
         "week": _totals(conn.execute(f"SELECT {sums} FROM claude_runs WHERE ts >= ?", (since,)).fetchone()),

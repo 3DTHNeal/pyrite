@@ -221,7 +221,9 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
     # Asked again, since judging has just shortlisted more. A stretch waits unless you picked it yourself.
     found = queue(conn, cfg)
     drafts = [job for job in found["to_tailor"] if job["fit"] != "stretch" or job["priority"]]
-    ready, blocked, first_reason = [], [], ""
+    ready: list[str] = []
+    blocked: list[str] = []
+    first_reason = ""
     for index, job in enumerate(drafts, start=1):
         if time.monotonic() > deadline:
             break

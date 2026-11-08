@@ -16,13 +16,14 @@ import os
 import re
 import ssl
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .sources import INVISIBLE_TEXT
+from .sources import strip_invisible
 from .store import ACTIVE, REPLY_DETECTED, log_event, now
 
 CREDENTIALS_PATH = Path.home() / ".config" / "pyrite" / "imap.env"
@@ -97,7 +98,7 @@ class Message:
 
     def detail(self) -> str:
         sender = f"{self.name} <{self.address}>" if self.name else self.address
-        when = self.date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        when = self.date.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
         return f"From {sender} | Subject: {self.subject or '(none)'} | Date: {when}"
 
 
@@ -159,7 +160,7 @@ def open_client(creds: Credentials):
 
 
 def _clean(text, limit: int) -> str:
-    text = UNSAFE_WHITESPACE.sub(" ", INVISIBLE_TEXT.sub("", str(text or ""))).strip()
+    text = UNSAFE_WHITESPACE.sub(" ", strip_invisible(str(text or ""))).strip()
     return text[:limit]
 
 
@@ -167,7 +168,7 @@ def parse_headers(raw: bytes) -> Message | None:
     """Turn raw header bytes into a Message, or None if the sender or date can't be trusted to parse."""
     try:
         parsed = email.message_from_bytes(raw, policy=email.policy.default)
-        addresses = parsed["from"].addresses if parsed["from"] else ()
+        addresses: Sequence = parsed["from"].addresses if parsed["from"] else ()
         if len(addresses) != 1:
             return None
         local, domain = addresses[0].username.lower(), addresses[0].domain.lower()
@@ -180,7 +181,7 @@ def parse_headers(raw: bytes) -> Message | None:
     if not DOMAIN_SHAPE.fullmatch(domain) or not re.fullmatch(r"[a-z0-9._%+=-]+", local):
         return None
     if date.tzinfo is None:
-        date = date.replace(tzinfo=timezone.utc)
+        date = date.replace(tzinfo=UTC)
     return Message(_clean(name, 80), local, domain, _clean(subject, 200), date, bulk)
 
 
@@ -239,7 +240,7 @@ def is_match(job, message: Message, domains: set[str]) -> bool:
 
 def _as_utc(iso: str) -> datetime:
     value = datetime.fromisoformat(iso)
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _cutoff(job) -> datetime:
@@ -316,7 +317,7 @@ def _read_mailbox(creds: Credentials, jobs: list, cfg: dict, client_factory) -> 
         if not jobs:
             return [], folder  # Still logged in above, so setup can be tested before the first application.
         days = cfg.get("inbox", {}).get("lookback_days", DEFAULT_LOOKBACK_DAYS)
-        oldest_allowed = datetime.now(timezone.utc) - timedelta(days=days)
+        oldest_allowed = datetime.now(UTC) - timedelta(days=days)
         # SINCE ignores time zones, so start a day early and let _cutoff decide.
         since = max(oldest_allowed, min(_cutoff(job) for job in jobs)) - timedelta(days=1)
         return read_messages(client, since, creds.user.lower()), folder
@@ -327,7 +328,7 @@ def _read_mailbox(creds: Credentials, jobs: list, cfg: dict, client_factory) -> 
             pass
 
 
-def record_matches(conn, jobs: list, messages: list[Message], cfg: dict) -> list[dict]:
+def record_matches(conn, jobs: list, messages: Sequence[Message], cfg: dict) -> list[dict]:
     """Add each new match to its job's timeline. This never touches a job's status."""
     found = []
     for job in jobs:

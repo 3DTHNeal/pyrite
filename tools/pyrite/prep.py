@@ -94,9 +94,11 @@ def _write(conn, cfg, job_id: int, folder: str, claude: str) -> tuple[str, list[
     feedback = ""
     for _ in range(ATTEMPTS):
         job = get_job(conn, job_id)
+        # An earlier brief left in place mustn't pass for a new one, so the file has to change.
+        before = brief.read_bytes() if brief.exists() else None
         summary = claude_code.ask(conn, job_id, "prep", command(claude, folder), prompt(job, folder, feedback),
                                   ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
-        if not brief.exists():
+        if not brief.exists() or brief.read_bytes() == before:
             feedback = f"- You didn't write {folder}/{BRIEF}."
             continue
         errors, warnings = checks.check_brief(

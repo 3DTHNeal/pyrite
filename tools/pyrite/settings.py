@@ -12,6 +12,7 @@ import re
 import threading
 import time
 import tomllib
+from typing import Any
 
 from . import checks, score, store
 
@@ -51,7 +52,8 @@ def skills(promote: dict) -> dict:
     facts = _claimable_facts()
     result = {}
     for industry in promote.get("industry", []):
-        have, gaps = [], []
+        have: list[str] = []
+        gaps: list[str] = []
         for want in industry.get("wants", []):
             try:
                 found = re.search(want.get("match") or score._named(want["name"]), facts, re.I)
@@ -105,7 +107,7 @@ def _list(value, what: str) -> list:
 
 def _unique(names: list, what: str) -> None:
     lowered = [n.lower() for n in names]
-    for name, low in zip(names, lowered):
+    for name, low in zip(names, lowered, strict=True):
         if lowered.count(low) > 1:
             raise ValueError(f"{what}: '{name}' is listed twice.")
 
@@ -114,7 +116,7 @@ def _named_item(raw, what: str, with_points: bool = False) -> dict:
     """A city or a wanted skill: a name, with a pattern and points if they were given."""
     if not isinstance(raw, dict):
         raise ValueError(f"{what}: that isn't a valid entry.")
-    item = {"name": _name(raw.get("name"), what)}
+    item: dict[str, Any] = {"name": _name(raw.get("name"), what)}
     label = f"{what} '{item['name']}'"
     if with_points and raw.get("points") is not None:
         item["points"] = _points(raw["points"], label)
@@ -127,7 +129,7 @@ def validate(raw) -> dict:
     """Turn what the form sent into a clean section, or say what's wrong with it."""
     if not isinstance(raw, dict):
         raise ValueError("Nothing to save.")
-    promote = {
+    promote: dict[str, Any] = {
         "city_points": _points(raw.get("city_points"), "Points for a city"),
         "industry_points": _points(raw.get("industry_points"), "Points for an industry"),
         "mentions_needed": _points(raw.get("mentions_needed"), "Mentions needed"),
@@ -141,7 +143,7 @@ def validate(raw) -> dict:
     for entry in _list(raw.get("industry"), "Industries"):
         if not isinstance(entry, dict):
             raise ValueError("Industry: that isn't a valid entry.")
-        industry = {"name": _name(entry.get("name"), "Industry")}
+        industry: dict[str, Any] = {"name": _name(entry.get("name"), "Industry")}
         label = f"Industry '{industry['name']}'"
         if entry.get("points") is not None:
             industry["points"] = _points(entry["points"], label)
@@ -189,7 +191,8 @@ def render(promote: dict) -> str:
         "[promote]",
         f"city_points = {promote['city_points']}       # Each list counts once, at its best match.",
         f"industry_points = {promote['industry_points']}",
-        f"mentions_needed = {promote['mentions_needed']}    # Times an industry's terms must appear in a description. At 2, degree lists and passing mentions count.",
+        (f"mentions_needed = {promote['mentions_needed']}    # Times an industry's terms must appear in a description. "
+         "At 2, degree lists and passing mentions count."),
         "# Matched against the posting's location. The name is matched as a whole word, and `match`",
         "# replaces that with a pattern. Add `points` to any line to override city_points.",
         "cities = [", *_inline_list(promote["cities"]), "]",

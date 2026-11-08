@@ -30,7 +30,7 @@ import zlib
 from pathlib import Path
 
 # Before the definitions below, which an older Python can't read: a privacy check that crashes mustn't look like one that ran.
-if sys.version_info < (3, 11):
+if sys.version_info < (3, 11):  # noqa: UP036
     sys.exit("This check needs Python 3.11 or newer, and this is {}.{}. On Windows, `py -3 tools/check_public.py` runs the newest "
              "one installed, and elsewhere `python3` may be newer.".format(*sys.version_info[:2]))
 
@@ -267,12 +267,12 @@ def tree_entries() -> dict[str, set[str]]:
 
 
 def scan_repository(denylist: list[re.Pattern]) -> list[str]:
-    problems = set()
+    found: set[str] = set()
     for blob_id, paths in tree_entries().items():
         blob = _git("cat-file", "blob", blob_id)
         for path in paths:
-            problems |= {f"{path}: {finding}" for finding in scan_blob(path, blob, denylist)}
-    problems = sorted(problems)
+            found |= {f"{path}: {finding}" for finding in scan_blob(path, blob, denylist)}
+    problems = sorted(found)
     # Commit messages, identities and the names of branches and tags are published too.
     if subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode == 0:
         log = _git("log", "--all", "--format=%h %an <%ae> %cn <%ce>%n%B").decode("utf-8", "replace")

@@ -13,7 +13,7 @@ is thrown away once judged, so message text never stays on disk or in the databa
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -92,7 +92,7 @@ def _date(value) -> datetime | None:
             parsed = parsedate_to_datetime(text)
         except (TypeError, ValueError, IndexError):
             return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _address(value: str) -> str:
@@ -255,7 +255,7 @@ def record_alerts(conn, items: list[Item], jobs: list, companies: dict[str, set[
         conn.execute(
             """INSERT INTO mail_alerts (message_id, ts, job_id, sender, subject, date, reasons)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (key, now(), job_id, sender, item.subject, item.date.astimezone(timezone.utc).isoformat(timespec="minutes"),
+            (key, now(), job_id, sender, item.subject, item.date.astimezone(UTC).isoformat(timespec="minutes"),
              json.dumps(reasons)),
         )
         found.append({"job_id": job_id, "sender": item.address, "reasons": reasons})
@@ -295,17 +295,17 @@ def command(claude: str, model: str = DEFAULT_MODEL) -> list[str]:
 def window(conn, cfg: dict) -> datetime:
     """How far back to read: the lookback at most, and only a little past the last good run."""
     days = cfg.get("inbox", {}).get("lookback_days", inbox.DEFAULT_LOOKBACK_DAYS)
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since = datetime.now(UTC) - timedelta(days=days)
     row = conn.execute("SELECT last_ok FROM source_status WHERE source_key = ?", (SOURCE_KEY,)).fetchone()
     if row and row["last_ok"]:
         last = datetime.fromisoformat(row["last_ok"])
-        since = max(since, (last if last.tzinfo else last.replace(tzinfo=timezone.utc)) - timedelta(days=OVERLAP_DAYS))
+        since = max(since, (last if last.tzinfo else last.replace(tzinfo=UTC)) - timedelta(days=OVERLAP_DAYS))
     return since
 
 
 def prompt(companies: dict[str, set[str]], since: datetime) -> str:
     names = ", ".join(sorted(companies)) or "(none yet)"
-    day = since.astimezone(timezone.utc).strftime("%Y/%m/%d")
+    day = since.astimezone(UTC).strftime("%Y/%m/%d")
     # Mail from these can be judged from its subject and snippet. Reading its text would cost most of the run.
     known = sorted(set(ATS_DOMAINS + JOB_BOARDS).union(*companies.values()))
     return (

@@ -9,22 +9,65 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - run: python -m pip install -r tools/requirements.txt -r tools/requirements-dev.txt
+      # Settings for both are in pyproject.toml.
+      - run: python -m ruff check tools
+      - run: python -m mypy
+
   test:
+    # The oldest Python Pyrite supports and the newest, on every system it's run on.
+    name: test (${{ matrix.os }}, ${{ matrix.python }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
-      - run: python -m pip install -r tools/requirements.txt -r tools/requirements-autofill.txt
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r tools/requirements.txt -r tools/requirements-autofill.txt -r tools/requirements-dev.txt
       # Lets the privacy check's tests read a real PDF. Windows runners get pdftotext with Git.
+      # Linux also gets a browser, so the autofill tests run against the saved Workday page instead of skipping.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
-      - run: python -W ignore::ResourceWarning -m unittest discover -s tools/tests
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils && python -m playwright install --with-deps chromium
+      - if: runner.os == 'macOS'
+        run: brew install poppler
+      - run: python -W ignore::ResourceWarning -m coverage run -m unittest discover -s tools/tests
+      # Judged where every optional test runs. The floor is fail_under in pyproject.toml.
+      - if: runner.os == 'Linux'
+        run: python -m coverage report
+
+  # The README promises `python tools/pyrite.py demo` works with nothing installed. This holds it to that.
+  bare-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - run: python tools/pyrite.py --version
+      - name: The demo serves its page and data with no packages installed
+        run: |
+          python tools/pyrite.py demo --port 8788 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8788/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8788/ | grep -q "<title>Pyrite</title>"
+          curl -sf http://127.0.0.1:8788/api/state | python -c "import json, sys; assert json.load(sys.stdin)['jobs']"
+      - name: The README's check command blocks the bad draft
+        run: |
+          set +e
+          python tools/pyrite.py check example/applications/2026-11-globex-staff-firmware-engineer --company "Globex Automation" --title "Staff Firmware Engineer" > verdict.json
+          set -e
+          python -c "import json; v = json.load(open('verdict.json')); assert not v['ok'] and v['errors'], v"
 
   privacy:
     runs-on: ubuntu-latest

@@ -12,11 +12,13 @@ import http.client
 import json
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
+from typing import cast
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) job-search-pyrite/1.0"
 TIMEOUT = 60  # Per socket read, so slow but steady downloads still finish.
@@ -25,7 +27,24 @@ COMP = re.compile(
 )
 BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "table", "section"}
 VOID_TAGS = {"br", "img", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
-INVISIBLE_TEXT = re.compile("[​-‏‪-‮⁠-⁤﻿]")
+# Inline styles that hide text from a reader but not from a model. Whitespace and CSS comments are removed first, so
+# "display:\tnone" and "display:/**/none" count. Only an exact zero counts: font-size:0.9em and opacity:0.5 are visible.
+HIDING_STYLE = re.compile(
+    r"display:none|visibility:(?:hidden|collapse)|font-size:0(?:\.0*)?(?:px|em|rem|pt|%)?(?![.\d])|opacity:0(?:\.0*)?(?![.\d])"
+    r"|(?:height|width|max-height|max-width):0(?:px)?(?![.\d]).*overflow:hidden|overflow:hidden.*(?:height|width):0(?:px)?(?![.\d])"
+    r"|clip(?:-path)?:(?:rect\(0|inset\(50%)|text-indent:-\d{3,}|(?:left|top):-\d{4,}"
+)
+
+
+def strip_invisible(text: str) -> str:
+    """Remove format characters: zero-width spaces and joiners, direction overrides, and the Unicode tag block that
+    can spell out a whole instruction no reader sees."""
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
+def plain_text(text: str) -> str:
+    """A board's own plain-text field, held to the same rule as text taken from its HTML."""
+    return strip_invisible(text or "").strip()
 
 
 @dataclass
@@ -55,15 +74,8 @@ class _Text(HTMLParser):
         if tag in ("script", "style", "noscript", "template", "head"):
             return True
         attr = dict(attrs)
-        style = (attr.get("style") or "").replace(" ", "").lower()
-        return (
-            "hidden" in attr
-            or attr.get("aria-hidden") == "true"
-            or "display:none" in style
-            or "visibility:hidden" in style
-            or "font-size:0" in style
-            or "opacity:0" in style
-        )
+        style = re.sub(r"/\*.*?\*/|\s+", "", attr.get("style") or "", flags=re.S).lower()
+        return "hidden" in attr or attr.get("aria-hidden") == "true" or HIDING_STYLE.search(style) is not None
 
     def handle_starttag(self, tag, attrs):
         if tag in VOID_TAGS:
@@ -98,7 +110,7 @@ def html_to_text(markup: str) -> str:
     parser = _Text()
     parser.feed(html.unescape(markup) if "&lt;" in markup else markup)
     parser.close()
-    text = INVISIBLE_TEXT.sub("", "".join(parser.parts))
+    text = strip_invisible("".join(parser.parts))
     text = re.sub(r"[ \t\xa0]+", " ", text)
     text = re.sub(r" ?\n ?", "\n", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -135,7 +147,7 @@ def _request(url: str, payload: dict | None = None, retries: int = 3) -> dict | 
 def fetch_greenhouse(board: str, company: str) -> list[Posting]:
     """The light listing. Descriptions come from greenhouse_detail, for candidates only."""
     key = f"greenhouse:{board}"
-    data = _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs")
+    data = cast(dict, _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"))
     return [
         Posting(key, str(job["id"]), company, job["title"].strip(), (job.get("location") or {}).get("name", ""), "",
                 job.get("absolute_url", ""), "", "", job.get("first_published") or job.get("updated_at"))
@@ -144,7 +156,7 @@ def fetch_greenhouse(board: str, company: str) -> list[Posting]:
 
 
 def greenhouse_detail(board: str, company: str, job_id: str) -> Posting:
-    job = _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job_id}", retries=1)
+    job = cast(dict, _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job_id}", retries=1))
     description = html_to_text(job.get("content", ""))
     return Posting(
         f"greenhouse:{board}", str(job["id"]), company, job["title"].strip(),
@@ -165,16 +177,17 @@ def fetch_lever(board: str, company: str) -> list[Posting]:
             for section in job.get("lists", [])
         )
         description = "\n".join(filter(None, [
-            job.get("descriptionPlain") or html_to_text(job.get("description", "")),
+            # The HTML first: only there can text hidden with CSS be told apart and dropped.
+            html_to_text(job.get("description", "")) or plain_text(job.get("descriptionPlain", "")),
             sections,
-            job.get("additionalPlain", ""),
+            html_to_text(job.get("additional", "")) or plain_text(job.get("additionalPlain", "")),
         ]))
         salary = job.get("salaryRange") or {}
         comp = ""
         if salary.get("min") and salary.get("max"):
             comp = f"${salary['min']:,} - ${salary['max']:,}"
         created = job.get("createdAt")
-        posted = datetime.fromtimestamp(created / 1000, timezone.utc).isoformat() if created else None
+        posted = datetime.fromtimestamp(created / 1000, UTC).isoformat() if created else None
         postings.append(Posting(
             key, job["id"], company, job["text"].strip(), " | ".join(filter(None, places)),
             job.get("workplaceType", "") or "", job.get("hostedUrl", ""), description,
@@ -185,7 +198,7 @@ def fetch_lever(board: str, company: str) -> list[Posting]:
 
 def fetch_ashby(board: str, company: str) -> list[Posting]:
     key = f"ashby:{board}"
-    data = _request(f"https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true")
+    data = cast(dict, _request(f"https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true"))
     postings = []
     for job in data.get("jobs", []):
         if job.get("isListed") is False:
@@ -199,7 +212,7 @@ def fetch_ashby(board: str, company: str) -> list[Posting]:
             location = f"{location} ({address})"
         # isRemote is also true on hybrid roles, so workplaceType decides when it's present.
         workplace = job.get("workplaceType") or ("remote" if job.get("isRemote") else "")
-        description = job.get("descriptionPlain") or html_to_text(job.get("descriptionHtml", ""))
+        description = html_to_text(job.get("descriptionHtml", "")) or plain_text(job.get("descriptionPlain", ""))
         comp = (job.get("compensation") or {}).get("compensationTierSummary") or find_comp(description)
         postings.append(Posting(
             key, job.get("id") or job["jobUrl"], company, job["title"].strip(), location, workplace.lower(),
@@ -218,7 +231,7 @@ def workday_base(spec: dict) -> tuple[str, str]:
 
 def workday_detail(spec: dict, company: str, path: str) -> Posting:
     api, site = workday_base(spec)
-    info = _request(f"{api}{path}", retries=1)["jobPostingInfo"]
+    info = cast(dict, _request(f"{api}{path}", retries=1))["jobPostingInfo"]
     places = [info.get("location", "")] + (info.get("additionalLocations") or [])
     description = html_to_text(info.get("jobDescription", ""))
     return Posting(
@@ -235,9 +248,9 @@ def workday_search(spec: dict, queries: list[str], max_pages: int) -> dict[str, 
     found: dict[str, dict] = {}
     for query in queries:
         for page in range(max_pages):
-            data = _request(f"{api}/jobs", {
+            data = cast(dict, _request(f"{api}/jobs", {
                 "limit": 20, "offset": page * 20, "searchText": query, "appliedFacets": {},
-            })
+            }))
             jobs = data.get("jobPostings", [])
             for job in jobs:
                 if job.get("externalPath"):

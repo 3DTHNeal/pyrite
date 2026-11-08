@@ -107,8 +107,8 @@ def merge(paste: str, resume: str) -> tuple[list[str], dict]:
     lines = paste.splitlines()
     sheet = paste_roles(lines)
     tailored = resume_roles(resume)
-    report = {"tailored": [], "kept": [], "unmatched": []}
-    label = lambda r: f"{r['title']} at {r['company']}".strip()  # noqa: E731
+    report: dict[str, list] = {"tailored": [], "kept": [], "unmatched": []}
+    label = lambda r: f"{r['title']} at {r['company']}".strip()
     # Replace from the bottom up so earlier spans stay valid.
     for role in sorted(sheet, key=lambda r: r["line"], reverse=True):
         match = _find(role, tailored)
@@ -264,12 +264,13 @@ def clean(value: str) -> str:
 
 def answer(value: str) -> str:
     """The answer itself, without the sheet's reasoning: "No. Remote or Madison area" is "No"."""
-    return re.split(r"\.\s|;\s", clean(value), 1)[0].strip(" .")
+    return re.split(r"\.\s|;\s", clean(value), maxsplit=1)[0].strip(" .")
 
 
 # A row that tells the candidate what to answer rather than answering: "leave it blank if optional", "the candidate clicks these".
 _GUIDANCE = re.compile(
-    r"^(?:leave|ask|skip|blank|see|check|n/?a\b)|\b(?:himself|herself|yourself|themselves|by hand|per application|if optional|if forced|if allowed|if required)\b",
+    r"^(?:leave|ask|skip|blank|see|check|n/?a\b)"
+    r"|\b(?:himself|herself|yourself|themselves|by hand|per application|if optional|if forced|if allowed|if required)\b",
     re.IGNORECASE,
 )
 
@@ -314,7 +315,7 @@ def sections(lines: list[str]) -> list[dict]:
 
 
 def _rows(section: dict | None) -> dict[str, str]:
-    rows = {}
+    rows: dict[str, str] = {}
     for cells in (section or {}).get("rows", []):
         if len(cells) >= 2 and cells[0].lower() not in ("field", "question"):
             rows.setdefault(cells[0], cells[1])
@@ -362,7 +363,7 @@ def parse_address(value: str) -> dict[str, str]:
     if not out["postal"]:
         found = re.search(r"\b(\d{5}(?:-\d{4})?)\b", text)
         out["postal"] = found.group(1) if found else ""
-    street = re.split(r"\b(?:City|State|ZIP|Zip|Postal)\s*:", text, 1)[0]
+    street = re.split(r"\b(?:City|State|ZIP|Zip|Postal)\s*:", text, maxsplit=1)[0]
     street = re.sub(rf"\b{re.escape(out['postal'])}\b", "", street) if out["postal"] else street
     out["street"] = street.strip(" .,;")
     return out

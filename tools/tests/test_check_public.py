@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import check_public as cp  # noqa: E402
+import check_public as cp
 
 DENY = [re.compile("Bluebird", re.I)]
 EXAMPLE_PDF = (Path(__file__).resolve().parents[2] / "example" / "applications"

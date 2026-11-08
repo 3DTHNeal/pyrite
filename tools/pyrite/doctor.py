@@ -5,8 +5,8 @@ are cheap file reads, so the dashboard lists them on every refresh. The tools (t
 Claude Code, the mail login) take longer to look for, so only `pyrite doctor` checks them.
 """
 import importlib.util
-import os
 import shutil
+import sys
 import tomllib
 from pathlib import Path
 
@@ -55,7 +55,8 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         todos.append({"what": f"{rel} is still the fictional example's.",
                       "fix": "Replace it with your own. Claude writes from these files, and the assay checks against them."})
     if not (root / "profile" / "facts.md").exists():
-        todos.append({"what": "profile/facts.md is missing.", "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
+        todos.append({"what": "profile/facts.md is missing.",
+                      "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
     example = _example_config()
     if cfg.get("candidate", {}).get("name") == example["candidate"]["name"]:
         todos.append({"what": "[candidate] name in profile/search.toml is still the example's.", "fix": "Set it to your name, as it goes on your documents."})
@@ -95,7 +96,8 @@ def _seed_todos(root: Path) -> list[dict]:
 
 
 def _word_installed() -> bool:
-    if os.name != "nt":
+    # sys.platform rather than os.name, so type checkers on other systems know winreg is never reached there.
+    if sys.platform != "win32":
         return False
     import winreg
 
