@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import claude_code, store
+from . import checks, claude_code, store
 from .store import CODE_ROOT, IS_EXAMPLE, get_job, log_event
 
 PROFILE_DIR = Path("data") / "browser"
@@ -216,7 +216,13 @@ def states(conn) -> dict[int, dict]:
     return claude_code.latest(conn, STATE_NAMES, STALE_MINUTES, "The run stopped without reporting. Its log is in the job's folder.")
 
 
-def refusal(conn, job) -> str | None:
+def unchecked(job, cfg: dict | None = None) -> str:
+    """Why the assay doesn't vouch for the role text a fill would type into an employer's form, or "" when it does."""
+    gap = checks.not_covered(store.ROOT / job["app_folder"], cfg or store.load_config(), job["check_result"])
+    return f"{gap} Autofill types only role text that passed the assay, so check the job again first." if gap else ""
+
+
+def refusal(conn, job, cfg: dict | None = None) -> str | None:
     """Why the dashboard can't start a fill for this job right now, if there's a reason."""
     if IS_EXAMPLE:
         return "The demo doesn't open a browser. In your own workspace, this types the fill sheet into the Workday form."
@@ -234,20 +240,21 @@ def refusal(conn, job) -> str | None:
         return "Playwright isn't installed. In the pyrite venv: python -m pip install playwright, then python -m playwright install chromium."
     if states(conn).get(job["id"], {}).get("state") == "running":
         return "This form is being filled now. Look for the browser window."
-    return None
+    return unchecked(job, cfg) or None
 
 
-def start(conn, job_id: int) -> None:
+def start(conn, job_id: int, cfg: dict | None = None) -> None:
     """The dashboard button: check it can work, claim the job, then fill in a process of its own so the page doesn't wait."""
     job = get_job(conn, job_id)
-    problem = refusal(conn, job)
+    problem = refusal(conn, job, cfg)
     if problem:
         raise ValueError(problem)
     conn.commit()
     conn.execute("BEGIN IMMEDIATE")
-    if refusal(conn, get_job(conn, job_id)):
+    problem = refusal(conn, get_job(conn, job_id), cfg)
+    if problem:
         conn.rollback()
-        raise ValueError("This form is being filled now. Look for the browser window.")
+        raise ValueError(problem)
     log_event(conn, job_id, STARTED)
     conn.commit()
     log = store.ROOT / job["app_folder"] / LOG
