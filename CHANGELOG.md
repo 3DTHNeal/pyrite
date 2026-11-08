@@ -66,6 +66,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - A "Do not use" or "Unsupported" section in `facts.md` approves nothing at any heading level, subsections included. Before, only a `##` heading was set aside. `pyrite doctor` reads "Do not use" the same way.
 - The company and role a draft is allowed to name are set aside only as whole words, so a company called Meta no longer hides part of "Metadata" from the checks.
 - A passed draft shows as changed since checked when `facts.md`, another approved source or the `[guard]` rules change after it passed, and reopening it no longer puts it back to ready. Passes from before this keep their verdict.
+- Workday autofill types role text only from a draft the assay passed as it is now. A job never checked, one whose last check failed, or one whose `resume.md`, other checked files, fact bank or `[guard]` rules changed since the pass is refused, and the dashboard's Fill Workday form button says why. A worker started before such a change stops and logs why.
+- A fill sheet made from a draft the assay hasn't passed, or whose pass no longer covers it, is still written, but it says at the top that its role text hasn't passed the assay and why, and so do the job's history and `pyrite fill`. `pyrite fill <folder>` says no pass was looked up.
 
 ## [0.1.0] - 2026-11-09
 

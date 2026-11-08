@@ -14,7 +14,7 @@ from pathlib import Path
 
 from support import CFG, CODE_ROOT, CONFIDENTIAL, WORKSPACE, ClaudeRun
 
-from pyrite import cli, fill, prep, refresh, server, store, workday
+from pyrite import checks, cli, fill, prep, refresh, server, store, workday
 
 
 class FillSheet(ClaudeRun):
@@ -75,11 +75,19 @@ class FillSheet(ClaudeRun):
     def test_the_dashboard_button_writes_it_and_a_sent_job_gets_none(self):
         detail = server.job_detail(self.conn, self.job, CFG)
         self.assertEqual((detail["can_fill"], detail["fill_sheet"]), (True, ""))
+        # Before the assay passes it, the sheet is still written, but it and the event say its role text isn't vouched for.
         server.apply_action(self.conn, self.job, {"action": "fill_sheet"}, CFG)
         detail = server.job_detail(self.conn, self.job, CFG)
         self.assertEqual(detail["fill_sheet"], f"{self.rel}/{fill.SHEET}")
         self.assertTrue(server.resolve_file(detail["fill_sheet"]))
+        self.assertIn(f"> **{fill.NOT_PASSED}** The assay hasn't checked this draft.", self.sheet())
+        self.assertEqual([e["detail"] for e in detail["events"] if e["kind"] == "fill_sheet"],
+                         [f"{fill.NOT_PASSED} The assay hasn't checked this draft. 4 roles tailored, 2 fields to answer by hand"])
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+        server.apply_action(self.conn, self.job, {"action": "fill_sheet"}, CFG)
+        detail = server.job_detail(self.conn, self.job, CFG)
         self.assertIn("4 roles tailored, 2 fields to answer by hand", [e["detail"] for e in detail["events"] if e["kind"] == "fill_sheet"])
+        self.assertNotIn(fill.NOT_PASSED, self.sheet())
         store.set_status(self.conn, self.job, "applied")
         detail = server.job_detail(self.conn, self.job, CFG)
         self.assertFalse(detail["can_fill"])
@@ -89,14 +97,20 @@ class FillSheet(ClaudeRun):
         self.assertNotIn(fill.SHEET, [p.name for p in (self.folder / store.SENT_FOLDER).iterdir()])
 
     def test_the_command_takes_a_job_id_or_a_folder(self):
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
         out = io.StringIO()
         with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), contextlib.redirect_stdout(out):
             cli.main(["fill", str(self.job)])
-        self.assertEqual(json.loads(out.getvalue())["file"], f"{self.rel}/{fill.SHEET}")
+        report = json.loads(out.getvalue())
+        self.assertEqual((report["file"], report["unchecked"]), (f"{self.rel}/{fill.SHEET}", ""))
         self.assertTrue(self.sheet().startswith("# Fill sheet: Acme: Staff Firmware Engineer\n"))
         (self.folder / "posting.md").write_text("# Initech: Lead Engineer\n\n- **Link:** https://initech.example/9\n\nText.\n", encoding="utf-8")
-        with contextlib.redirect_stdout(io.StringIO()):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
             cli.main(["fill", str(self.folder)])
+        # A bare folder names no job, so nothing says it passed.
+        self.assertIn(fill.NOT_PASSED, err.getvalue())
+        self.assertIn("no assay pass was looked up", self.sheet())
         self.assertTrue(self.sheet().startswith("# Fill sheet: Initech: Lead Engineer\n"))
         self.assertIn("- **Posting:** https://initech.example/9", self.sheet())
 
@@ -178,6 +192,7 @@ class AutofillSwitch(ClaudeRun):
     def test_on_lets_a_workday_posting_through(self):
         set_autofill(self.root, "true")
         self.workday_job()
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
         with playwright_installed():
             detail = server.job_detail(self.conn, self.job, CFG)
         self.assertTrue(detail["can_autofill"], detail["autofill_refusal"])
@@ -208,6 +223,73 @@ class AutofillSwitch(ClaudeRun):
         workday.save_cookies(Context(), self.root)
         kept = json.loads((self.root / workday.COOKIES).read_text(encoding="utf-8"))
         self.assertEqual([c["name"] for c in kept], ["wd", "wd2"])
+
+
+class AutofillAssayGate(ClaudeRun):
+    """Autofill types resume.md's role text into an employer's form, so it runs only on a draft the assay passed as it is now."""
+
+    def setUp(self):
+        super().setUp()
+        set_autofill(self.root, "true")
+        self.conn.execute("UPDATE jobs SET url = ? WHERE id = ?", ("https://acme.wd5.myworkdayjobs.com/External/job/Role_R1", self.job))
+        self.conn.commit()
+        self.enterContext(playwright_installed())
+
+    def refusal(self):
+        return server.job_detail(self.conn, self.job, CFG)["autofill_refusal"]
+
+    def set_result(self, result):
+        self.conn.execute("UPDATE jobs SET check_result = ? WHERE id = ?", (json.dumps(result), self.job))
+        self.conn.commit()
+
+    def refused_everywhere(self, reason):
+        """The dashboard shows why, its button refuses, and the command line refuses before it writes or opens anything."""
+        self.assertIn(reason, self.refusal())
+        self.assertIn("Autofill types only role text that passed the assay", self.refusal())
+        (self.folder / fill.SHEET_JSON).unlink(missing_ok=True)
+        with mock.patch.object(workday.subprocess, "Popen") as popen, self.assertRaisesRegex(ValueError, re.escape(reason)):
+            server.apply_action(self.conn, self.job, {"action": "autofill"}, CFG)
+        popen.assert_not_called()
+        with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), mock.patch.object(workday, "run") as run, \
+                self.assertRaisesRegex(SystemExit, re.escape(reason)):
+            cli.main(["autofill", str(self.job), "--no-pause"])
+        run.assert_not_called()
+        self.assertFalse((self.folder / fill.SHEET_JSON).exists())
+
+    def test_a_draft_never_checked_or_that_failed_is_refused(self):
+        self.refused_everywhere("The assay hasn't checked this draft.")
+        self.set_result({"ok": False, "errors": ["A claim the fact bank doesn't back."], "warnings": []})
+        self.refused_everywhere("The assay's last check of this draft didn't pass.")
+
+    def test_a_pass_that_no_longer_covers_the_folder_is_refused(self):
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+        self.assertIsNone(self.refusal())
+        (self.folder / "resume.md").write_text(self.draft + "\n- Added later.\n", encoding="utf-8")
+        self.refused_everywhere("resume.md changed after the assay passed the draft.")
+        (self.folder / "resume.md").write_text(self.draft, encoding="utf-8")
+        self.assertIsNone(self.refusal(), "putting the passed text back is covered again")
+        # A fact bank or [guard] rule that changed since the pass: the pass was judged against something else.
+        result = json.loads(store.get_job(self.conn, self.job)["check_result"])
+        result["checked_sources"][checks.GUARD_KEY] = "an older rule set"
+        self.set_result(result)
+        self.refused_everywhere(f"{checks.GUARD_KEY} changed after the assay passed the draft")
+        result.pop("checked")
+        self.set_result(result)
+        self.refused_everywhere("didn't record which files it covered")
+
+    def test_a_worker_whose_draft_changed_after_the_button_logs_why_it_stopped(self):
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+        with mock.patch.object(workday.subprocess, "Popen"):
+            server.apply_action(self.conn, self.job, {"action": "autofill"}, CFG)
+        self.assertEqual(server.job_detail(self.conn, self.job, CFG)["autofill"]["state"], "running")
+        (self.folder / "resume.md").write_text(self.draft + "\n- Added later.\n", encoding="utf-8")
+        with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), mock.patch.object(workday, "run") as run, \
+                self.assertRaisesRegex(SystemExit, "resume.md changed"):
+            cli.main(["autofill", str(self.job), "--no-pause", "--worker"])
+        run.assert_not_called()
+        state = server.job_detail(self.conn, self.job, CFG)["autofill"]
+        self.assertEqual(state["state"], "failed", "not a run that looks alive for good")
+        self.assertIn("resume.md changed after the assay passed the draft.", state["detail"])
 
 
 class Autofill(ClaudeRun):
@@ -336,6 +418,7 @@ class Autofill(ClaudeRun):
     def test_the_dashboard_button_starts_a_worker_and_shows_its_state(self):
         self.conn.execute("UPDATE jobs SET url = ? WHERE id = ?", ("https://acme.wd5.myworkdayjobs.com/External/job/Role_R1", self.job))
         self.conn.commit()
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
         self.enterContext(playwright_installed())
         detail = server.job_detail(self.conn, self.job, CFG)
         self.assertTrue(detail["can_autofill"], detail["autofill_refusal"])

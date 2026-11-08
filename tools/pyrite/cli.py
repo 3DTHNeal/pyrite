@@ -443,22 +443,28 @@ def cmd_fill(args):
         folder = Path(args.job).resolve()
         if not folder.is_dir():
             sys.exit(f"No folder {folder}.")
-        _print_json(_fill_sheet(folder))
-        return
-    with closing(connect()) as conn:
-        job = get_job(conn, int(args.job))
-        if not job["app_folder"]:
-            sys.exit("No application folder. Run `pyrite folder <id>` first.")
-        report = _fill_sheet(ROOT / job["app_folder"], job["company"], job["title"], job["url"],
-                             source=fill.posting_source(job["source_key"], job["url"]))
-        log_event(conn, int(args.job), "fill_sheet", fill.summary(report))
-        conn.commit()
+        # A bare folder names no job, so there's no assay verdict to look up and the sheet says so.
+        report = _fill_sheet(folder, unchecked="Made from a folder, not a job, so no assay pass was looked up. "
+                                               "Use `pyrite fill <id>` for a sheet that says whether it passed.")
+    else:
+        with closing(connect()) as conn:
+            job = get_job(conn, int(args.job))
+            if not job["app_folder"]:
+                sys.exit("No application folder. Run `pyrite folder <id>` first.")
+            folder = ROOT / job["app_folder"]
+            report = _fill_sheet(folder, job["company"], job["title"], job["url"],
+                                 source=fill.posting_source(job["source_key"], job["url"]),
+                                 unchecked=checks.not_covered(folder, load_config(), job["check_result"]))
+            log_event(conn, int(args.job), "fill_sheet", fill.summary(report))
+            conn.commit()
     _print_json(report)
+    if report["unchecked"]:
+        print(f"{fill.NOT_PASSED} {report['unchecked']}", file=sys.stderr)
 
 
-def _fill_sheet(folder: Path, company: str = "", title: str = "", url: str = "", source: str = "") -> dict:
+def _fill_sheet(folder: Path, company: str = "", title: str = "", url: str = "", source: str = "", *, unchecked: str) -> dict:
     try:
-        return fill.make_sheet(folder, company, title, url, source=source)
+        return fill.make_sheet(folder, company, title, url, source=source, unchecked=unchecked)
     except FileNotFoundError as err:
         sys.exit(str(err))
 
@@ -474,9 +480,17 @@ def cmd_autofill(args, conn):
         sys.exit("No application folder. Run `pyrite folder <id>` first.")
     if job["applied_at"]:
         sys.exit("This job is already marked applied. A second application is a new job.")
+    # The dashboard asked the same before it started this worker, but the draft could have changed since.
+    problem = workday.unchecked(job, load_config())
+    if problem:
+        if args.worker:
+            log_event(conn, args.id, workday.FAILED, problem[:500])
+            conn.commit()
+        sys.exit(problem)
     folder = ROOT / job["app_folder"]
     try:
-        fill.make_sheet(folder, job["company"], job["title"], job["url"], source=fill.posting_source(job["source_key"], job["url"]))
+        fill.make_sheet(folder, job["company"], job["title"], job["url"], source=fill.posting_source(job["source_key"], job["url"]),
+                        unchecked="")
     except FileNotFoundError as err:
         sys.exit(str(err))
     url = args.url or job["url"]

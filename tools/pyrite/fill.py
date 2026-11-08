@@ -22,6 +22,9 @@ PASTE_SHEET = Path("profile") / "workday-paste.md"
 SHEET = "fill-sheet.md"
 # The same sheet as data, for `pyrite autofill`, which types it into Workday while the candidate watches.
 SHEET_JSON = "fill-sheet.json"
+# The role text comes from resume.md, so a sheet made from a draft the assay doesn't vouch for says so first.
+NOT_PASSED = "This role text hasn't passed the assay."
+NOT_LOOKED_UP = "Nothing looked up a passing check for this folder."
 BULLET = "•"
 
 _ROLE_HEADING = re.compile(r"^###\s+work experience\b", re.IGNORECASE)
@@ -194,12 +197,14 @@ def _body(paste: str) -> list[str]:
     return lines
 
 
-def compose(paste: str, resume: str, folder: Path, company: str, title: str, url: str, today: date) -> tuple[str, dict]:
-    """The sheet's text and a report of what it holds."""
+def compose(paste: str, resume: str, folder: Path, company: str, title: str, url: str, today: date,
+            unchecked: str = "") -> tuple[str, dict]:
+    """The sheet's text and a report of what it holds. `unchecked` is why the assay doesn't vouch for the resume now."""
     merged, report = merge(paste, resume)
     per_application, blanks = asks(paste)
     report["ask"] = per_application
     report["blanks"] = blanks
+    report["unchecked"] = unchecked
     # The resume first, since it's the one file every site takes. Workday gets the .docx: from a PDF it keeps
     # every wrapped line as a line break, so the PDF is named only as the alternative.
     by_kind = sorted({p.stem for p in folder.glob("*.docx")} | {p.stem for p in folder.glob("*.pdf")},
@@ -213,6 +218,10 @@ def compose(paste: str, resume: str, folder: Path, company: str, title: str, url
         "change those and make it again. Nothing here submits anything. You sign in, fill each page from this sheet, "
         "review it and click Submit yourself.",
         "",
+    ]
+    if unchecked:
+        out += [f"> **{NOT_PASSED}** {unchecked} Check it again and make this sheet again before you type any of it into a form.", ""]
+    out += [
         "## This application",
         "",
     ]
@@ -452,8 +461,13 @@ def structure(merged_lines: list[str], folder: Path, company: str, title: str, u
     }
 
 
-def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", today: date | None = None, source: str = "") -> dict:
-    """Write the folder's fill sheet and say what went into it. Raises FileNotFoundError when a source is missing."""
+def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", today: date | None = None, source: str = "",
+               unchecked: str = NOT_LOOKED_UP) -> dict:
+    """Write the folder's fill sheet and say what went into it. Raises FileNotFoundError when a source is missing.
+
+    `unchecked` is `checks.not_covered` for the job: "" only when its last assay pass covers the folder as it is.
+    The sheet is still written when it isn't, since you may want to read it, but it says so at the top.
+    """
     paste_path = store.ROOT / PASTE_SHEET
     if not paste_path.exists():
         raise FileNotFoundError(
@@ -466,7 +480,7 @@ def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", 
         company, title, url = _heading(folder)
     paste = paste_path.read_text(encoding="utf-8")
     resume = resume_path.read_text(encoding="utf-8")
-    text, report = compose(paste, resume, folder, company, title, url, today or date.today())
+    text, report = compose(paste, resume, folder, company, title, url, today or date.today(), unchecked)
     out = folder / SHEET
     out.write_text(text, encoding="utf-8")
     merged, _ = merge(paste, resume)
@@ -486,4 +500,7 @@ def summary(report: dict) -> str:
         parts.append(f"{len(report['unmatched'])} in the resume but not on the sheet")
     if report["ask"]:
         parts.append(f"{len(report['ask'])} fields to answer by hand")
-    return ", ".join(parts)
+    text = ", ".join(parts)
+    if report.get("unchecked"):
+        text = f"{NOT_PASSED} {report['unchecked']} {text}"
+    return text

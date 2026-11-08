@@ -438,7 +438,7 @@ def job_detail(conn, job_id: int, cfg: dict) -> dict:
         job["can_fill"] = (folder / "resume.md").exists() and (ROOT / fill.PASTE_SHEET).exists() and not job["frozen"] and not IS_EXAMPLE
     row = get_job(conn, job_id)
     job["autofill"] = workday.states(conn).get(job_id)
-    job["autofill_refusal"] = workday.refusal(conn, row)
+    job["autofill_refusal"] = workday.refusal(conn, row, cfg)
     job["can_autofill"] = job["autofill_refusal"] is None or (job["autofill"] or {}).get("state") == "running"
     job["autofill_log"] = f"{job['app_folder']}/{workday.LOG}" if job["app_folder"] and (ROOT / job["app_folder"] / workday.LOG).exists() else ""
     return job
@@ -451,13 +451,9 @@ def _reopen_target(job, cfg: dict) -> str:
         return "applied"
     if not job["app_folder"]:
         return "shortlisted"
-    raw = job["check_result"]
-    result = (json.loads(raw) if isinstance(raw, str) and raw else raw) or {}
-    if not result:
+    if not job["check_result"]:
         return "shortlisted"
-    passed = (result.get("ok") and result.get("checked") and not checks.changed_since(ROOT / job["app_folder"], result["checked"])
-              and not checks.sources_changed(cfg, result.get("checked_sources")))
-    return "ready" if passed else "needs_fix"
+    return "needs_fix" if checks.not_covered(ROOT / job["app_folder"], cfg, job["check_result"]) else "ready"
 
 
 def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
@@ -500,12 +496,13 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
             raise ValueError("No application folder yet, so there's no tailored resume to merge.")
         try:
             report = fill.make_sheet(ROOT / job["app_folder"], job["company"], job["title"], job["url"],
-                                     source=fill.posting_source(job["source_key"], job["url"]))
+                                     source=fill.posting_source(job["source_key"], job["url"]),
+                                     unchecked=checks.not_covered(ROOT / job["app_folder"], cfg, job["check_result"]))
         except FileNotFoundError as err:
             raise ValueError(str(err)) from err
         log_event(conn, job_id, "fill_sheet", fill.summary(report))
     elif action == "autofill":
-        workday.start(conn, job_id)
+        workday.start(conn, job_id, cfg)
     elif action == "refresh_resume":
         refresh.start(conn, job_id)
     elif action == "interview_prep":

@@ -598,6 +598,31 @@ def changed_since(folder: Path, checked: dict) -> list[str]:
     return sorted(name for name in names if checked.get(name) != now[name])
 
 
+def not_covered(folder: Path, cfg: dict, result: dict | str | None) -> str:
+    """Why a job's last assay verdict doesn't vouch for its folder as it is now, or "" when it does.
+
+    Anything that carries the draft's text to an employer asks this first. A pass covers the files it hashed,
+    judged against the fact bank and [guard] rules it hashed, and nothing else.
+    """
+    if isinstance(result, str):
+        result = json.loads(result) if result else None
+    if not result:
+        return "The assay hasn't checked this draft."
+    if not result.get("ok"):
+        return "The assay's last check of this draft didn't pass."
+    checked = result.get("checked")
+    if not checked:
+        return "The assay's last pass didn't record which files it covered."
+    reasons = []
+    files = changed_since(folder, checked)
+    if files:
+        reasons.append(f"{', '.join(files)} changed after the assay passed the draft.")
+    sources = sources_changed(cfg, result.get("checked_sources"))
+    if sources:
+        reasons.append(f"{', '.join(sources)} changed after the assay passed the draft, so the pass no longer vouches for it.")
+    return " ".join(reasons)
+
+
 def keyword_overlap(resume: str, description: str, cfg: dict) -> dict:
     """How many of the skill terms the posting uses also appear on the resume."""
     wanted, covered = [], []
