@@ -24,7 +24,7 @@ Python 3.11 or newer, no install needed. Where `python` is older or missing, use
 python tools/pyrite.py demo
 ```
 
-Then open <http://127.0.0.1:8788>. The demo is a fictional candidate, Alex Rivera, applying to made-up companies. Open the Globex Automation card to see the assay's verdict on a bad draft.
+Then open <http://127.0.0.1:8788>, and leave the window you ran it in open: closing it, or Ctrl+C, stops the dashboard. The demo is a fictional candidate, Alex Rivera, applying to made-up companies. Open the Globex Automation card to see the assay's verdict on a bad draft.
 
 ## See the assay stop a bad draft
 
@@ -122,7 +122,7 @@ py -3 -m venv .venv
 .venv/Scripts/python.exe -m pip install -r tools/requirements.txt
 ```
 
-Your resumes, fact bank and database live in a workspace folder outside this repository. Make one from the example, then make its files yours:
+Your resumes, fact bank and database live in a workspace folder outside this repository. Make one from the example, with your own name in the quotes, then make its files yours:
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py init ../my-job-search --name "Your Name"

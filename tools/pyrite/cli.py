@@ -1,5 +1,6 @@
 """Command line for Pyrite. The daily run and you both go through here."""
 import argparse
+import difflib
 import functools
 import json
 import os
@@ -533,7 +534,7 @@ def cmd_where(args):
     """Which workspace this command would read and write. The path alone goes to stdout, for scripts."""
     print(ROOT)
     if store.IS_EXAMPLE:
-        print("No workspace is set, so this is the fictional example. `pyrite init <folder>` makes yours.", file=sys.stderr)
+        print(f"No workspace is set, so this is the fictional example. `{INIT_EXAMPLE}` makes yours.", file=sys.stderr)
 
 
 # Copied from the example by `pyrite init`, and changed on the way. Each line is checked to be in the example's
@@ -542,13 +543,21 @@ INIT_EXAMPLE_NAME = 'name = "Alex Rivera"'
 INIT_EXAMPLE_HOSTS = "allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']"
 # Its applications are the fictional candidate's, so a new workspace starts with none.
 INIT_SKIP = ("seed.toml",)
-
-
 def cmd_init(args):
     """Make a new workspace from the example's profile, and point this copy of Pyrite at it."""
+    from .doctor import PLACEHOLDER_NAMES
+
+    # Placeholders copied from the docs as they are. Angle brackets can't be in a Windows folder name either.
+    if any(mark in args.folder for mark in "<>"):
+        sys.exit(f"{args.folder} is a placeholder. Put the folder you want in its place, such as `{INIT_EXAMPLE}`.")
+    name = args.name.strip()
+    if name.strip("<>[]").lower() in PLACEHOLDER_NAMES or any(mark in name for mark in "<>[]"):
+        sys.exit(f'"{name}" is a placeholder. Use your own name, in quotes, such as --name "Alex Rivera". Nothing was made.')
     folder = Path(args.folder).expanduser().resolve()
     if folder == CODE_ROOT or CODE_ROOT in folder.parents:
-        sys.exit(f"{folder} is inside this repository. Make your workspace outside it, so nothing personal can be committed here.")
+        beside = Path("..") / folder.name if folder != CODE_ROOT else Path("..") / "my-job-search"
+        sys.exit(f"{folder} is inside this repository. Make your workspace outside it, so nothing personal can be committed here.\n"
+                 f"To put it beside this repository instead: pyrite init {beside}")
     if (folder / "profile").exists():
         if folder == ROOT:
             # Asking again for what's already true isn't an error, so a setup script can run this twice.
@@ -559,8 +568,8 @@ def cmd_init(args):
     shutil.copytree(store.EXAMPLE_ROOT / "profile", profile, ignore=shutil.ignore_patterns(*INIT_SKIP, "*.previous.*"))
     config = profile / "search.toml"
     text = config.read_text(encoding="utf-8")
-    if args.name:
-        text = text.replace(INIT_EXAMPLE_NAME, f"name = {json.dumps(args.name.strip(), ensure_ascii=False)}", 1)
+    if name:
+        text = text.replace(INIT_EXAMPLE_NAME, f"name = {json.dumps(name, ensure_ascii=False)}", 1)
     # The dashboard has no login, so it answers to no names but localhost until you add one.
     text = text.replace(INIT_EXAMPLE_HOSTS, "allowed_hosts = []", 1)
     config.write_text(text, encoding="utf-8")
@@ -681,7 +690,10 @@ def cmd_doctor(args):
     tools = doctor.tool_checks(cfg)
     for tool in tools:
         print(_doctor_line({True: "ok   ", False: "TO DO", None: "note "}[tool["ok"]], tool["what"], tool["fix"]))
-    if todos or any(tool["ok"] is False for tool in tools):
+    left = len(todos) + sum(tool["ok"] is False for tool in tools)
+    if left:
+        print(f"\n{_plural(left, 'thing')} to do. Work down the TO DO lines from the top, and run `pyrite doctor` again "
+              "to see what's left.")
         sys.exit(1)
     print("Ready. `pyrite sources` tests the job boards you watch.")
 
@@ -692,12 +704,18 @@ def _saved_posting(folder: str) -> str:
 
 
 JOB_ID = "a job's number, as the dashboard's job panel, `pyrite add` and `pyrite queue` show it"
-START_HERE = """new here:
-  pyrite demo           look around the fictional example
-  pyrite init <folder>  make your own workspace from it
-  pyrite doctor         list what's left to set up
+# A real folder rather than <folder>, which a shell reads as redirection when it's copied as it is.
+INIT_EXAMPLE = "pyrite init ../my-job-search"
+START_HERE = f"""new here:
+  pyrite demo                   look around the fictional example
+  {INIT_EXAMPLE}  make your own workspace from it, beside this folder
+  pyrite doctor                 list what's left to set up
 
-docs/operating.md covers the rest."""
+Until `pip install -e .` adds the pyrite command, type `python tools/pyrite.py`
+in its place, from this repository's folder. `pyrite help <command>` explains
+one command. docs/operating.md covers the rest."""
+# Close enough to a command to be a typo of it. The hidden worker command is never suggested.
+HIDDEN_COMMANDS = {"task"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -790,11 +808,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", default="")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("add", help="add a posting by hand")
-    p.add_argument("--company", required=True)
-    p.add_argument("--title", required=True)
-    p.add_argument("--url", default="")
-    p.add_argument("--location", default="")
+    p = sub.add_parser("add", help="add a posting by hand", formatter_class=argparse.RawDescriptionHelpFormatter,
+                       epilog='for example:\n  pyrite add --company "Acme Robotics" --title "Firmware Engineer" '
+                              '--url https://example.com/jobs/1 --description-file posting.txt')
+    p.add_argument("--company", required=True, help="the employer, in quotes if it has a space")
+    p.add_argument("--title", required=True, help="the job title, in quotes if it has a space")
+    p.add_argument("--url", default="", help="the posting's web address")
+    p.add_argument("--location", default="", help="where the job is, such as Remote")
     p.add_argument("--description-file", help="a text file holding the posting, which the assay and tailoring read")
     p.set_defaults(func=cmd_add)
 
@@ -811,14 +831,53 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it")
     p.add_argument("folder", help="where your workspace goes, outside this repository")
-    p.add_argument("--name", default="", help="your name, as it goes on your documents")
+    p.add_argument("--name", default="", help='your name, as it goes on your documents, in quotes: --name "Alex Rivera"')
     p.set_defaults(func=cmd_init)
     sub.add_parser("doctor", help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("demo", help="serve the fictional example, without touching your own data")
     p.add_argument("--port", type=int, default=8788)
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("help", help="explain one command, or list them all")
+    p.add_argument("topic", nargs="?", help="the command to explain")
+    p.set_defaults(func=lambda args: _help(parser, sub, args.topic))
     return parser
+
+
+def _commands(sub: argparse._SubParsersAction) -> list[str]:
+    return [name for name in sub.choices if name not in HIDDEN_COMMANDS]
+
+
+def _help(parser: argparse.ArgumentParser, sub: argparse._SubParsersAction, topic: str | None) -> None:
+    if not topic:
+        parser.print_help()
+    elif topic in sub.choices and topic not in HIDDEN_COMMANDS:
+        sub.choices[topic].print_help()
+    else:
+        sys.exit(_unknown_command(topic, _commands(sub)))
+
+
+def _unknown_command(word: str, commands: list[str]) -> str:
+    close = difflib.get_close_matches(word.lower(), commands, n=1, cutoff=0.6)
+    hint = f" Did you mean `pyrite {close[0]}`?" if close else ""
+    return f"`{word}` isn't a Pyrite command.{hint} `pyrite help` lists them all."
+
+
+def _quote_hint(argv: list[str], extra: list[str]) -> str:
+    """When the leftover words follow an option's value, as in --name Alex Rivera, the value needed quotes."""
+    first = extra[0]
+    if first.startswith("-") or first not in argv:
+        return ""
+    start = argv.index(first)
+    if start < 2 or not argv[start - 2].startswith("--"):
+        return ""
+    words = [argv[start - 1]]
+    for word in argv[start:]:
+        if word.startswith("-"):
+            break
+        words.append(word)
+    return f'\nText with a space in it goes in quotes: {argv[start - 2]} "{" ".join(words)}"'
 
 
 def main(argv=None):
@@ -826,10 +885,21 @@ def main(argv=None):
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    parser = build_parser()
+    if not argv:
+        # Someone who types the bare command wants to know what it does, not that an argument is missing.
+        parser.print_help()
+        return
+    sub = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+    if not argv[0].startswith("-") and argv[0] not in sub.choices:
+        sys.exit(_unknown_command(argv[0], _commands(sub)))
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}{_quote_hint(argv, extra)}")
     if store.IS_EXAMPLE and args.command in NEEDS_WORKSPACE:
         sys.exit(
             f"No workspace is set, so `pyrite {args.command}` would write into the fictional example inside this repository.\n"
-            "`pyrite init <folder>` makes your own workspace outside it and points Pyrite there. `pyrite demo` looks around without one."
+            f"`{INIT_EXAMPLE}` makes your own workspace outside it and points Pyrite there. `pyrite demo` looks around without one."
         )
     args.func(args)

@@ -11,6 +11,9 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - `pyrite --help` lists where to start, and each job id argument says what it is.
 - `pyrite doctor` and Finish setup check the master resume and letter for the lines the assay needs (`# Name`, the `@` contact line, `## Experience`, `## Education`, an employer heading) and name what's missing, instead of leaving every draft to fail. They name each "Do not use" term in `facts.md` that `forbidden` doesn't block, the example's tracks and industries left in `search.toml`, and a `workday-paste.md` that's still the example's.
 - docs/operating.md has a "How the documents are written" section on the form of a resume and letter.
+- `pyrite help`, and `pyrite help <command>` for one command. `pyrite` on its own prints the help instead of an error.
+- A mistyped command suggests the one meant, such as `pyrite doctor` for `dcotor`, and a value with a space left out of quotes, such as `--name Alex Rivera`, says to quote it.
+- `pip install -r requirements.txt` works from the top of the repository.
 
 ### Changed
 
@@ -18,6 +21,10 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - `pyrite doctor` wraps its lines to the terminal and, run outside a venv, says to make one rather than install into that Python. The README's setup starts with the venv.
 - Commands that need a workspace, `doctor` and `Pyrite.cmd` point to `pyrite init` when there isn't one, and `Pyrite.cmd` says so at once instead of after half a minute. `pyrite init` on the workspace already in use exits cleanly.
 - The build says "1 page", not "1 pages", and the test run prints nothing but its result.
+- Help and the messages that point to `pyrite init` show a real folder, `../my-job-search`, instead of `<folder>`, which a shell reads as redirection when it's copied as it is. The help says to type `python tools/pyrite.py` until `pip install -e .` adds the `pyrite` command.
+- `pyrite init` refuses a placeholder name such as "Your Name" or a placeholder folder, and for a folder inside the repository, says how to put it beside it instead. `doctor` and Finish setup flag a placeholder name left in `search.toml`.
+- `pyrite doctor` lists the profile files still the example's as one finding instead of five, and ends with how many things are left.
+- The dashboard says to keep its window open and that Ctrl+C stops it, and Ctrl+C stops it without a traceback.
 
 - `pyrite seed` refuses a `seed.toml` that's still the example's. An application it imports with no `applied_on` goes under Being tailored, where `pyrite finish` checks it, instead of Ready to send, so ready still means the assay passed it.
 - `pyrite add` says which job it added and what to run next, and a posting file it can't read stops it with a message instead of a traceback.
