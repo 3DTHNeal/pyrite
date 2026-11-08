@@ -182,7 +182,7 @@ def master_blocks(text: str, kind: str) -> dict:
     doc = factsdoc.Doc(text)
     header = [i for i in range(min(len(doc.lines), 6)) if doc.bare(i).startswith(("# ", "= ", "@ "))]
     headline = next((i for i in header if doc.bare(i).startswith("= ")), None)
-    found = {"exists": bool(text), "headline": doc.bare(headline)[2:].strip() if headline is not None else None, "blocks": []}
+    found: dict[str, Any] = {"exists": bool(text), "headline": doc.bare(headline)[2:].strip() if headline is not None else None, "blocks": []}
     if kind == "letter":
         start = header[-1] + 1 if header else 0
         found["body"] = _body(doc, start, len(doc.lines))[1].strip("\n")
@@ -1116,16 +1116,16 @@ def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
             items = {item.line: item for item in doc.items(section) if item.level == 0}
             every = doc.items(section)
             wanted = {at for at, _ in facts if at is not None}
-            for at, item in items.items():
-                if at not in wanted:
+            for existing, item in items.items():
+                if existing not in wanted:
                     plan.delete(item.line, item.end)
                     count += 1
             for index, (at, text) in enumerate(facts):
                 if at is not None:
-                    if at not in items:
+                    bullet = factsdoc.BULLET.fullmatch(doc.bare(at)) if at in items else None
+                    if bullet is None:
                         raise ValueError("A fact has moved in facts.md since the page read it. Reload and try again.")
                     if text != items[at].text:
-                        bullet = factsdoc.BULLET.fullmatch(doc.bare(at))
                         plan.set(at, doc.bare(at)[:bullet.start("text")] + text)
                         touched.append(text)
                         count += 1
@@ -1141,8 +1141,8 @@ def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
                 plan.delete(section.start, section.end)
                 count += 1
     plan.apply(doc)
-    for title, facts in added:
-        doc.add_section(title, facts)
+    for title, new_facts in added:
+        doc.add_section(title, new_facts)
     out["facts"] = doc.render()
 
     rules = []
@@ -1245,7 +1245,7 @@ def _masters(texts: dict, cfg: dict, edits: dict) -> Draft:
         heads = sorted(blocks)
         for raw in _list(resume.get("blocks"), "Blocks"):
             line = raw.get("line") if isinstance(raw, dict) else None
-            if line not in blocks:
+            if not isinstance(line, int) or line not in blocks:
                 raise ValueError("profile/resume.md has changed since the page read it. Reload and try again.")
             rows = _lines(raw.get("text"), "A block")
             if "\n".join(rows) == blocks[line]["text"]:
