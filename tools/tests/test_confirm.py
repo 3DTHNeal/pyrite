@@ -3,6 +3,7 @@ and the dashboard's saves that ask for it."""
 import contextlib
 import io
 import json
+import re
 import shutil
 import tempfile
 import threading
@@ -60,18 +61,24 @@ class Loosening(Workspace):
     def test_approving_a_term_loosens_and_removing_one_doesnt(self):
         terms = profile.read("terms")
         self.assertEqual(confirm.loosening("terms", terms, terms + "Kubernetes\n"), ["approve “Kubernetes” for every draft"])
-        self.assertEqual(confirm.loosening("terms", terms, terms.replace("FreeRTOS\n", "")), [])
+        without = re.sub(r"(?m)^FreeRTOS\r?\n", "", terms)
+        self.assertNotEqual(without, terms)
+        self.assertEqual(confirm.loosening("terms", terms, without), [])
         self.assertEqual(confirm.loosening("terms", terms, terms + "# just a comment\n"), [])
         # Several terms to a line: only the new word is named.
         self.assertEqual(confirm.loosening("terms", "Git GitHub\n", "Git GitHub, Rust\n"), ["approve “Rust” for every draft"])
         self.assertEqual(confirm.loosening("terms", "Git GitHub\n", "GitHub\nGit\n"), [])
 
     def test_taking_an_item_off_do_not_use_loosens_and_other_edits_dont(self):
-        facts = profile.read("facts")
-        self.assertEqual(confirm.loosening("facts", facts, facts.replace("- Customer names\n", "")),
-                         ["take “Customer names” off “Do not use” in facts.md"])
-        self.assertEqual(confirm.loosening("facts", facts, facts.replace("## Do not use\n", "## Do not use\n- Project X\n")), [])
-        self.assertEqual(confirm.loosening("facts", facts, facts.replace("Hired 4 engineers", "Hired 5 engineers")), [])
+        # A Windows checkout has CRLF line endings, so both kinds are checked whatever this one has.
+        lf = profile.read("facts").replace("\r\n", "\n")
+        for eol in ("\n", "\r\n"):
+            facts = lf.replace("\n", eol)
+            self.assertEqual(confirm.loosening("facts", facts, facts.replace(f"- Customer names{eol}", "")),
+                             ["take “Customer names” off “Do not use” in facts.md"], repr(eol))
+            added = facts.replace(f"## Do not use{eol}", f"## Do not use{eol}- Project X{eol}")
+            self.assertEqual(confirm.loosening("facts", facts, added), [], repr(eol))
+            self.assertEqual(confirm.loosening("facts", facts, facts.replace("Hired 4 engineers", "Hired 5 engineers")), [])
 
     def test_the_guard_settings_that_loosen(self):
         config = profile.read("config")
@@ -119,7 +126,9 @@ class Codes(Workspace):
         return caught.exception.payload["request_id"]
 
     def test_a_change_that_loosens_nothing_needs_no_code(self):
-        confirm.require({"terms": self.terms.replace("Git\n", "")}, self.current, self.based_on)
+        without = re.sub(r"(?m)^Git\r?\n", "", self.terms)
+        self.assertNotEqual(without, self.terms)
+        confirm.require({"terms": without}, self.current, self.based_on)
         self.assertEqual(self.sent, [])
 
     def test_the_notification_names_the_change_and_the_right_code_works_once(self):
