@@ -313,6 +313,7 @@ def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict
     if report["ok"]:
         # What exactly passed, so a later change to any of it shows on the dashboard.
         report["checked"] = checks.fingerprints(folder)
+        report["checked_sources"] = checks.source_fingerprints(cfg)
 
     conn.execute(
         "UPDATE jobs SET check_result = ?, files = ? WHERE id = ?",

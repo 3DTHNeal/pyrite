@@ -247,6 +247,14 @@ class ReopenNeverSkipsTheAssay(Base):
         checked = {**checks.fingerprints(MODEL), "resume.md": "0" * 64}
         self.assertEqual(self.reopen(self.job({"ok": True, "checked": checked})), "needs_fix")
 
+    def test_a_draft_passed_against_facts_since_changed_goes_back_to_needs_fix(self):
+        passed = {"ok": True, "checked": checks.fingerprints(MODEL), "checked_sources": checks.source_fingerprints(CFG)}
+        self.assertEqual(self.reopen(self.job(passed)), "ready")
+        taken_back = {**passed, "checked_sources": {**passed["checked_sources"], "profile/facts.md": "0" * 64}}
+        self.assertEqual(self.reopen(self.job(taken_back, source_id="4")), "needs_fix")
+        stricter = {**passed, "checked_sources": {**passed["checked_sources"], checks.GUARD_KEY: "0" * 64}}
+        self.assertEqual(self.reopen(self.job(stricter, source_id="5")), "needs_fix")
+
     def test_never_checked_is_shortlisted_and_sent_is_applied(self):
         self.assertEqual(self.reopen(self.job(None, source_id="2")), "shortlisted")
         self.assertEqual(self.reopen(self.job(None, source_id="3", applied_at=store.now())), "applied")

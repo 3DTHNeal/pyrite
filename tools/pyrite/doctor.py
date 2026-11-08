@@ -12,6 +12,7 @@ import tomllib
 from pathlib import Path
 
 from . import inbox
+from .checks import do_not_use
 from .claude_code import find_claude, signed_in
 from .store import EXAMPLE_ROOT
 
@@ -41,7 +42,6 @@ EXAMPLE_SETTINGS = (
     (("guard", "expected_on_resume"), "[guard]", "expected_on_resume"),
     (("inbox", "domains"), "[inbox.domains]", None),
 )
-DO_NOT_USE = re.compile(r"(?ims)^## do not use[^\n]*\n(.*?)(?=^## |\Z)")
 CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
 
 
@@ -181,11 +181,8 @@ def unguarded_terms(facts: str, forbidden: list[str]) -> list[str]:
     """Capitalized terms under "Do not use" in facts.md that no pattern in [guard] forbidden matches. The assay reads
     nothing from that section, so a term listed only there isn't blocked by name. The first word of each line is
     skipped, since it's usually a label such as "Internal names:" or "Customer names"."""
-    section = DO_NOT_USE.search(facts)
-    if not section:
-        return []
     found: list[str] = []
-    for row in section.group(1).splitlines():
+    for row in do_not_use(facts).splitlines():
         line = row.strip().lstrip("-*").strip()
         spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
         for term in list(CAPITALIZED.finditer(line))[1:]:

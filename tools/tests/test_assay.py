@@ -363,6 +363,93 @@ class Evasion(unittest.TestCase):
     def test_the_brief_check_is_held_to_the_same_rules(self):
         errors, _ = checks.check_brief(BRIEF + "\n- Mention the reel at bit.ly/alexdemo.\n", CFG, SOURCES, "Acme", "Staff Firmware Engineer")
         self.assertTrue(any("link" in e for e in errors), errors)
+        for line, reason in (("- Say you managed forty engineers.", "spells out numbers"), ("- Say you doubled throughput.", "multiple"),
+                             ("- Say you saved $3M.", "numbers")):
+            with self.subTest(line):
+                errors, _ = checks.check_brief(BRIEF + f"\n{line}\n", CFG, SOURCES, "Acme", "Staff Firmware Engineer")
+                self.assertTrue(any(reason in e for e in errors), errors)
+
+    def test_every_mention_of_a_claim_is_judged_not_just_the_first(self):
+        self.assertBlocked("- I have not worked under ISO 26262, but led ISO 26262 audits for the fleet.", "unsupported claim")
+        self.assertBlocked("- No ISO 26262 experience; led safety certification for the fleet.", "unsupported claim")
+
+    def test_praise_after_a_claim_is_no_denial(self):
+        for line in ("- Led ISO 26262 certification, and I could not be prouder of it.",
+                     "- Led ISO 26262 audits, and I never missed one.",
+                     "- Ran safety certification for the fleet, and I wouldn't change it.",
+                     "- Ran safety certification, and I can't say enough about it."):
+            with self.subTest(line):
+                self.assertBlocked(line, "unsupported claim")
+        self.assertEqual(resume_errors(RESUME + "\n- The posting asks for safety certification, and I have not done it.\n"), [])
+
+    def test_a_negative_before_a_new_subject_denies_nothing(self):
+        for line in ("- With no budget I led ISO 26262 certification for the fleet.", "- Not once did I fail an ISO 26262 audit."):
+            with self.subTest(line):
+                self.assertBlocked(line, "unsupported claim")
+        self.assertEqual(resume_errors(RESUME + "\n- I have not yet worked under ISO 26262.\n"), [])
+
+    def test_a_number_keeps_its_scale(self):
+        # 212 tests and 3 launches are in the fact bank. Thousands of them, or millions of dollars, are not.
+        for line in ("- Ran 212K automated tests on every merge.", "- Ran 212 thousand automated tests on every merge.",
+                     "- Saved $3M across the robot launches.", "- Saved $3 million across the robot launches.", "- Shipped 3B units."):
+            with self.subTest(line):
+                self.assertBlocked(line, "numbers not in the fact bank")
+        errors, _ = checks.check_text(LETTER.rstrip() + "\n\nWe ran 212K automated tests on every merge.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
+        self.assertTrue(any("212000" in e for e in errors), errors)
+        self.assertEqual(checks._numbers("$1.5M, 1,500,000 and 1.5 million"), {"1500000"})
+        self.assertEqual(checks._numbers("4.0 and 4"), {"4"})
+
+    def test_a_percentage_is_a_percentage_however_it_is_written(self):
+        # 7 is a team size and 35 a percentage in the fact bank. Neither is the other.
+        for line in ("- Cut review time 7 percent.", "- Cut review time 7 per cent.", "- Hired 35 engineers."):
+            with self.subTest(line):
+                self.assertBlocked(line, "not in the fact bank")
+        self.assertEqual(resume_errors(RESUME + "\n- Settling time down about 35 percent on the test rig.\n"), [])
+
+    def test_multiples_are_measurements(self):
+        for line in ("- Doubled throughput on the test rig.", "- Cut review time tenfold.", "- Delivered double-digit gains.",
+                     "- Improved settling time by an order of magnitude."):
+            with self.subTest(line):
+                self.assertBlocked(line, "claims a multiple")
+
+    def test_accents_and_look_alike_letters_hide_nothing(self):
+        errors, _ = checks.check_text(LETTER.rstrip() + "\n\nI built the Bluébird controller.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
+        self.assertTrue(any("confidential term" in e for e in errors), errors)
+        for disguised in ("Вӏуеbіrd", "ʙʟᴜᴇʙɪʀᴅ"):
+            with self.subTest(disguised=disguised):
+                self.assertBlocked(f"- Delivered the {disguised} controller.", "look-alike letters")
+        # Words in another language, and names with letters of their own, are neither.
+        self.assertFalse(checks._lookalike("Русский"))
+        self.assertFalse(checks._disguises("Søren Łukasz Işık José", "Resume"))
+        for table in (checks.LOOKALIKES, checks.PLAIN_LATIN):
+            plain = [value if isinstance(value, str) else chr(value) for value in table.values()]
+            self.assertTrue(all(not chr(key).isascii() and value.isascii() for key, value in zip(table, plain, strict=True)))
+        self.assertEqual(len(checks.LOOKALIKES), 20 + 18 + 14 + 24)
+
+    def test_a_company_name_is_set_aside_only_as_a_whole_word(self):
+        self.assertEqual(checks._set_aside("Meta and Metadata at Meta's office", "Meta"), "  and Metadata at  's office")
+        self.assertEqual(checks._set_aside("Anything", ""), "Anything")
+
+    def test_do_not_use_and_unsupported_approve_nothing_at_any_heading_level(self):
+        bank = ("# Facts\n## Record\n- Shipped 3 launches\n### Do not use\n- Project Nightjar, 900 units\n#### Customers\n- Globex\n"
+                "### Skills\n- Python\n# Unsupported claims\n- Kubernetes at 4000 nodes\n")
+        kept = checks.claimable(bank)
+        for gone in ("Nightjar", "900", "Globex", "Kubernetes", "4000"):
+            self.assertNotIn(gone, kept)
+        for stays in ("3 launches", "Python"):
+            self.assertIn(stays, kept)
+        self.assertIn("Globex", checks.do_not_use(bank))
+        self.assertNotIn("Kubernetes", checks.do_not_use(bank))
+
+
+class PassRecord(unittest.TestCase):
+    def test_a_change_to_the_facts_or_rules_shows_after_a_pass(self):
+        recorded = checks.source_fingerprints(CFG)
+        self.assertEqual(checks.sources_changed(CFG, recorded), [])
+        self.assertEqual(checks.sources_changed(CFG, None), [])  # A pass from before these were kept.
+        self.assertEqual(checks.sources_changed(CFG, {**recorded, "profile/facts.md": "0" * 64}), ["profile/facts.md"])
+        stricter = {**CFG, "guard": {**CFG["guard"], "forbidden": [*CFG["guard"]["forbidden"], "Nightjar"]}}
+        self.assertEqual(checks.sources_changed(stricter, recorded), [checks.GUARD_KEY])
 
 
 if __name__ == "__main__":
