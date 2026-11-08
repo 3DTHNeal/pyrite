@@ -71,7 +71,7 @@ jobs:
       - name: The README's check command blocks the bad draft
         run: |
           set +e
-          python tools/pyrite.py check example/applications/2026-11-globex-staff-firmware-engineer --company "Globex Automation" --title "Staff Firmware Engineer" > verdict.json
+          python tools/pyrite.py check example/applications/2026-11-globex-staff-firmware-engineer --company "Globex Automation" --title "Staff Firmware Engineer" --json > verdict.json
           set -e
           python -c "import json; v = json.load(open('verdict.json')); assert not v['ok'] and v['errors'], v"
 

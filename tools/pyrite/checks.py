@@ -13,7 +13,7 @@ from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from .store import ROOT
+from .store import ROOT, SENT_FOLDER, sent_copies
 
 # A date alone on its line is a letter's date, which may be any day. A date inside a sentence is a claim like any other.
 DATE_LINE = re.compile(
@@ -810,12 +810,19 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
             errors.append(f"{pdf.name} is {pages} pages; the limit is {limit}.")
 
     drafter = drafter_versions(folder)
-    for name, version in drafter.items():
-        if version != DRAFTER_VERSION:
-            warnings.append(f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format.")
+    sent = sent_copies(folder)
+    if not sent:
+        for name, version in drafter.items():
+            if version != DRAFTER_VERSION:
+                warnings.append(f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format.")
 
     overlap = keyword_overlap(resume, description, cfg) if description else None
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
+    report = {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
+    if sent:
+        # What was sent is the record, so an older drafter is only a fact about it. Rebuilding would make the folder
+        # differ from what the company has, which the dashboard then flags as changed after sending.
+        report["sent_drafter"] = drafter_versions(folder / SENT_FOLDER)
+    return report
 
 
 # Above this share of the posting's skill terms a resume reads as copied from it, which screeners mark down. The
