@@ -6,6 +6,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- A **Profile** tab, the start of one place for the fact bank and the search settings. It lists each section with what it holds now, a **Needs you** list of what setup still needs with a button to the section that fixes it, and a **History** of every save it makes, where any file's earlier copy can be compared and put back. Sections whose editors aren't built yet say where to make the change meanwhile. The Facts and Settings tabs work as before.
 - Saves on the Facts tab that would let drafts say more, such as approving a term or taking an item off "Do not use", ask for a six-digit code that Pyrite sends to this computer's notifications, naming the change. `pyrite code` prints the code waiting when the notification doesn't show. A code works once, for that change, for 2 minutes.
 - An **Industries** tab: for each industry under `[promote]`, what Pyrite has seen of it, the official BLS employment, pay and growth figures for your metro area, state and the country, and an outlook Claude researches on the web on request, keeping only points whose sources turned up in its own search. Add `naics` codes to each industry and a `[market]` section with your state and metro area to `search.toml`. `pyrite outlook "<industry>"` writes the outlook from the command line.
 - `pyrite init <folder>` makes a workspace from the example's profile, without its fictional applications or allowed hosts, and points `.pyrite-home` at it.

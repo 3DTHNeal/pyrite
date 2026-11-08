@@ -17,7 +17,7 @@ from datetime import date, datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import checks, claude_code, confirm, deadline, doctor, facts, fill, mail, market, outlook, prep, profile, refresh, settings, store, tasks, workday
 from . import score as scoring
@@ -57,6 +57,10 @@ STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/static/profile.js": ("profile.js", "text/javascript; charset=utf-8"),
+    # Each Profile section's editor is its own file, and index.html loads each one by name.
+    **{f"/static/profile/{path.name}": (f"profile/{path.name}", "text/javascript; charset=utf-8")
+       for path in sorted((STATIC / "profile").glob("*.js"))},
 }
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -621,6 +625,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(facts.view())
             if path == "/api/profile":
                 return self._json({**profile.view(), "history": profile.history()})
+            if path == "/api/profile/kept":
+                query = parse_qs(urlparse(self.path).query)
+                try:
+                    return self._json(profile.compare(query.get("key", [""])[0], query.get("stamp", [""])[0]))
+                except ValueError as err:
+                    return self._json({"error": str(err)}, 404)
             if path == "/api/industries":
                 conn = connect()
                 try:
@@ -729,7 +739,20 @@ def _save_facts(body: dict) -> dict:
 
 
 def _save_profile(body: dict) -> dict:
-    changes, based_on = body.get("changes"), body.get("based_on")
+    return _write_profile(body.get("changes"), body.get("based_on"), body, str(body.get("reason") or ""), body.get("step"))
+
+
+def _put_back(body: dict) -> dict:
+    """History's Put back: the copy a file had before an earlier save, read here rather than sent by the page, and
+    written like any other save, so one that loosens a check still needs a code."""
+    key, stamp = str(body.get("key") or ""), str(body.get("stamp") or "")
+    if store.IS_EXAMPLE:
+        raise ValueError("This is the demo, so the fictional candidate's profile can't be changed.")
+    text = profile.kept(key, stamp)
+    return _write_profile({key: text}, body.get("based_on"), body, profile.put_back_reason(key, stamp), None)
+
+
+def _write_profile(changes, based_on, body: dict, reason: str, step) -> dict:
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so the fictional candidate's profile can't be changed.")
     if not isinstance(changes, dict) or not changes or not isinstance(based_on, dict):
@@ -743,7 +766,7 @@ def _save_profile(body: dict) -> dict:
     # A stale form is refused before any code is sent, since that save can't go through anyway.
     profile.refuse_stale(current, based_on)
     confirm.require(changes, current, based_on, body.get("request_id"), body.get("code"))
-    profile.write(changes, based_on, str(body.get("reason") or ""))
+    profile.write(changes, based_on, reason, step if isinstance(step, str) else None)
     return {**profile.view(), "history": profile.history()}
 
 
@@ -762,6 +785,7 @@ PROFILE_WRITES = {
     "/api/settings": settings.save,
     "/api/facts": _save_facts,
     "/api/profile": _save_profile,
+    "/api/profile/put-back": _put_back,
     "/api/profile/code": _profile_code,
 }
 

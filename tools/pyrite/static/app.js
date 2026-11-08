@@ -1766,23 +1766,28 @@ function renderIndustries() {
 
 const tabs = [...document.querySelectorAll(".tabs button")];
 
-// The tab you're on is in the address, so a reload or a bookmark comes back to it.
+// The tab you're on is in the address, so a reload or a bookmark comes back to it. On the Profile tab so is the
+// section, as #profile/achievements.
 function showTab(name, focus = false) {
-  const tab = tabs.find((t) => t.dataset.tab === name) || tabs[0];
+  const [base, ...rest] = String(name || "").split("/");
+  const tab = tabs.find((t) => t.dataset.tab === base) || tabs[0];
   tabs.forEach((b) => {
     b.setAttribute("aria-selected", String(b === tab));
     b.tabIndex = b === tab ? 0 : -1;
   });
   document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== `view-${tab.dataset.tab}`; });
   if (focus) tab.focus();
-  const hash = tab === tabs[0] ? "" : `#${tab.dataset.tab}`;
+  const section = tab.dataset.tab === "profile" ? profileShow(rest.join("/")) : "";
+  const hash = tab === tabs[0] ? "" : `#${tab.dataset.tab}${section ? `/${section}` : ""}`;
   if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
   if (tab.dataset.tab === "settings" && !dirtyParts.size) loadSettings();
   if (tab.dataset.tab === "facts" && !factsOpen) loadFacts();
   if (tab.dataset.tab === "industries") loadIndustries();
 }
 
-tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));
+// Coming back to the Profile tab returns to the section you left it on.
+const tabTarget = (tab) => (tab.dataset.tab === "profile" && profileAt ? `profile/${profileAt}` : tab.dataset.tab);
+tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tabTarget(tab))));
 // Arrow keys, Home and End move along the tabs, as in any other tab list.
 document.querySelector(".tabs").addEventListener("keydown", (e) => {
   const at = tabs.indexOf(document.activeElement);
@@ -1790,10 +1795,10 @@ document.querySelector(".tabs").addEventListener("keydown", (e) => {
   const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
   if (to === undefined) return;
   e.preventDefault();
-  showTab(tabs[(to + tabs.length) % tabs.length].dataset.tab, true);
+  showTab(tabTarget(tabs[(to + tabs.length) % tabs.length]), true);
 });
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
-window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen || drafts.size) e.preventDefault(); });
+window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen || drafts.size || profilePending) e.preventDefault(); });
 $("radar-search").addEventListener("input", renderRadar);
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
 $("scrim").addEventListener("click", closeDrawer);

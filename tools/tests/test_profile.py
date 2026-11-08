@@ -1,5 +1,6 @@
-"""The Profile tab's foundations: changing one TOML setting without touching the rest, reading and writing facts.md
-without losing a byte, and saving profile files together with their history."""
+"""The Profile tab: changing one TOML setting without touching the rest, reading and writing facts.md without losing a
+byte, saving profile files together with their history, and the hub that shows each section and what needs you."""
+import re
 import shutil
 import tempfile
 import tomllib
@@ -7,9 +8,9 @@ import unittest
 import unittest.mock as mock
 from pathlib import Path
 
-import support  # noqa: F401  Points Pyrite at a throwaway workspace before it loads.
+import support  # Points Pyrite at a throwaway workspace before it loads.
 
-from pyrite import factsdoc, profile, settings, store, tomledit
+from pyrite import factsdoc, profile, server, settings, store, tomledit
 
 EXAMPLE_PROFILE = store.EXAMPLE_ROOT / "profile"
 
@@ -362,6 +363,90 @@ class Profile(unittest.TestCase):
         self.assertEqual([e["reason"] for e in kept], ["Save 4", "Save 3", "Save 2"])
         with self.assertRaises(ValueError):
             profile.kept("terms", "../../facts")
+
+
+class Hub(Profile):
+    """The Profile tab's front page: each section's state and summary, what needs you, and History."""
+
+    def section(self, step_id):
+        return next(s for s in profile.view()["steps"] if s["id"] == step_id)
+
+    def test_every_section_is_listed_in_order_with_a_summary(self):
+        steps = profile.view()["steps"]
+        self.assertEqual([s["id"] for s in steps], [s["id"] for s in profile.STEPS])
+        self.assertTrue(all(s["summary"] and s["why"] for s in steps))
+        self.assertEqual(self.section("basics")["summary"], "Alex Rivera, Madison, WI")
+        self.assertEqual(self.section("history")["summary"], "4 roles at 2 employers")
+        self.assertEqual(self.section("masters")["summary"], "Resume and letter written")
+        self.assertEqual({s["status"] for s in steps if s["id"] != "tools"}, {"set"})
+        self.assertEqual(self.section("tools")["status"], "unknown")
+
+    def test_a_section_with_nothing_in_it_is_not_set(self):
+        profile.write({"terms": "# none yet\n"}, profile.versions(), "Emptied")
+        self.assertEqual((self.section("skills")["status"], self.section("skills")["summary"]), ("not_set", "No approved terms"))
+        config = tomledit.set_value(profile.read("config"), "guard", "heading_source", "profile/missing.md")
+        (self.root / "profile" / "search.toml").write_bytes(config.encode())
+        self.assertEqual(self.section("masters")["status"], "not_set")
+
+    def test_a_master_outside_the_profile_folder_is_named(self):
+        (self.root / "applications" / "model").mkdir(parents=True)
+        shutil.copy(self.root / "profile" / "resume.md", self.root / "applications" / "model" / "resume.md")
+        config = tomledit.set_value(profile.read("config"), "guard", "heading_source", "applications/model/resume.md")
+        (self.root / "profile" / "search.toml").write_bytes(config.encode())
+        self.assertEqual(self.section("masters")["summary"], "Headings checked against applications/model/resume.md")
+
+    def test_a_save_names_its_section_and_the_hub_says_when(self):
+        profile.write({"terms": profile.read("terms") + "Rust\n"}, profile.versions(), "Skills: 1 change", "skills")
+        profile.write({"facts": profile.read("facts") + "- One more\n"}, profile.versions(), "Typed by hand", "not-a-section")
+        self.assertIsNotNone(self.section("skills")["changed"])
+        self.assertIsNone(self.section("achievements")["changed"])
+        entries = profile.history()
+        self.assertEqual([e.get("step") for e in entries], [None, "skills"])
+        self.assertEqual(entries[0]["path"], "profile/facts.md")
+        self.assertTrue(entries[0]["at"].startswith("20"))
+
+    def test_setup_findings_need_you_and_name_the_section_that_fixes_them(self):
+        # The suite switches these off, since its workspace is the example. Here they're the point.
+        with mock.patch.object(profile.doctor, "workspace_todos", support.WORKSPACE_TODOS):
+            view = profile.view()
+        steps = {item["step"] for item in view["needs"]}
+        self.assertTrue({"basics", "achievements"} <= steps, view["needs"])
+        statuses = {s["id"]: s["status"] for s in view["steps"]}
+        self.assertEqual((statuses["basics"], statuses["achievements"]), ("attention", "attention"))
+        ranks = [{"bad": 0, "warn": 1, "info": 2}[item["severity"]] for item in view["needs"]]
+        self.assertEqual(ranks, sorted(ranks))
+
+    def test_the_demo_has_nothing_to_set_up(self):
+        with mock.patch.object(store, "IS_EXAMPLE", True), mock.patch.object(profile.doctor, "workspace_todos", support.WORKSPACE_TODOS):
+            self.assertEqual(profile.view()["needs"], [])
+
+    def test_a_timeline_line_that_cant_be_read_needs_you(self):
+        facts = profile.read("facts").replace("## Timeline", "## Timeline\n- Something else entirely", 1)
+        profile.write({"facts": facts}, profile.versions(), "x")
+        needs = profile.view()["needs"]
+        self.assertEqual([(n["step"], n["severity"]) for n in needs], [("history", "info")])
+
+    def test_compare_shows_what_putting_back_would_change(self):
+        terms = profile.read("terms")
+        profile.write({"terms": terms + "Rust\n"}, profile.versions(), "Added Rust")
+        stamp = profile.history()[0]["stamp"]
+        shown = profile.compare("terms", stamp)
+        self.assertIn("-Rust", shown["diff"])
+        self.assertFalse(shown["same"])
+        self.assertTrue(profile.put_back_reason("terms", stamp).startswith("Put back approved-terms.txt as it was before the save of"))
+        for key, bad in (("terms", "20261108T000000000000Z"), ("terms", "../x"), ("nope", stamp)):
+            with self.assertRaises(ValueError):
+                profile.compare(key, bad)
+
+
+class PageScripts(unittest.TestCase):
+    def test_every_script_the_page_loads_is_served_and_every_section_file_is_loaded(self):
+        page = (server.STATIC / "index.html").read_text(encoding="utf-8")
+        loaded = re.findall(r'<script src="([^"]+)"', page)
+        self.assertEqual(loaded[-1], "/static/app.js")  # app.js starts the page, so everything else loads first.
+        self.assertTrue(all(src in server.STATIC_FILES for src in loaded), loaded)
+        sections = {f"/static/profile/{path.name}" for path in (server.STATIC / "profile").glob("*.js")}
+        self.assertLessEqual(sections, set(loaded))
 
 
 if __name__ == "__main__":
