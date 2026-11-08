@@ -44,6 +44,7 @@
     <button role="tab" data-tab="industries" aria-selected="false">Industries</button>
     <button role="tab" data-tab="archive" aria-selected="false">Closed</button>
     <button role="tab" data-tab="sources" aria-selected="false">Sources</button>
+    <button role="tab" data-tab="profile" aria-selected="false">Profile</button>
     <button role="tab" data-tab="facts" aria-selected="false">Facts</button>
     <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   </nav>
@@ -104,6 +105,11 @@
     </div>
   </section>
 
+  <section id="view-profile" class="view profile-tab" hidden>
+    <div id="profile-view"></div>
+    <p id="profile-error" class="error" role="alert"></p>
+  </section>
+
   <section id="view-facts" class="view facts-tab" hidden>
     <div id="facts-view"></div>
     <p id="facts-error" class="error" role="alert"></p>
@@ -135,6 +141,8 @@
   </div>
   </form>
 </dialog>
+<!-- The Profile tab, then one file per section, then app.js, which starts the page. -->
+<script src="/static/profile.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

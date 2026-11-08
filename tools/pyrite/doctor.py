@@ -125,26 +125,30 @@ def still_example(root: Path) -> list[str]:
 
 
 def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
-    """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up."""
+    """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up.
+
+    Most also name the Profile section that fixes them as "step". The ones that block every draft, or let a
+    confidential name through, add "severity": "bad"."""
     if root.resolve() == EXAMPLE_ROOT:
         return [{"what": "No workspace is set, so this is the fictional example.",
                  "fix": "Run `pyrite init ../my-job-search --name \"Your Name\"`, with your own name, to make yours beside this "
                         "repository, or name another folder "
-                        f"outside it. {SETUP_DOCS}"}]
+                        f"outside it. {SETUP_DOCS}", "step": "workspace"}]
     if cfg is None:
-        return [{"what": "profile/search.toml is missing.", "fix": f"Copy example/profile/ into your workspace to start. {SETUP_DOCS}"}]
+        return [{"what": "profile/search.toml is missing.", "fix": f"Copy example/profile/ into your workspace to start. {SETUP_DOCS}", "step": "workspace"}]
     todos = []
     same = still_example(root)
     if same:
         # One finding for all of them, since the fix is the same, with the first named in full so it's easy to find.
         names = [same[0], *(Path(rel).name for rel in same[1:])]
-        fix = "Replace each with your own, starting with facts.md. Claude writes from these files, and the assay checks against them."
+        fix ="Replace each with your own, starting with facts.md. Claude writes from these files, and the assay checks against them."
         # A file that was edited but still reads as the example's would otherwise look like a mistake, so show what's left.
         edited = next((rel for rel in same if _text(root / rel) != _text(EXAMPLE_ROOT / rel)), None)
         if edited:
             fix += f' {edited} has been edited but still has the example\'s lines, such as: {example_lines_left(root, edited)[0]}'
         # The dashboard's Facts tab edits facts.md and approved-terms.txt, so the to-do item can open it.
         todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.", "fix": fix,
+                      "step": "achievements",
                       **({"tab": "facts"} if {"profile/facts.md", "profile/approved-terms.txt"} & set(same) else {})})
     for rel, fix in OPTIONAL_FILES.items():
         mine = _text(root / rel)
@@ -152,23 +156,27 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
             todos.append({"what": f"{rel} is still the fictional example's.", "fix": fix})
     if not (root / "profile" / "facts.md").exists():
         todos.append({"what": "profile/facts.md is missing.",
-                      "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
+                      "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours.",
+                      "step": "achievements"})
     example = _example_config()
     name = str(cfg.get("candidate", {}).get("name", "")).strip()
     if name == example["candidate"]["name"]:
-        todos.append({"what": "[candidate] name in profile/search.toml is still the example's.", "fix": "Set it to your name, as it goes on your documents."})
+        todos.append({"what": "[candidate] name in profile/search.toml is still the example's.",
+                      "fix": "Set it to your name, as it goes on your documents.", "step": "basics"})
     elif name.strip("<>[]").lower() in PLACEHOLDER_NAMES:
         todos.append({"what": f'[candidate] name in profile/search.toml is "{name}", a placeholder.',
-                      "fix": "Set it to your name, as it goes on your documents."})
+                      "fix": "Set it to your name, as it goes on your documents.", "step": "basics"})
     guard = cfg.get("guard", {})
     heading = guard.get("heading_source", "")
     if heading and not (root / heading).exists():
         todos.append({"what": f"heading_source under [guard] in profile/search.toml names {heading}, which isn't in your workspace.",
-                      "fix": "Point it at your master resume. Until then the assay blocks every draft."})
+                      "fix": "Point it at your master resume. Until then the assay blocks every draft.", "step": "masters",
+                      "severity": "bad"})
     for rel in guard.get("approved_sources", []):
         if not (root / rel).exists():
             todos.append({"what": f"approved_sources under [guard] in profile/search.toml names {rel}, which isn't in your workspace.",
-                          "fix": "Point it at a file you have, such as your master resume or letter, or remove it."})
+                          "fix": "Point it at a file you have, such as your master resume or letter, or remove it.",
+                          "step": "masters"})
     hosts = set(cfg.get("dashboard", {}).get("allowed_hosts", []))
     leftover = sorted(hosts & set(example.get("dashboard", {}).get("allowed_hosts", [])))
     if leftover:
@@ -178,7 +186,8 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     if left:
         todos.append({"what": f"profile/search.toml still has the example's {left}.",
                       "fix": "They describe the fictional candidate: where they live, the roles and industries they want, their "
-                             "confidential terms, and what their resume names. Set them for your own search, or empty them."})
+                             "confidential terms, and what their resume names. Set them for your own search, or empty them.",
+                      "step": "roles"})
     todos += _master_todos(root, cfg)
     todos += _unguarded_todos(root, cfg)
     todos += _seed_todos(root)
@@ -214,7 +223,7 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
                 problems.append("no '### Employer | dates' heading")
         if problems:
             todos.append({"what": f"{rel} has {_and(problems)}, so no {kind} drafted from it can pass the assay.",
-                          "fix": f"Every {kind} is checked against it. {FORMAT_DOCS}"})
+                          "fix": f"Every {kind} is checked against it. {FORMAT_DOCS}", "step": "masters", "severity": "bad"})
     return todos
 
 
@@ -251,7 +260,8 @@ def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
     return [{"what": f"profile/facts.md lists {_and(terms)} under \"Do not use\", but forbidden under [guard] in "
                      f"profile/search.toml doesn't block {'it' if len(terms) == 1 else 'them'}.",
              "fix": f"The assay blocks only the terms that forbidden lists, so add a pattern for each, such as "
-                    f"'\\b{terms[0]}\\b'. If one is only part of an explanation, put it in parentheses."}]
+                    f"'\\b{terms[0]}\\b'. If one is only part of an explanation, put it in parentheses.",
+             "step": "offlimits", "severity": "bad"}]
 
 
 def seed_still_example(root: Path) -> bool:

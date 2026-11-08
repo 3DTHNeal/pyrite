@@ -285,6 +285,16 @@ metro = "Madison, WI"  # as the BLS writes it, without "MSA"
 
 The numbers are read from data.bls.gov when the tab opens and kept in `data/market/`, then looked for again after a week. No key or account is needed.
 
+## Your profile
+
+The **Profile** tab brings together everything Pyrite knows about you and your search. It's being built a section at a time, and until a section has its own editor, it says where to change that part instead: the Facts or Settings tab, which work as before, or a file in your workspace.
+
+- **Needs you** lists what setup still needs, the same findings as `pyrite doctor`, each with a button to the section that fixes it.
+- Each section shows what it holds now and when the Profile tab last changed it. **Where this goes** names the files and settings it writes.
+- **History** lists every save made on the Profile tab, newest first. Pick a file to see what putting back its earlier copy would change, then **Put back**. Putting back is a save like any other: the file as it is now is kept too, and a copy that would let drafts say more asks for a code. The latest 50 copies of each file are kept in `data/history/`.
+- A section with edits you haven't saved shows how many, with **Discard** and **Save changes**. Leaving it asks first. If a file changed on disk after the tab loaded it, the save is refused and nothing is written.
+- The address names the section, as `#profile/achievements`, so a bookmark or reload comes back to it.
+
 ## Your facts
 
 The **Facts** tab shows `profile/facts.md` and `profile/approved-terms.txt`, the two files that say what a resume may claim. The fact bank is shown a section at a time. Click **Edit** on a section, change it and **Save**, or use **Add a section**. Sections named "Do not use" and "Unsupported" are marked **Approves nothing**, because the assay never treats them as a source.

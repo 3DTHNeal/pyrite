@@ -308,6 +308,35 @@ class OverHttp(Workspace):
         self.assertEqual(self.call("/api/facts", stale)[0], 409)
         self.assertEqual(self.sent, [])
 
+    def test_putting_back_an_earlier_copy_that_loosens_a_check_needs_a_code(self):
+        view = self.call("/api/profile")[1]
+        without = re.sub(r"(?m)^FreeRTOS\r?\n", "", profile.read("terms"))
+        status, view = self.call("/api/profile", {"changes": {"terms": without}, "based_on": view["versions"], "step": "skills"})
+        self.assertEqual((status, self.sent), (200, []))  # Removing a term tightens, so it needs no code.
+        stamp = view["history"][0]["stamp"]
+        status, kept = self.call(f"/api/profile/kept?key=terms&stamp={stamp}")
+        self.assertEqual(status, 200)
+        self.assertIn("+FreeRTOS", kept["diff"])
+        body = {"key": "terms", "stamp": stamp, "based_on": view["versions"]}
+        status, data = self.call("/api/profile/put-back", body)
+        self.assertEqual((status, data["changes"]), (428, ["approve “FreeRTOS” for every draft"]))
+        status, data = self.call("/api/profile/put-back", {**body, "request_id": data["request_id"], "code": self.code()})
+        self.assertEqual(status, 200)
+        self.assertIn("FreeRTOS", data["terms"])
+        self.assertTrue(data["history"][0]["reason"].startswith("Put back approved-terms.txt"))
+        self.assertEqual(profile.kept("terms", data["history"][0]["stamp"]), without)
+
+    def test_put_back_refuses_a_stale_form_and_a_copy_that_isnt_kept(self):
+        view = self.call("/api/profile")[1]
+        view = self.call("/api/profile", {"changes": {"terms": "CAN\n"}, "based_on": view["versions"]})[1]
+        stamp = view["history"][0]["stamp"]
+        (self.root / "profile" / "approved-terms.txt").write_bytes(b"Changed elsewhere\n")
+        self.assertEqual(self.call("/api/profile/put-back", {"key": "terms", "stamp": stamp, "based_on": view["versions"]})[0], 409)
+        for query in ("key=terms&stamp=../x", "key=../x&stamp=" + stamp, "key=terms&stamp=20200101T000000000000Z"):
+            self.assertEqual(self.call(f"/api/profile/kept?{query}")[0], 404, query)
+        self.assertEqual(self.call("/api/profile/put-back", {"key": "../x", "stamp": stamp, "based_on": {}})[0], 400)
+        self.assertEqual(self.sent, [])
+
     def test_a_waiting_code_can_be_sent_again_or_cancelled(self):
         view = self.call("/api/profile")[1]
         body = {"changes": {"terms": profile.read("terms") + "Rust\n"}, "based_on": view["versions"]}
