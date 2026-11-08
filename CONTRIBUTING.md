@@ -18,7 +18,7 @@ Pyrite is a personal project. I run it on my own job search and share it so othe
   .venv/Scripts/python.exe tools/check_public.py
   ```
 
-  Without `tools/requirements.txt` the tests that build documents skip. To have the privacy check run before every push, turn on the hook once per clone:
+  Without `tools/requirements.txt` the tests that build documents skip. To have lint, the type check and the privacy check run before every push, turn on the hook once per clone. It blocks a push that CI's lint job would fail, and leaves the tests to you, since they take minutes:
 
   ```bash
   git config core.hooksPath .githooks

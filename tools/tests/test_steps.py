@@ -114,6 +114,12 @@ class Steps(unittest.TestCase):
                          "expected": self.view["expected"]}),
             ("offlimits", {"never": {}, "nottrue": {}}),
             ("skills", {"add": [], "drop": []}),
+            ("achievements", {"sections": [{"line": s["line"], "title": s["title"],
+                                            "items": [{"line": i["line"], "text": i["text"]} for i in s["items"] if i["level"] == 0]}
+                                           for s in self.view["sections"] if s["kind"] == "facts"], "wording": []}),
+            ("masters", {"resume": {"headline": self.view["master_blocks"]["resume"]["headline"],
+                                    "blocks": self.view["master_blocks"]["resume"]["blocks"]},
+                         "letter": {"body": self.view["master_blocks"]["letter"]["body"]}}),
         ):
             result = self.draft(step, edits)
             self.assertEqual((result["changes"], result["count"]), ({}, 0), step)
@@ -322,6 +328,112 @@ class Steps(unittest.TestCase):
         self.assertEqual(result["code"], [])
         with self.assertRaises(ValueError):
             self.draft("skills", {"drop": [{"line": 0, "term": "Tools"}]})
+
+    # ---- Achievements ----
+
+    def fact_sections(self):
+        return [{"line": s["line"], "title": s["title"],
+                 "items": [{"line": i["line"], "text": i["text"]} for i in s["items"] if i["level"] == 0]}
+                for s in self.view["sections"] if s["kind"] == "facts"]
+
+    def test_facts_change_one_line_at_a_time(self):
+        sections = self.fact_sections()
+        sections[0]["items"][1]["text"] = "Cut motion-controller boot time from 42 s to 9 s on the production fleet"
+        del sections[1]["items"][2]
+        sections[1]["items"].insert(0, {"line": None, "text": "Mentored 3 interns"})
+        result = self.draft("achievements", {"sections": sections})
+        facts = lf(result, "facts")
+        self.assertIn("- Cut motion-controller boot time from 42 s to 9 s on the production fleet\n", facts)
+        self.assertIn("## Leadership\n- Mentored 3 interns\n- Managed a team of 7", facts)
+        self.assertNotIn("Software lead on 3 robot launches", facts)
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(set(result["changes"]), {"facts"})
+
+    def test_a_new_section_goes_before_the_ones_that_approve_nothing(self):
+        sections = [*self.fact_sections(), {"line": None, "title": "Patents", "items": [{"line": None, "text": "US 1,234,567"}]}]
+        facts = lf(self.draft("achievements", {"sections": sections}), "facts")
+        self.assertLess(facts.index("## Patents\n- US 1,234,567\n"), facts.index("## Do not use"))
+
+    def test_sections_that_would_read_as_something_else_are_refused(self):
+        for title, message in (("Do not use either", "may not claim"), ("Timeline 2", "timeline section"),
+                               ("Leadership", "already")):
+            sections = [*self.fact_sections(), {"line": None, "title": title, "items": [{"line": None, "text": "x"}]}]
+            with self.assertRaises(ValueError) as caught:
+                self.draft("achievements", {"sections": sections})
+            self.assertIn(message, str(caught.exception))
+
+    def test_a_fact_naming_a_blocked_term_is_noted(self):
+        sections = self.fact_sections()
+        sections[0]["items"].append({"line": None, "text": "Brought up the SkyLift 900 drive"})
+        notes = self.draft("achievements", {"sections": sections})["notes"]
+        self.assertTrue(any("Never mention" in note for note in notes), notes)
+
+    def test_the_builder_writes_one_line_and_its_wording_rule(self):
+        built = steps.compose({"did": "Cut nightly regression time", "before": "6 hours", "after": "50 minutes",
+                               "where": "on the shared CI farm", "role": "Senior Firmware Engineer"})
+        self.assertEqual(built["text"], "Cut nightly regression time from 6 hours to 50 minutes on the shared CI farm")
+        self.assertEqual(built["flags"], [])
+        sections = self.fact_sections()
+        sections[0]["items"].append({"line": None, "text": built["text"]})
+        result = self.draft("achievements", {"sections": sections, "wording": [{"keep": built["where"], "fact": built["text"]}]})
+        notes = lf(result, "run_notes")
+        self.assertIn('in a pilot of 8 engineers".\n  - Keep “on the shared CI farm” with “Cut nightly regression time', notes)
+        self.save(result)
+        self.assertEqual(len(self.view["wording"]), 2)
+
+    def test_the_builder_flags_what_reads_badly(self):
+        flags = steps.compose({"did": "Helped significantly", "after": "30%", "role": "Senior Firmware Engineer"})["flags"]
+        self.assertEqual(len(flags), 2, flags)
+        flags = steps.compose({"did": "Managed the bench", "after": "212 tests", "role": "Senior Firmware Engineer"})["flags"]
+        self.assertTrue(any("management title" in flag for flag in flags), flags)
+        self.assertEqual(steps.compose({"did": "Led 3 launches", "role": "Firmware Engineering Manager"})["flags"], [])
+
+    def test_wording_rules_start_run_notes_when_there_are_none(self):
+        self.assertEqual(steps._add_wording("", ["Keep “x” with “y”."]), "# Run notes\n\n- **Wording:**\n  - Keep “x” with “y”.\n")
+        self.assertIn("\n- **Wording:**\n  - r\n", steps._add_wording("# Run notes\n\n- **Who:** me\n", ["r"]))
+
+    # ---- Master resume ----
+
+    def test_the_master_is_read_a_block_at_a_time(self):
+        blocks = self.view["master_blocks"]["resume"]["blocks"]
+        self.assertEqual([b["heading"] for b in blocks[:3]], ["Summary", "Skills", "Experience"])
+        self.assertTrue(self.view["master_blocks"]["letter"]["body"].startswith("Dear Hiring Manager,"))
+
+    def test_a_block_and_the_headline_change_and_the_headings_stay(self):
+        blocks = self.view["master_blocks"]["resume"]["blocks"]
+        summary = next(b for b in blocks if b["heading"] == "Summary")
+        result = self.draft("masters", {"resume": {"headline": "Principal Firmware Engineer",
+                                                   "blocks": [{"line": summary["line"], "text": "Builds robot firmware.\n"}]}})
+        resume = lf(result, "resume")
+        self.assertIn("# Alex Rivera\n= Principal Firmware Engineer\n@ ", resume)
+        self.assertIn("## Summary\nBuilds robot firmware.\n\n## Skills\n", resume)
+        self.assertEqual(result["preview"]["resume"]["errors"], [])
+
+    def test_the_letter_body_changes_under_the_name_and_contact(self):
+        body = self.view["master_blocks"]["letter"]["body"].replace("Dear Hiring Manager,", "Dear hiring team,")
+        letter = lf(self.draft("masters", {"letter": {"body": body}}), "letter")
+        self.assertTrue(letter.startswith("# Alex Rivera\n@ Madison, WI"))
+        self.assertIn("\n\nDear hiring team,\n", letter)
+
+    def test_the_fact_check_runs_on_the_draft(self):
+        summary = next(b for b in self.view["master_blocks"]["resume"]["blocks"] if b["heading"] == "Summary")
+        result = self.draft("masters", {"resume": {"blocks": [{"line": summary["line"], "text": summary["text"] + " Led the Bluebird launch. Cut boot time by 77%."}]}})
+        checked = result["preview"]["resume"]
+        self.assertTrue(any("Bluebird" in error for error in checked["errors"]), checked)
+        self.assertTrue(any("77%" in only for only in checked["only_here"]), checked)
+
+    def test_a_heading_cant_be_typed_into_a_block(self):
+        summary = next(b for b in self.view["master_blocks"]["resume"]["blocks"] if b["heading"] == "Summary")
+        for text in ("## Sneaky\nx", "### Initech | 2020 – 2021", "@ me@example.com"):
+            with self.assertRaises(ValueError):
+                self.draft("masters", {"resume": {"blocks": [{"line": summary["line"], "text": text}]}})
+
+    def test_without_a_master_there_is_nothing_to_change(self):
+        (self.root / "profile" / "resume.md").unlink()
+        self.view = {**profile.view(), **steps.view()}
+        self.assertFalse(self.view["master_blocks"]["resume"]["exists"])
+        with self.assertRaises(ValueError):
+            self.draft("masters", {"resume": {"headline": "x"}})
 
     # ---- the server ----
 
