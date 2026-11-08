@@ -358,6 +358,98 @@ def set_value(text: str, table: str | Path, key: str, value: Any, literal: bool 
     return _checked(text, new, table, lambda place: place.__setitem__(key, value))
 
 
+def _items(text: str, pair: Pair) -> list[tuple[int, int]]:
+    """Where each string in an array of strings sits."""
+    spans = []
+    j = pair.value_start + 1
+    while j < pair.value_end - 1:
+        char = text[j]
+        if char in "\"'":
+            end = _string_end(text, j)
+            spans.append((j, end))
+            j = end
+        elif char == "#":
+            j = _line_end(text, j)
+        elif char in "[{":
+            raise EditError("That list holds more than text, so it can't be changed an item at a time.")
+        else:
+            j += 1
+    return spans
+
+
+def edit_list(text: str, table: str | Path, key: str, remove=(), add=(), literal: bool = False) -> str:
+    """The text with some strings taken out of an array and others added at its end. Every other item, line and
+    comment in the array stays as it was, so a list set out by hand keeps its shape. A key that isn't there is set."""
+    table = path(table)
+    items = scan(text)
+    _refuse_arrays(items, table)
+    pair = next((item for item in items if isinstance(item, Pair) and item.table == table and item.key == (key,)
+                 and not item.array), None)
+    if pair is None:
+        return set_value(text, table, key, list(dict.fromkeys(add)), literal) if add else text
+    current = _place(_parse(text), table).get(key)
+    if not isinstance(current, list) or not all(isinstance(value, str) for value in current):
+        raise EditError(f"{key} isn't a list of text, so it can't be changed an item at a time.")
+    gone = set(remove)
+    expected = [value for value in current if value not in gone]
+    for value in add:
+        if value not in expected:
+            expected.append(value)
+    if expected == current:
+        return text
+    eol = _eol(text)
+    new = text
+    spans = _items(text, pair)
+    for (a, b), value in reversed(list(zip(spans, current, strict=True))):
+        if value not in gone:
+            continue
+        end = _ws(new, b)
+        line_start = new.rfind("\n", 0, a) + 1
+        if new.startswith(",", end):
+            comma = end
+            end = _ws(new, comma + 1)
+            start = a
+            if new[end:end + 1] in ("#", "\r", "\n", "") and new[line_start:a].strip():
+                # Last on a line that has others: the space before it goes, and any comment after it stays where it was.
+                end = comma + 1
+                while start > line_start and new[start - 1] in " \t":
+                    start -= 1
+        else:
+            # The last item: the comma before it goes instead.
+            start = a
+            while start > pair.value_start + 1 and new[start - 1] in " \t":
+                start -= 1
+            if new[start - 1] == ",":
+                start -= 1
+        if not new[line_start:a].strip() and new[end:end + 1] in ("\r", "\n"):
+            start, end = line_start, _line_end(new, end)  # Alone on its line: the line goes.
+        new = new[:start] + new[end:]
+    added = [value for value in expected if value not in current]
+    if added:
+        pair = next(item for item in scan(new) if isinstance(item, Pair) and item.table == table and item.key == (key,)
+                    and not item.array)
+        spans = _items(new, pair)
+        close = pair.value_end - 1
+        dumped = [dump(value, literal) for value in added]
+        line_start = new.rfind("\n", pair.value_start, close) + 1
+        if line_start > pair.value_start and not new[line_start:close].strip():
+            # The bracket closes on its own line: each new item gets a line before it, set in like the last one.
+            last = spans[-1] if spans else None
+            indent = "  "
+            if last:
+                row = new.rfind("\n", 0, last[0]) + 1
+                indent = new[row:last[0]] if not new[row:last[0]].strip() else "  "
+            block = "".join(f"{indent}{item},{eol}" for item in dumped)
+            new = new[:line_start] + block + new[line_start:]
+            if last and not new[_ws(new, last[1]):].startswith(","):
+                new = new[:last[1]] + "," + new[last[1]:]
+        else:
+            before = new[pair.value_start + 1:close].rstrip()
+            joiner = "" if not spans else " " if before.endswith(",") else ", "
+            new = new[:pair.value_start + 1] + before + joiner + ", ".join(dumped) + new[close:]
+    return _checked(text, new, table, lambda place: place.__setitem__(key, expected))
+
+
 def delete_value(text: str, table: str | Path, key: str) -> str:
     """The text without one key's line. A key that isn't there leaves the text as it was."""
     table = path(table)

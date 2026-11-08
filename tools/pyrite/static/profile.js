@@ -13,8 +13,65 @@ const profileSteps = {};
 // the server read it, ctx.step that section's entry in the server's list, and ctx.editable is false in the demo.
 // ctx.change(changes, count) reports the edited files as { key: whole new text } and how many edits that is, which the
 // footer shows and saves; a count of 0 means nothing to save. After a save or Discard the section is drawn again.
+// ctx.memo is the section's own object for its form: it lasts while there are unsaved edits, so drawing the section
+// again keeps them, and starts empty after a save or Discard.
 function profileStep(id, def) {
   profileSteps[id] = def;
+}
+
+let profileMemo = { step: "" };
+
+// Sends a section's form to the server, which works out the files as a save would leave them. Returns send(edits),
+// which waits for typing to pause; `show(result, error)` gets each answer, and only the latest one counts.
+function profileDrafter(ctx, show) {
+  let timer = null;
+  let sent = 0;
+  return (edits, now) => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const mine = ++sent;
+      try {
+        const result = await api("/api/profile/draft", { step: ctx.step.id, edits, based_on: ctx.data.versions });
+        if (mine !== sent) return;
+        ctx.change(result.changes, result.count);
+        show(result, null);
+      } catch (err) {
+        if (mine !== sent) return;
+        ctx.change({}, 0);
+        show(null, err);
+      }
+    }, now ? 0 : 250);
+  };
+}
+
+// What a draft would do: why it can't, anything to know first, whether saving needs a code, and each file's diff.
+function profileReview(result, err) {
+  if (err) {
+    return h("div", { class: "callout bad", role: "alert" }, h("b", {}, err.message),
+      err.status === 409 ? h("p", {}, h("button", { class: "btn small", type: "button", onclick: () => { profilePending = null; loadProfile(); } }, "Reload")) : null);
+  }
+  if (!result || !result.count) return h("p", { class: "muted" }, "No changes yet. What you change is shown here before you save it.");
+  return h("div", { class: "stack" },
+    result.notes.length ? h("div", { class: "callout info" }, h("b", {}, "Before you save"),
+      h("ul", {}, result.notes.map((note) => h("li", {}, note)))) : null,
+    result.code.length ? h("div", { class: "callout" }, h("b", {}, "Saving asks for a code from this computer, because it will:"),
+      h("ul", {}, result.code.map((change) => h("li", {}, change)))) : null,
+    h("details", { class: "profile-changes" },
+      h("summary", {}, `What changes in your files: ${result.diffs.map((d) => d.path.split("/").pop()).join(", ")}`),
+      result.diffs.map((d) => h("div", {}, h("p", { class: "profile-file" }, d.path), profileDiff(d.lines, d.cut)))));
+}
+
+// Draws a draft's review into `box`, keeping the file changes open if you had opened them.
+function profileShowReview(box, result, err) {
+  const was = box.querySelector(".profile-changes");
+  fill(box, profileReview(result, err));
+  const now = box.querySelector(".profile-changes");
+  if (was && was.open && now) now.open = true;
+}
+
+// A labelled form field. `input` can be any control; `help` is a line under it.
+function profileField(label, input, help) {
+  return h("label", { class: "profile-field" }, h("span", {}, label), input, help ? h("small", { class: "muted" }, help) : null);
 }
 
 let profileData = null;
@@ -324,8 +381,9 @@ function renderProfileStep(root, step) {
   const foot = profileFoot(step, Boolean(def));
   let drawn = { main: profileFallback(step) };
   if (def) {
+    if (!profilePending || profileMemo.step !== step.id) profileMemo = { step: step.id };
     const ctx = {
-      data: profileData, step, editable: profileData.editable,
+      data: profileData, step, editable: profileData.editable, memo: profileMemo,
       change(changes, count) {
         profilePending = count ? { changes, count } : null;
         foot.update();

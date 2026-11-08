@@ -370,6 +370,31 @@ def _unsupported(text: str, guard: dict, label: str) -> tuple[list[str], list[st
     return errors, disclaimed
 
 
+def explain(sentence: str, guard: dict) -> dict:
+    """How the confidential and unsupported checks read one piece of text, for the Profile tab's test box: the text as
+    the checks see it, and each match in it as never (confidential), claim (unsupported and claimed) or denied
+    (unsupported, but the sentence denies it). It uses the same patterns and the same reading of a denial as a draft's
+    check, so a sentence that passes here passes there."""
+    text = _matchable(sentence)
+    hits = []
+    for pattern in guard.get("forbidden", []):
+        hits += [{"start": m.start(), "end": m.end(), "kind": "never", "pattern": pattern}
+                 for m in re.finditer(pattern, text, re.I) if m.end() > m.start()]
+    at = 0
+    for part in SENTENCE.split(text):
+        at = text.index(part, at)
+        for pattern in guard.get("unsupported", []):
+            for m in re.finditer(pattern, part, re.I):
+                if m.end() == m.start():
+                    continue
+                denied = _disclaimed(part[:m.start()], part[m.end():], guard.get("disclaimers", []))
+                hits.append({"start": at + m.start(), "end": at + m.end(), "kind": "denied" if denied else "claim",
+                             "pattern": pattern})
+        at += len(part)
+    hits.sort(key=lambda hit: (hit["start"], -hit["end"]))
+    return {"text": text, "hits": hits, "blocked": any(hit["kind"] != "denied" for hit in hits)}
+
+
 def check_text(
     text: str, kind: str, cfg: dict, sources: str, company: str = "", title: str = "", contact_line: str | None = None,
     posting: str = "",
