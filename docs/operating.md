@@ -253,6 +253,24 @@ Promotions change the order and nothing else. They raise no filter score, so a p
 
 Changes apply the next time the dashboard refreshes, and need no `rescore`.
 
+## Industries
+
+The **Industries** tab shows how each industry under `[promote]` is doing where you live, in three parts.
+
+- **In your search** is what Pyrite has seen: postings in the last 90 days that passed your filters and count as the industry (judged as above), how many are still listed, local against remote, the employers posting most, and what came of applying. Only postings Pyrite has seen count, so it's thin for the first weeks.
+- **Official numbers** come from the BLS [Quarterly Census of Employment and Wages](https://www.bls.gov/cew/), which counts nearly every job from employers' unemployment insurance filings. For your metro area, your state and the country, it shows private-sector jobs, their change over a year, workplaces, average weekly pay against all private jobs in the same area, and concentration (above 1 means the industry is a bigger share of jobs there than nationally). It's solid but runs five to six months behind, and a metro area's industry detail comes out a quarter or two after a state's, so each row names its quarter. The BLS withholds a figure that would reveal one employer's numbers, and the tab says which codes were left out. US only.
+- **Outlook** is written by Claude from a web search, when you click **Research with Claude**. It covers hiring and layoffs, investment, the employers nearby, headwinds and what it means for a job search, with every point linked to its source. It's the only Claude run with web access, so it gets nothing else: no files and no shell, and nothing about you beyond the industry, the area and the employers you listed. Plain code then keeps only the points whose sources came up in that run's own searches or pages, and says how many it dropped. That can't prove a page says what a point claims, so open the source before relying on it. `pyrite outlook "<industry>"` does the same from the command line. It uses Sonnet unless `model` under `[market]` says otherwise.
+
+To set it up, give each industry its codes on the Settings card, under **Industry codes (NAICS)**, or as `naics = ["334413", "333242"]` in `search.toml`. Look codes up at [census.gov/naics](https://www.census.gov/naics/). Codes are broad, so pick the narrowest that fit, and don't list one inside another, since its jobs would count twice. Then name where you live:
+
+```toml
+[market]
+state = "Wisconsin"    # the full name
+metro = "Madison, WI"  # as the BLS writes it, without "MSA"
+```
+
+The numbers are read from data.bls.gov when the tab opens and kept in `data/market/`, then looked for again after a week. No key or account is needed.
+
 ## Your facts
 
 The **Facts** tab shows `profile/facts.md` and `profile/approved-terms.txt`, the two files that say what a resume may claim. The fact bank is shown a section at a time. Click **Edit** on a section, change it and **Save**, or use **Add a section**. Sections named "Do not use" and "Unsupported" are marked **Approves nothing**, because the assay never treats them as a source.

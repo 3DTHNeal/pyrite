@@ -20,6 +20,9 @@ MAX_NAME = 80
 MAX_PATTERN = 300
 MAX_ITEMS = 100
 MAX_POINTS = 50
+MAX_CODES = 10
+# A NAICS code as the BLS writes it: two to six digits, or a range of two-digit sectors such as 31-33.
+NAICS = re.compile(r"\d{2,6}|\d{2}-\d{2}")
 SECTION = re.compile(r"^\[\[?\s*([^\]\s]+)\s*\]\]?\s*(#.*)?$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _lock = threading.Lock()
@@ -105,6 +108,22 @@ def _list(value, what: str) -> list:
     return value
 
 
+def _codes(value, what: str) -> list[str]:
+    """Industry codes for the official numbers. One inside another would count its jobs twice."""
+    codes = [str(code).strip() for code in _list(value, f"{what} codes")]
+    if len(codes) > MAX_CODES:
+        raise ValueError(f"{what}: at most {MAX_CODES} industry codes.")
+    for code in codes:
+        if not NAICS.fullmatch(code):
+            raise ValueError(f"{what}: '{code}' isn't an industry code. Use 2 to 6 digits, such as 3332 or 334413.")
+    _unique(codes, f"{what} codes")
+    for code in codes:
+        for other in codes:
+            if other != code and other.startswith(code):
+                raise ValueError(f"{what}: {other} is part of {code}, so its jobs would be counted twice. Keep one.")
+    return codes
+
+
 def _unique(names: list, what: str) -> None:
     lowered = [n.lower() for n in names]
     for name, low in zip(names, lowered, strict=True):
@@ -151,6 +170,7 @@ def validate(raw) -> dict:
         companies = [_name(c, f"{label} employer") for c in _list(entry.get("companies"), f"{label} employers")]
         wants = [_named_item(w, f"{label} skill") for w in _list(entry.get("wants"), f"{label} skills")]
         _unique([w["name"] for w in wants], f"{label} skills")
+        naics = _codes(entry.get("naics"), label)
         if not terms and not companies:
             raise ValueError(f"{label} needs at least one term or employer, or it can never match.")
         if terms:
@@ -159,6 +179,8 @@ def validate(raw) -> dict:
             industry["companies"] = companies
         if wants:
             industry["wants"] = wants
+        if naics:
+            industry["naics"] = naics
         promote["industry"].append(industry)
     _unique([i["name"] for i in promote["industry"]], "Industries")
     return promote
@@ -205,6 +227,7 @@ def render(promote: dict) -> str:
             "# Keep terms specific: \"medical\" alone would catch most postings' benefits text.",
             "# `wants` are skills the industry looks for. The Settings tab checks them against facts.md,",
             "# and they don't change the ranking. Add `points` to any industry to override industry_points.",
+            "# `naics` are the industry's codes, for the official numbers on the Industries tab.",
         ]
     for index, industry in enumerate(promote["industry"]):
         if index:
@@ -218,6 +241,8 @@ def render(promote: dict) -> str:
             lines.append("companies = [" + ", ".join(_text(c) for c in industry["companies"]) + "]")
         if "wants" in industry:
             lines += ["wants = [", *_inline_list(industry["wants"]), "]"]
+        if "naics" in industry:
+            lines.append("naics = [" + ", ".join(_text(c) for c in industry["naics"]) + "]")
     return "\n".join(lines) + "\n"
 
 

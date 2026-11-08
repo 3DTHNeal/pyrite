@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from . import checks, claude_code, deadline, doctor, facts, fill, mail, prep, refresh, settings, tasks, workday
+from . import checks, claude_code, deadline, doctor, facts, fill, mail, market, outlook, prep, refresh, settings, tasks, workday
 from . import score as scoring
 from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
@@ -611,6 +611,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(settings.view())
             if path == "/api/facts":
                 return self._json(facts.view())
+            if path == "/api/industries":
+                conn = connect()
+                try:
+                    return self._json(market.view(conn, load_config()))
+                finally:
+                    conn.close()
             match = re.fullmatch(r"/api/job/(\d+)", path)
             if match:
                 conn = connect()
@@ -672,6 +678,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"id": job_id}, 201)
             if path == "/api/run":
                 tasks.start(conn, str(body.get("kind") or ""))
+                return self._json({"ok": True}, 202)
+            if path == "/api/industries/outlook":
+                outlook.start(cfg, str(body.get("name") or ""))
                 return self._json({"ok": True}, 202)
             match = re.fullmatch(r"/api/job/(\d+)/action", path)
             if match:

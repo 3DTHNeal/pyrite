@@ -345,6 +345,29 @@ def cmd_refresh(args, conn):
 
 
 @_with_db
+def cmd_outlook(args, conn):
+    """Have Claude research one industry where you live. The dashboard's Industries tab runs this in the background with --worker."""
+    from . import outlook
+    from .claude_code import ClaudeFailed
+
+    cfg = load_config()
+    if not args.worker:
+        if store.IS_EXAMPLE:
+            sys.exit("The demo doesn't run Claude. Point PYRITE_HOME at your own workspace to research an industry.")
+        try:
+            outlook._industry(cfg, args.name)
+        except ValueError as err:
+            sys.exit(str(err))
+    try:
+        report = outlook.run(conn, cfg, args.name)
+    except (ClaudeFailed, ValueError) as err:
+        sys.exit(str(err))
+    points = sum(len(s["points"]) for s in report["sections"])
+    print(f"Kept {points} points from {len(report['sources'])} sources. Dropped {report['dropped']['points']} points and "
+          f"{report['dropped']['sources']} sources that this run's searches never came across.")
+
+
+@_with_db
 def cmd_prep(args, conn):
     """Have Claude write an interview prep brief. The dashboard's button runs this in the background with --worker."""
     from . import prep
@@ -768,6 +791,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_prep)
+
+    p = sub.add_parser("outlook", help="have Claude research how an industry under [promote] is doing where you live, keeping only sourced points")
+    p.add_argument("name", help="the industry's name, as under [[promote.industry]]")
+    p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_outlook)
 
     sub.add_parser("usage", help="show what the Claude runs started from here have used").set_defaults(func=cmd_usage)
     sub.add_parser("sweep", help="read the job boards, then check mail for replies").set_defaults(func=cmd_sweep)

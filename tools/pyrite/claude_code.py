@@ -31,7 +31,7 @@ def sign_in_help(claude: str) -> str:
         command = f'"{claude}" auth login'
     return f"Claude Code isn't signed in for background use. Run this once in a terminal: {command}"
 KIND_LABELS = {"refresh": "Refresh resume", "prep": "Interview prep", "triage": "Judging postings", "tailor": "Tailoring resumes",
-               "mail": "Checking mail"}
+               "mail": "Checking mail", "outlook": "Industry outlook"}
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 
@@ -223,7 +223,7 @@ def _count(value) -> float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def record(conn, job_id: int, kind: str, result: dict, seconds: float, ok: bool) -> None:
+def record(conn, job_id: int | None, kind: str, result: dict, seconds: float, ok: bool) -> None:
     """Keep what one run used. Committed straight away, so a run that fails and rolls back is still counted."""
     raw_usage = result.get("usage")
     usage = raw_usage if isinstance(raw_usage, dict) else {}
