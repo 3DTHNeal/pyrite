@@ -1,0 +1,2 @@
+# Lets `pip install -r requirements.txt` work from the top of the repository too. The list itself is in tools/.
+-r tools/requirements.txt

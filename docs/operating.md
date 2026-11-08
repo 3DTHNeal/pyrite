@@ -36,7 +36,7 @@ my-job-search/
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
 
-`init` makes one from the example's profile and points this folder at it:
+`init` makes one from the example's profile and points this folder at it. Put your own name in the quotes. A name with a space needs them, and `init` refuses a placeholder such as "Your Name":
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py init ../my-job-search --name "Your Name"

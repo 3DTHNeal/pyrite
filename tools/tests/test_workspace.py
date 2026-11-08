@@ -196,7 +196,9 @@ class NewWorkspace(unittest.TestCase):
     def test_whatever_is_still_the_examples_is_listed(self):
         self.assertEqual(doctor.still_example(self.root), list(doctor.OWN_FILES))
         todos = "\n".join(self.todos())
-        for expected in (*doctor.OWN_FILES, *doctor.OPTIONAL_FILES, "[candidate] name", "allowed_hosts", "profile/seed.toml",
+        self.assertIn(f"{doctor.OWN_FILES[0]}, ", todos)  # One finding for them all, the first named with its folder.
+        for expected in (*(Path(rel).name for rel in doctor.OWN_FILES), *doctor.OPTIONAL_FILES, "[candidate] name", "allowed_hosts",
+                         "profile/seed.toml",
                          *(table for _, table, _ in doctor.EXAMPLE_SETTINGS), *(key for _, _, key in doctor.EXAMPLE_SETTINGS if key)):
             self.assertIn(expected, todos)
 
@@ -319,6 +321,48 @@ class CommandLine(unittest.TestCase):
         self.assertNotRegex(text, r"(?m)^\s+task\b")
         self.assertEqual(cli.build_parser().parse_args(["task", "3"]).id, 3)  # The dashboard's worker still runs.
 
+    def run_cli(self, *argv):
+        """(stdout, stderr, exit code) of one command line."""
+        out, err, code = io.StringIO(), io.StringIO(), 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                cli.main(list(argv))
+            except SystemExit as stop:
+                code = stop.code if isinstance(stop.code, int) else 1
+                err.write(str(stop.code) if not isinstance(stop.code, int) else "")
+        return out.getvalue(), err.getvalue(), code
+
+    def test_the_bare_command_prints_help_with_where_to_start(self):
+        out, _, code = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertIn("usage: pyrite", out)
+        self.assertIn(cli.INIT_EXAMPLE, out)
+        self.assertIn("python tools/pyrite.py", out)  # Before `pip install -e .`, there's no pyrite command to type.
+        self.assertNotIn("<folder>", out)  # Copied as it is, a shell reads it as redirection.
+
+    def test_help_explains_one_command_or_lists_them(self):
+        self.assertIn("usage: pyrite init", self.run_cli("help", "init")[0])
+        self.assertIn("usage: pyrite [-h]", self.run_cli("help")[0])
+        _, err, code = self.run_cli("help", "task")
+        self.assertEqual(code, 1)
+        self.assertIn("isn't a Pyrite command", err)
+
+    def test_a_mistyped_command_suggests_the_one_meant(self):
+        for typed, meant in (("dcotor", "doctor"), ("Doctor", "doctor"), ("serv", "serve"), ("int", "init")):
+            _, err, code = self.run_cli(typed)
+            self.assertEqual(code, 1, typed)
+            self.assertIn(f"Did you mean `pyrite {meant}`?", err)
+        _, err, _ = self.run_cli("tsak")
+        self.assertNotIn("pyrite task", err)  # The hidden worker is never offered.
+
+    def test_an_unquoted_value_with_a_space_says_to_quote_it(self):
+        _, err, code = self.run_cli("add", "--company", "Acme", "Robotics", "--title", "Engineer")
+        self.assertEqual(code, 2)
+        self.assertIn('--company "Acme Robotics"', err)
+        _, err, _ = self.run_cli("where", "--bogus")
+        self.assertIn("unrecognized arguments: --bogus", err)
+        self.assertNotIn("quotes", err)
+
     def test_version_is_the_same_everywhere(self):
         project = tomllib.loads((CODE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         self.assertEqual(project["version"], pyrite.__version__)
@@ -367,11 +411,30 @@ class Init(unittest.TestCase):
         todos = "\n".join(todo["what"] for todo in WORKSPACE_TODOS(self.folder, cfg))
         for gone in ("[candidate] name", "allowed_hosts", "seed.toml"):
             self.assertNotIn(gone, todos)
-        self.assertIn("profile/facts.md is still the fictional example's", todos)  # Making it yours is the next step.
+        self.assertRegex(todos, r"^profile/facts\.md, .* are still the fictional example's")  # Making it yours is the next step.
 
     def test_without_a_name_the_example_name_stays_for_doctor_to_flag(self):
         self.init()
         self.assertEqual(self.cfg()["candidate"]["name"], "Alex Rivera")
+
+    def test_a_placeholder_copied_from_the_docs_is_refused_before_anything_is_made(self):
+        for extra in (("--name", "Your Name"), ("--name", "<your name>"), ("--name", "[Name]")):
+            with self.assertRaises(SystemExit) as caught:
+                self.init(*extra)
+            self.assertIn("placeholder", str(caught.exception.code))
+        self.folder = self.base / "<folder>"
+        with self.assertRaises(SystemExit) as caught:
+            self.init()
+        self.assertIn(cli.INIT_EXAMPLE, str(caught.exception.code))
+        self.assertEqual(list(self.base.iterdir()), [])
+        self.assertFalse(self.pointer.exists())
+
+    def test_doctor_flags_a_placeholder_name_left_in_search_toml(self):
+        self.init("--name", "Sam Doe")
+        cfg = self.cfg()
+        cfg["candidate"]["name"] = "Your Name"
+        todos = [todo["what"] for todo in WORKSPACE_TODOS(self.folder, cfg)]
+        self.assertIn('[candidate] name in profile/search.toml is "Your Name", a placeholder.', todos)
 
     def test_an_existing_profile_is_left_alone(self):
         (self.folder / "profile").mkdir(parents=True)
@@ -395,6 +458,7 @@ class Init(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             self.init()
         self.assertIn("inside this repository", str(caught.exception.code))
+        self.assertIn(f"pyrite init {Path('..') / 'my-job-search'}", str(caught.exception.code))  # Where to put it instead.
         self.assertFalse(self.folder.exists())
 
     def test_a_workspace_already_named_is_never_replaced(self):
@@ -419,6 +483,16 @@ class Serve(unittest.TestCase):
             self.assertIn(f"Port {port} is already in use", str(caught.exception.code))
         finally:
             first.server_close()
+
+    def test_ctrl_c_stops_it_quietly_and_frees_the_port(self):
+        fake = mock.Mock()
+        fake.serve_forever.side_effect = KeyboardInterrupt
+        with mock.patch.object(server, "make_server", return_value=fake), mock.patch.object(server, "connect"), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            server.serve(8787)
+        self.assertIn("Ctrl+C stops it", out.getvalue())
+        self.assertTrue(out.getvalue().rstrip().endswith("Stopped."))
+        fake.server_close.assert_called_once()
 
 
 class CommandOutput(Base):
@@ -458,7 +532,7 @@ class CommandOutput(Base):
     def test_a_command_that_needs_a_workspace_says_how_to_make_one(self):
         with mock.patch.object(store, "IS_EXAMPLE", True), self.assertRaises(SystemExit) as caught:
             cli.main(["serve"])
-        self.assertIn("pyrite init <folder>", str(caught.exception.code))
+        self.assertIn(cli.INIT_EXAMPLE, str(caught.exception.code))
 
     def test_add_with_a_posting_file_that_isnt_there_adds_nothing_and_says_why(self):
         missing = Path(self.tmp.name) / "no-posting.md"

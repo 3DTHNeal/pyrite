@@ -23,6 +23,8 @@ OPTIONAL_FILES = {
     "profile/workday-paste.md": "Optional. Type your own Workday answers into it, or delete it: `pyrite fill` copies it into each job's fill sheet.",
 }
 FORMAT_DOCS = 'See "How the documents are written" in docs/operating.md.'
+# Names copied from the docs as they are, rather than a person's.
+PLACEHOLDER_NAMES = {"your name", "your full name", "name", "first last", "firstname lastname"}
 # Settings in search.toml that describe the fictional candidate rather than how Pyrite works. Left as they are, they
 # quietly shape a real search: which places count as local, which roles and industries rank first, which words the
 # assay blocks or lets through, what every resume is expected to name, and whose mail counts as a reply.
@@ -92,13 +94,18 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up."""
     if root.resolve() == EXAMPLE_ROOT:
         return [{"what": "No workspace is set, so this is the fictional example.",
-                 "fix": f"Run `pyrite init <folder>`, with a folder outside this repository, to make yours. {SETUP_DOCS}"}]
+                 "fix": "Run `pyrite init ../my-job-search` to make yours beside this repository, or name another folder "
+                        f"outside it. {SETUP_DOCS}"}]
     if cfg is None:
         return [{"what": "profile/search.toml is missing.", "fix": f"Copy example/profile/ into your workspace to start. {SETUP_DOCS}"}]
     todos = []
-    for rel in still_example(root):
-        todos.append({"what": f"{rel} is still the fictional example's.",
-                      "fix": "Replace it with your own. Claude writes from these files, and the assay checks against them."})
+    same = still_example(root)
+    if same:
+        # One finding for all of them, since the fix is the same, with the first named in full so it's easy to find.
+        names = [same[0], *(Path(rel).name for rel in same[1:])]
+        todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.",
+                      "fix": "Replace each with your own, starting with facts.md. Claude writes from these files, and the "
+                             "assay checks against them."})
     for rel, fix in OPTIONAL_FILES.items():
         mine = _text(root / rel)
         if mine is not None and mine == _text(EXAMPLE_ROOT / rel):
@@ -107,8 +114,12 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         todos.append({"what": "profile/facts.md is missing.",
                       "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
     example = _example_config()
-    if cfg.get("candidate", {}).get("name") == example["candidate"]["name"]:
+    name = str(cfg.get("candidate", {}).get("name", "")).strip()
+    if name == example["candidate"]["name"]:
         todos.append({"what": "[candidate] name in profile/search.toml is still the example's.", "fix": "Set it to your name, as it goes on your documents."})
+    elif name.strip("<>[]").lower() in PLACEHOLDER_NAMES:
+        todos.append({"what": f'[candidate] name in profile/search.toml is "{name}", a placeholder.',
+                      "fix": "Set it to your name, as it goes on your documents."})
     guard = cfg.get("guard", {})
     heading = guard.get("heading_source", "")
     if heading and not (root / heading).exists():

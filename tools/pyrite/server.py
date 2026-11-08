@@ -718,5 +718,12 @@ def make_server(port: int) -> DashboardServer:
 def serve(port: int = 8787) -> None:
     connect().close()
     server = make_server(port)
-    print(f"Pyrite: http://127.0.0.1:{port}", flush=True)
-    server.serve_forever()
+    print(f"Pyrite: http://127.0.0.1:{port}\nOpen that in your browser. The dashboard runs while this window is open, "
+          "and Ctrl+C stops it.", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        # Ctrl+C is how a dashboard started by hand is meant to stop, so it isn't an error worth a traceback.
+        print("Stopped.", flush=True)
+    finally:
+        server.server_close()
