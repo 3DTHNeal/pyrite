@@ -2791,6 +2791,18 @@ class Autofill(ClaudeRun):
         self.assertEqual(workday.match_question("Have you previously been employed by Globex or one of its subsidiaries?", questions)[0],
                          "Previously employed by the company or a subsidiary")
         self.assertIsNone(workday.match_question("Are you willing to travel up to 25% of the time?", questions))
+        # Sponsorship in the words tenants use, which share little with the sheet's row; and its look-alikes that aren't it.
+        questions["Will you now or in the future require sponsorship"] = "No"
+        for label in ("Will you require employer support to obtain or maintain authorization to work in that country (e.g., visa sponsorship)?*",
+                      "Will you now or in the future require immigration sponsorship for employment?",
+                      "Do you need assistance from the company to obtain work authorization?"):
+            self.assertEqual(workday.match_question(label, questions)[0], "Will you now or in the future require sponsorship", label)
+        self.assertEqual(workday.match_question("Are you legally authorized to work in the country where this job is located?", questions)[0],
+                         "Legally authorized to work in the United States")
+        self.assertIsNone(workday.match_question("Will you require relocation assistance to work at this site?", questions))
+        self.assertEqual([workday.source_key(t) for t in ("LinkedIn", "Social Media - LinkedIn", "Company careers site. As found", "Acme Career Fair",
+                                                          "Company Event", "*Ask Alex*")],
+                         ["linkedin", "linkedin", "company site", "", "", ""])
 
     def test_the_browser_is_held_open_only_while_it_is_there(self):
         class Context:
@@ -2890,7 +2902,8 @@ class Autofill(ClaudeRun):
                 {"school": "Lakeshore Nowhere Institute", "degree": "Doctor of Philosophy", "field": "Business Administration", "gpa": "", "from": "", "to": ""},
                 {"school": "Lakeshore School of Business and Technology", "degree": "Master of Business Administration", "field": "Business Administration", "gpa": "", "from": "", "to": ""},
                 {"school": "Western Prairie University", "degree": "Bachelor of Science", "field": "Marine and Coastal Engineering Technology",
-                 "field_alternatives": ["Engineering Technology"], "gpa": "3.4", "from": "2004", "to": "2008"},
+                 # The last-resort name shows up in the very first search, and must still lose to the better one searched after it.
+                 "field_alternatives": ["Engineering Technology", "Coastal and Ocean Engineering Technology"], "gpa": "3.4", "from": "2004", "to": "2008"},
             ],
             "languages": ["English"],
             # "Linux Server" is searched right after "Linux" and gets the same list back, which must still count as its answer.
@@ -2948,9 +2961,23 @@ class Autofill(ClaudeRun):
             self.assertEqual(page1, {"first": "Alex", "last": "Rivera", "street": "12 Lake St", "city": "Madison", "postal": "53703", "state": "Wisconsin",
                                      "email": "alex.rivera@example.com", "phoneType": "Mobile", "phone": "5550100142"})
             # A posting found on the employer's own board answers the source question with the tenant's wording for that.
+            # "Company Event" comes first among the results and shares a word, and is still not the employer's site.
             workday.fill_information(page, sheet_info, info_report, source="company site")
             self.assertEqual(page.evaluate("document.getElementById('source--source').dataset.selected"), "Company Careers Site")
             self.assertIn("How did you hear about us: Company Careers Site", info_report.filled)
+            # A sheet that names a source is answered with it before the posting's, in the tenant's wording, and a value
+            # left from before that isn't it is replaced, with a note.
+            linkedin_report = workday.Report()
+            workday.fill_information(page, dict(sheet_info, **{"How did you hear about us": "LinkedIn. Every tenant lists it"}),
+                                     linkedin_report, source="company site")
+            self.assertEqual(page.evaluate("document.getElementById('source--source').dataset.selected"), "Social Media - LinkedIn")
+            self.assertIn("How did you hear about us: Social Media - LinkedIn", linkedin_report.filled)
+            self.assertTrue(any("'Company Careers Site' from before" in d for d in linkedin_report.decisions), linkedin_report.decisions)
+            # Run again, it's already right and stays.
+            again = workday.Report()
+            workday.fill_information(page, dict(sheet_info, **{"How did you hear about us": "LinkedIn"}), again, source="company site")
+            self.assertIn("How did you hear about us: Social Media - LinkedIn (already set, left as is)", again.filled)
+            self.assertEqual(again.decisions, [])
             # The review page repeats every section's heading, and is still known as the review page.
             self.assertEqual(workday.current_step(page), "My Experience")
             page.evaluate("document.body.insertAdjacentHTML('beforeend', '<h2>My Information</h2><h2>Review</h2>')")
@@ -2975,8 +3002,10 @@ class Autofill(ClaudeRun):
         self.assertEqual(state["schools"], ["Lakeshore School of Business and Technology", "Western Prairie University"])
         self.assertTrue(any(s.startswith("education 1: this employer's list has no 'Lakeshore Nowhere Institute', so that entry was left off") for s in report.skipped), report.skipped)
         self.assertEqual(state["degrees"], ["Masters", "Bachelors"])
-        # No exact entry for the second field of study, so the sheet's stated nearest option is taken instead.
-        self.assertEqual(state["fields"], ["Business Administration", "Engineering Technology"])
+        # No exact entry for the second field of study, so the sheet's stated nearest option is taken instead, in the
+        # tenant's own spelling ("Technologies"), from a lookup slow enough to pass for a plain box if it weren't waited for.
+        self.assertEqual(state["fields"], ["Business Administration", "Engineering Technologies"])
+        self.assertFalse(any("(typed)" in f for f in report.filled), report.filled)
         self.assertEqual(report.decisions, [])
         self.assertEqual(state["gpa"], ["", "3.4"])
         # The years go into the inputs inside Workday's date wrappers, and an entry's missing dates are only reported.
@@ -2989,6 +3018,38 @@ class Autofill(ClaudeRun):
         self.assertEqual(state["websites"], ["https://www.linkedin.com/in/alex-rivera-example"])
         self.assertEqual(state["files"], 1)
         self.assertIn("resume: Alex_Rivera_Resume_Acme.docx", report.filled)
+
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_a_plain_school_box_gets_the_name_typed_not_the_entry_dropped(self):
+        # As on some tenants: the school takes any text, the wrapper around the whole entry carries lookup markings
+        # for the field of study, and a value picked elsewhere on the page shows as a prompt option.
+        report = workday.Report()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            workday.SETTLE_MS = 100
+            page.evaluate("""() => { window.plainSchool = true;
+                document.body.insertAdjacentHTML('afterbegin', '<div data-automation-id="promptOption">Website</div>'); }""")
+            # A field of study the list lacks is left empty, not half-typed, and the miss names what the searches turned up.
+            workday.fill_education(page, [{"school": "Northfield Community College", "degree": "Bachelor of Science",
+                                           "field": "Underwater Welding Technology", "gpa": "", "from": "2004", "to": "2008"}], report)
+            field = page.evaluate("(() => { const e = document.querySelector('[id$=\"--fieldOfStudy\"]'); return [e.value, e.dataset.selected || ''] })()")
+            self.assertEqual(field, ["", ""])
+            self.assertIn("education 1 field of study: no entry called 'Underwater Welding Technology'. Workday offers: Coastal and Ocean Engineering Technology",
+                          report.skipped)
+            # A "/" in a name ends the pattern Playwright writes out unless it's escaped, and the search dies with a selector error.
+            page.evaluate("document.body.insertAdjacentHTML('beforeend', '<ul role=\"listbox\"><li role=\"option\">Electrical/Electronic Engineering Technology</li></ul>')")
+            chosen, exact = workday._results(page, ["Electrical/Electronic Engineering Technology", "Electrical and Computer Engineering"], set(), timeout_ms=500)
+            self.assertIsNone(chosen)
+            self.assertEqual(exact.first.inner_text(), "Electrical/Electronic Engineering Technology")
+            schools = page.evaluate("[...document.querySelectorAll('[id$=\"--schoolName\"]')].map(e => e.value)")
+            degrees = page.evaluate("[...document.querySelectorAll('[id$=\"--degree\"]')].map(e => e.textContent)")
+            browser.close()
+        self.assertEqual(schools, ["Northfield Community College"])
+        self.assertEqual(degrees, ["Bachelors"])
+        self.assertIn("education 1 school: Northfield Community College (typed, since this employer's box takes any name)", report.filled)
+        self.assertFalse(any("left off" in s for s in report.skipped), report.skipped)
 
 
 class Gate(ClaudeRun):

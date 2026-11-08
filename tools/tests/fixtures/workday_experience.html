@@ -72,7 +72,7 @@
 <script>
 const CATALOG = {
   school: ["Lakeshore School of Business and Technology", "Western Prairie University", "Western Plains University"],
-  field: ["Business Administration", "Coastal and Ocean Engineering Technology", "Engineering Technology"],
+  field: ["Business Administration", "Coastal and Ocean Engineering Technology", "Engineering Technologies"],
   degree: ["Bachelors", "Masters", "Doctorate"],
   language: ["English", "French"],
   level: ["1 - Beginner", "3 - Intermediate", "5 - Fluent"],
@@ -98,10 +98,11 @@ function addWork() {
 // A single-value search picker: Enter finds matches; an exact match is taken at once and shown as a removable value.
 // Like a real tenant, the old list is cleared at once and the answer arrives after a round trip, as "No Items." when nothing matched.
 const ROUND_TRIP_MS = 300;
-function searchPicker(input, names, single) {
+function searchPicker(input, names, single, roundTrip = ROUND_TRIP_MS) {
   const list = input.nextElementSibling;
   input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") { input.nextElementSibling.hidden = true; return; }
+    // Escape closes a search; values already picked stay on show, as they do on Workday.
+    if (ev.key === "Escape") { if (!input.dataset.selected) input.nextElementSibling.hidden = true; return; }
     if (ev.key !== "Enter") return;
     // Workday's search is loose: anything sharing words with the query comes back, best match first.
     const q = input.value.trim().toLowerCase();
@@ -122,13 +123,17 @@ function searchPicker(input, names, single) {
         li.onclick = () => single ? selectSingle(input, list, s) : toggleSkill(s, li);
         list.appendChild(li);
       }
-    }, ROUND_TRIP_MS);
+    }, roundTrip);
   });
 }
 function selectSingle(input, list, s) {
   input.value = "";
-  list.innerHTML = `<li role="option" aria-label="${s}, press delete to clear value.">${s}</li>`;
+  list.innerHTML = `<li role="option" tabindex="0" aria-label="${s}, press delete to clear value.">${s}</li>`;
   input.dataset.selected = s;
+  // A picked value is cleared the way its name says: focus it and press Delete.
+  list.firstChild.addEventListener("keydown", (ev) => {
+    if (ev.key === "Delete") { list.innerHTML = ""; list.hidden = true; delete input.dataset.selected; }
+  });
 }
 function toggleSkill(s, li) {
   const chips = document.getElementById("skill-chips");
@@ -152,12 +157,19 @@ function dropdown(button, names) {
   });
 }
 
+// Some tenants take the school as plain text, inside a wrapper for the whole entry that also carries the field of
+// study's lookup markings. Set window.plainSchool to build entries that way.
+window.plainSchool = false;
 function addEdu() {
   const k = next();
+  const school = window.plainSchool
+    ? `<label>School or University <input id="education-${k}--schoolName" type="text"></label>`
+    : `<label>School or University <input id="education-${k}--school" type="text" data-automation-id="searchBox"><ul role="listbox" hidden></ul></label>`;
   document.getElementById("edu").insertAdjacentHTML("beforeend", `
-    <fieldset>
+    <fieldset data-automation-id="formField-education${k}">
+      <span data-automation-id="promptIcon"></span>
       <button type="button" onclick="this.parentElement.remove()">Delete</button>
-      <label>School or University <input id="education-${k}--school" type="text" data-automation-id="searchBox"><ul role="listbox" hidden></ul></label>
+      ${school}
       <div data-automation-id="formField-degree">Degree <button type="button" id="education-${k}--degree">Select One</button></div>
       <div data-automation-id="formField-fieldOfStudy"><label>Field of Study <input id="education-${k}--fieldOfStudy" type="text"><ul role="listbox" hidden></ul></label></div>
       <label>GPA <input id="education-${k}--gradeAverage" type="text"></label>
@@ -165,8 +177,9 @@ function addEdu() {
       <div id="education-${k}--firstYearAttended">From <input id="education-${k}--firstYearAttended-dateSectionYear-input" type="text" size="4"></div>
       <div id="education-${k}--lastYearAttended">To <input id="education-${k}--lastYearAttended-dateSectionYear-input" type="text" size="4"></div>
     </fieldset>`);
-  searchPicker(document.getElementById(`education-${k}--school`), CATALOG.school, true);
-  searchPicker(document.getElementById(`education-${k}--fieldOfStudy`), CATALOG.field, true);
+  if (!window.plainSchool) searchPicker(document.getElementById(`education-${k}--school`), CATALOG.school, true);
+  // A slow lookup, as on some tenants: an answer after seconds must not be taken for a plain box that has none.
+  searchPicker(document.getElementById(`education-${k}--fieldOfStudy`), CATALOG.field, true, 3500);
   dropdown(document.getElementById(`education-${k}--degree`), CATALOG.degree);
 }
 
@@ -190,7 +203,8 @@ function addWeb() {
 }
 
 searchPicker(document.getElementById("skills--skills"), CATALOG.skills, false);
-searchPicker(document.getElementById("source--source"), ["Company Careers Site", "LinkedIn", "Employee Referral"], true);
+// "Company Event" and "Career Fair" share words with the employer's own site, and are different answers.
+searchPicker(document.getElementById("source--source"), ["Career Fair", "Company Event", "Company Careers Site", "Social Media - LinkedIn", "Employee Referral"], true);
 dropdown(document.getElementById("address--countryRegion"), ["Ohio", "Nevada", "Wisconsin"]);
 dropdown(document.getElementById("phoneNumber--phoneType"), ["Home", "Mobile", "Work"]);
 addWork();
