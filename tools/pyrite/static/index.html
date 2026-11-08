@@ -51,7 +51,7 @@
 
   <section id="view-radar" class="view" hidden>
     <div class="filters">
-      <input id="radar-search" type="search" placeholder="Search company or title" aria-label="Search postings">
+      <input id="radar-search" type="search" placeholder="Search company or title" aria-label="Search postings" title="Shortcut: /">
       <select id="radar-track" aria-label="Filter by track"></select>
       <select id="radar-place" aria-label="Filter by location">
         <option value="">Any location</option>
@@ -114,6 +114,7 @@
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="add-dialog" class="dialog">
+  <form id="add-form">
   <h2>Add a posting</h2>
   <p class="muted">For anything the watchlist misses, such as a LinkedIn or referral lead. It goes to the front of the next run. Paste the description so the resume can be tailored to it.</p>
   <label>Company <input id="add-company" required></label>
@@ -124,8 +125,9 @@
   <p id="add-error" class="error" role="alert"></p>
   <div class="row end">
     <button id="add-cancel" class="btn" type="button">Cancel</button>
-    <button id="add-save" class="btn primary" type="button">Add</button>
+    <button id="add-save" class="btn primary" type="submit">Add</button>
   </div>
+  </form>
 </dialog>
 <script src="/static/app.js"></script>
 </body>
