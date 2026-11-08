@@ -89,6 +89,25 @@ class Filtering(unittest.TestCase):
         verdict = score.evaluate("Principal Firmware Engineer", "Madison, WI", "", "firmware embedded c++ python hardware robot. Active security clearance required.", CFG)
         self.assertIn("Clearance or citizenship", verdict.flags)
 
+    def skills(self, description):
+        verdict = score.evaluate("Principal Firmware Engineer", "Madison, WI", "", description, CFG)
+        return next((r for r in verdict.reasons if r.startswith("skills")), "")
+
+    def test_keywords_dont_match_inside_other_words(self):
+        # Every PID and LLM hit in a real run of postings came from "rapid" or "enrollment".
+        self.assertNotIn("pid", self.skills("Thrive in a rapid, ambiguous environment."))
+        self.assertNotIn("enrollment", self.skills("Own the enrollment flow."))
+        self.assertIn("pid", self.skills("Tune PID loops."))
+        self.assertIn("vllm", self.skills("Serve models with vLLM."))
+        self.assertIn("llms", self.skills("Build tools on LLMs."))
+
+    def test_skill_reasons_show_the_postings_words(self):
+        # Labels used to come from the pattern, which printed "managw+ (a " and "control (system".
+        reason = self.skills("You will manage a team of engineers and own the control systems.")
+        self.assertIn("manage a team", reason)
+        self.assertIn("control systems", reason)
+        self.assertNotRegex(reason.split(":", 1)[1], r"[\\()|+]")
+
 
 class PostingText(unittest.TestCase):
     def test_hidden_text_is_removed(self):

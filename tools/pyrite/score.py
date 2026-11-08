@@ -200,6 +200,20 @@ def match_track(title: str, cfg: dict, job: dict | None = None) -> tuple[str, in
     return None
 
 
+def _matched_words(found: re.Match) -> str:
+    """The words a keyword matched, widened to whole words, as the score reason shows them.
+
+    Showing the posting's own words rather than the pattern keeps a bad match visible:
+    "pid" found inside "rapid" reads as "rapid", which is easy to spot and fix in the pattern.
+    """
+    text, start, end = found.string, found.start(), found.end()
+    while start > 0 and text[start - 1].isalnum():
+        start -= 1
+    while end < len(text) and text[end].isalnum():
+        end += 1
+    return " ".join(text[start:end].split()).lower()[:40]
+
+
 def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict, company: str = "") -> Verdict:
     matched = match_track(title, cfg, {"company": company, "description": description})
     if not matched:
@@ -224,9 +238,10 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
     keyword_points = 0
     hits = []
     for pattern, weight in cfg["scoring"]["keywords"]:
-        if re.search(pattern, body, re.I):
+        found = re.search(pattern, body, re.I)
+        if found:
             keyword_points += weight
-            hits.append(pattern.split("|")[0].replace("\\b", "").replace("\\", ""))
+            hits.append(_matched_words(found))
     keyword_points = min(keyword_points, 40)
     score += keyword_points
     if hits:

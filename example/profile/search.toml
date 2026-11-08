@@ -132,8 +132,8 @@ exclude_titles = [
 keywords = [
   ['embedded', 6], ['firmware', 6], ['control (system|software|loop|theory)s?', 6], ['controls', 4],
   ['simulation', 5], ['sim-to-real', 7], ['digital twin', 6], ['hardware-in-the-loop|\bhil\b', 4],
-  ['calibration', 3], ['pid\b|\bpi control', 4],
-  ['llm|large language model', 5], ['agentic|multi-agent|ai agents?|coding (assistant|agent)s?', 7],
+  ['calibration', 3], ['\bpid\b|\bpi control', 4],
+  ['\bv?llm|large language model', 5], ['agentic|multi-agent|ai agents?|coding (assistant|agent)s?', 7],
   ['claude|copilot', 5], ['evaluation|evals\b|benchmark', 3], ['machine learning', 2],
   ['\bc\+\+', 4], ['python', 3], ['ci/cd|continuous (delivery|integration)', 2],
   ['robot', 4], ['motion control', 5], ['actuator|motor|sensor', 3], ['hardware', 3],
