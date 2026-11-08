@@ -296,6 +296,15 @@ The **Facts** tab shows `profile/facts.md` and `profile/approved-terms.txt`, the
 
 The dashboard has no login, so anyone who can open it can change these two files. It only listens on this machine unless you add names under `allowed_hosts`. The demo's facts can't be changed.
 
+### Confirming with a code
+
+A save that would let drafts say more than before asks for a code first. On the Facts tab that's adding a line to `approved-terms.txt`, or taking an item off "Do not use" or "Unsupported". Pyrite sends a six-digit code to this computer's notifications, naming the change, and the tab asks for it. Type it in and **Confirm**, and the change is saved. Saves that only add a block, or change facts, go straight through.
+
+- A code works once, for the change it names, for 2 minutes. Five wrong tries end it and nothing is saved. **Send a new code** replaces it.
+- No notification, or Focus Assist hid it? `pyrite code` in a terminal on this computer prints the code waiting and what it's for.
+- The server decides what needs a code, by comparing the files before and after, so the page can't skip it. It's not a password: anyone who can see this screen can read the code. It stops a change made from another device, or by something driving the browser, without the person at this computer seeing it named.
+- Notifications come from each system's built-in route, with nothing to install: Windows PowerShell's toast, AppleScript on macOS, and `notify-send` on Linux.
+
 ## The assay
 
 The assay is Pyrite's fact checker, named for the test that tells gold from fool's gold. `pyrite finish` won't mark a draft ready unless it passes checks that involve no AI. It blocks confidential terms, unsupported claims, numbers not in the fact bank, changed employers, titles or dates, a changed contact line, outside links and unfilled placeholders, and it enforces the page limits. Resumes are also blocked from naming a specialist term that isn't in your approved sources. If a blocked term is true of you, add it to `approved-terms.txt`. It can't catch a true fact twisted into a false impression, so reading each draft still matters.

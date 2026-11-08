@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from . import checks, claude_code, deadline, doctor, facts, fill, mail, market, outlook, prep, refresh, settings, tasks, workday
+from . import checks, claude_code, confirm, deadline, doctor, facts, fill, mail, market, outlook, prep, profile, refresh, settings, store, tasks, workday
 from . import score as scoring
 from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
@@ -619,6 +619,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(settings.view())
             if path == "/api/facts":
                 return self._json(facts.view())
+            if path == "/api/profile":
+                return self._json({**profile.view(), "history": profile.history()})
             if path == "/api/industries":
                 conn = connect()
                 try:
@@ -667,9 +669,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad request"}, 400)
 
         path = urlparse(self.path).path
-        if path in ("/api/settings", "/api/facts"):
+        if path in PROFILE_WRITES:
             try:
-                return self._json(settings.save(body) if path == "/api/settings" else facts.save(body))
+                return self._json(PROFILE_WRITES[path](body))
+            except confirm.CodeNeeded as err:
+                # 428 Precondition Required: the page asks for the code that was just sent, then sends the change again.
+                return self._json(err.payload, 428)
+            except confirm.CodeError as err:
+                return self._json({"error": str(err), "code_failed": True}, 403)
             except settings.Conflict as err:
                 return self._json({"error": str(err)}, 409)
             except ValueError as err:
@@ -706,6 +713,57 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(err)}, 400)
         finally:
             conn.close()
+
+
+def _save_facts(body: dict) -> dict:
+    """The Facts tab's save. Approving a term or unlisting a "Do not use" item needs a code, as on the Profile tab."""
+    key, text = body.get("file"), body.get("text")
+    # The demo refuses every save, so it shouldn't send a code first.
+    if key in facts.FILES and isinstance(text, str) and not store.IS_EXAMPLE:
+        current = facts._read(key)
+        # A stale form is refused before any code is sent, since that save can't go through anyway.
+        if body.get("version") != facts._version(current):
+            raise settings.Conflict("This file changed after you opened it, so nothing was saved. Reload the Facts tab to see the latest.")
+        confirm.require({key: text}, {key: current}, {key: body.get("version")}, body.get("request_id"), body.get("code"))
+    return facts.save(body)
+
+
+def _save_profile(body: dict) -> dict:
+    changes, based_on = body.get("changes"), body.get("based_on")
+    if store.IS_EXAMPLE:
+        raise ValueError("This is the demo, so the fictional candidate's profile can't be changed.")
+    if not isinstance(changes, dict) or not changes or not isinstance(based_on, dict):
+        raise ValueError("Nothing to save.")
+    for key, text in changes.items():
+        if key not in profile.FILES:
+            raise ValueError("That isn't a file the Profile tab can change.")
+        if not isinstance(text, str):
+            raise ValueError(f"Nothing to save for {profile.FILES[key]}.")
+    current = {key: profile.read(key) for key in changes}
+    # A stale form is refused before any code is sent, since that save can't go through anyway.
+    profile.refuse_stale(current, based_on)
+    confirm.require(changes, current, based_on, body.get("request_id"), body.get("code"))
+    profile.write(changes, based_on, str(body.get("reason") or ""))
+    return {**profile.view(), "history": profile.history()}
+
+
+def _profile_code(body: dict) -> dict:
+    """Send a waiting change's code again, or give up on it."""
+    if body.get("action") == "resend":
+        return confirm.resend(body.get("request_id"))
+    if body.get("action") == "cancel":
+        confirm.cancel(body.get("request_id"))
+        return {"ok": True}
+    raise ValueError("Ask to resend or cancel a code.")
+
+
+# Saves that change the profile. Each refuses a stale form, and any that loosens a check asks for a code first.
+PROFILE_WRITES = {
+    "/api/settings": settings.save,
+    "/api/facts": _save_facts,
+    "/api/profile": _save_profile,
+    "/api/profile/code": _profile_code,
+}
 
 
 class DashboardServer(ThreadingHTTPServer):
