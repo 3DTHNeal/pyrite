@@ -926,5 +926,12 @@ def main(argv=None):
     try:
         args.func(args)
     except store.JobNotFound as err:
-        # Every command that takes a job number looks it up, so this is the one place the missing one is named.
-        sys.exit(f"No job {err.job_id}. `pyrite queue` lists the open ones.")
+        # Only a number the user typed gets the one-line answer. A JobNotFound from a command
+        # they gave no number to is a bug, and its traceback explains it.
+        typed = getattr(args, "id", None)
+        if typed is None:
+            job = getattr(args, "job", None)
+            typed = int(job) if isinstance(job, str) and job.isdigit() else job
+        if err.job_id != typed:
+            raise
+        sys.exit(f"{str(err).capitalize()}. The dashboard lists every job; `pyrite queue` shows the ones waiting on a run.")

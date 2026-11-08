@@ -8,9 +8,9 @@ from pathlib import Path
 
 import support  # noqa: F401  Points Pyrite at a throwaway workspace before it loads.
 
-from pyrite import cli, store
+from pyrite import cli, store, workday
 
-MESSAGE = "No job 999. `pyrite queue` lists the open ones."
+MESSAGE = "No job 999. The dashboard lists every job; `pyrite queue` shows the ones waiting on a run."
 
 # Every command that takes a job number, with whatever else it needs to reach the lookup.
 COMMANDS = (
@@ -18,7 +18,9 @@ COMMANDS = (
     ["triage", "999", "--fit", "good", "--reason", "Close to the posting"],
     ["folder", "999"],
     ["finish", "999"],
+    ["refresh", "999"],
     ["prep", "999"],
+    ["autofill", "999"],
     ["sent", "999"],
     ["status", "999", "applied"],
     ["fill", "999"],
@@ -34,9 +36,18 @@ class MissingJob(unittest.TestCase):
         patcher = mock.patch.object(store, "DB_PATH", Path(tmp.name) / "pyrite.db")
         patcher.start()
         self.addCleanup(patcher.stop)
+        # autofill stops before the lookup unless Workday autofill is on; the lookup is what's under test.
+        patcher = mock.patch.object(workday, "enabled", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_each_command_names_the_job_it_couldnt_find(self):
         for argv in COMMANDS:
             with self.subTest(command=argv[0]), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
                 cli.main(argv)
             self.assertEqual(caught.exception.code, MESSAGE)
+
+    def test_a_lookup_with_no_number_typed_keeps_its_traceback(self):
+        with mock.patch.object(cli, "cmd_where", side_effect=store.JobNotFound(999)):
+            with self.assertRaises(store.JobNotFound):
+                cli.main(["where"])
