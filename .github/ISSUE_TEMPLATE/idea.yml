@@ -1,0 +1,21 @@
+name: Idea
+description: A change you'd like. This is a personal project, so I may not get to it.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's hard to do now
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: Nothing personal is in this issue.
+          required: true
