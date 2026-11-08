@@ -2,7 +2,6 @@
 import contextlib
 import io
 import json
-import time
 import unittest
 import unittest.mock as mock
 import urllib.error
@@ -10,7 +9,7 @@ import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
 
-from support import CFG, Base, stub_feed
+from support import CFG, Base, Clock, stub_feed
 
 from pyrite import cli, discover, score, server, settings, sources, store
 
@@ -137,6 +136,7 @@ class AshbyParsing(unittest.TestCase):
 class Discovery(Base):
     def setUp(self):
         super().setUp()
+        self.clock = Clock(self)
         self.saved = dict(sources.FEEDS)
         self.cfg = {**CFG, "watch": {"greenhouse": {"acme": "Acme"}, "lever": {}, "ashby": {}, "workday": {}}}
 
@@ -185,8 +185,7 @@ class Discovery(Base):
         ids = {r["source_id"]: r["id"] for r in self.conn.execute("SELECT id, source_id FROM jobs")}
         store.set_status(self.conn, ids["2"], "applied")
         self.conn.commit()
-        import time
-        time.sleep(1.1)
+        self.clock.advance()
         stub_feed(None, [other])
         self.assertEqual(self.sweep()["closed"], 2)
         self.assertEqual(store.get_job(self.conn, ids["1"])["status"], "closed")
@@ -220,8 +219,7 @@ class Reposts(Discovery):
         self.long_text = "firmware embedded c++ python robot hardware " + " ".join(f"word{i}" for i in range(60))
 
     def advance(self):
-        # Timestamps are to the second, and "this sweep" is decided by comparing them.
-        time.sleep(1.1)
+        self.clock.advance()
 
     def job(self):
         return self.conn.execute("SELECT * FROM jobs").fetchone()
@@ -595,6 +593,7 @@ class WorkdaySweep(Base):
 
     def setUp(self):
         super().setUp()
+        self.clock = Clock(self)
         self.cfg = {**CFG, "watch": {"greenhouse": {}, "lever": {}, "ashby": {},
                                      "workday": {"contoso": {"name": "Contoso", "wd": "wd1", "site": "Ext"}}}}
         self.listed, self.asked, self.answers = {}, [], {}
@@ -621,7 +620,7 @@ class WorkdaySweep(Base):
 
     def sweep_with(self, *postings):
         self.listed = {p.source_id: p for p in postings}
-        time.sleep(1.1)  # Timestamps are to the second, and "this sweep" is decided by comparing them.
+        self.clock.advance()
         return self.sweep()
 
     def job(self):

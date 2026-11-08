@@ -99,6 +99,8 @@ python_version = "3.11"
 files = ["tools/pyrite", "tools/check_public.py", "tools/build_resume.py"]
 mypy_path = "tools"
 ignore_missing_imports = true
+# Without this, mypy skips the body of every function that has no annotations, which is most of the commands.
+check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 

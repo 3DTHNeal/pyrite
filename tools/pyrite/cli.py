@@ -1,12 +1,17 @@
 """Command line for Pyrite. The daily run and you both go through here."""
 import argparse
+import functools
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from . import __version__, checks, claude_code, demo, discover, fill, score, store
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
@@ -35,26 +40,37 @@ def _file_prefix(cfg: dict) -> str:
     return "_".join(re.findall(r"[^\W_]+", cfg["candidate"]["name"])) or "Candidate"
 
 
+def _with_db(command: Callable[[argparse.Namespace, sqlite3.Connection], None]) -> Callable[[argparse.Namespace], None]:
+    """Hand a command its own database connection, and close it when the command ends, however it ends."""
+    @functools.wraps(command)
+    def run(args: argparse.Namespace) -> None:
+        with closing(connect()) as conn:
+            command(args, conn)
+    return run
+
+
 def _print_json(data) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
-def cmd_discover(args):
-    stats = discover.run(only=args.only, fresh=args.fresh, max_minutes=args.max_minutes)
+@_with_db
+def cmd_discover(args, conn):
+    stats = discover.run(conn, only=args.only, fresh=args.fresh, max_minutes=args.max_minutes)
     new_ids = stats.pop("new_ids")
     _print_json(stats)
     print(f"New job ids: {new_ids[:30]}{' ...' if len(new_ids) > 30 else ''}")
 
 
-def cmd_rescore(args):
-    _print_json(discover.rescore())
+@_with_db
+def cmd_rescore(args, conn):
+    _print_json(discover.rescore(conn))
 
 
-def cmd_inbox(args):
+@_with_db
+def cmd_inbox(args, conn):
     """Look for replies and scams in Gmail, read-only. Prints no subjects: read those on the dashboard."""
     from . import mail
 
-    conn = connect()
     cfg = load_config()
     result = mail.ingest_file(conn, cfg, Path(args.export)) if args.export else mail.check(conn, cfg)
     if result["state"] == "not_configured":
@@ -109,9 +125,10 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
     return {"last": last, "failing": failing, "stuck": stuck, "to_triage": triage, "to_tailor": tailor}
 
 
-def cmd_queue(args):
+@_with_db
+def cmd_queue(args, conn):
     """What the daily run should work on, best first."""
-    found = queue(connect(), load_config(), args.limit)
+    found = queue(conn, load_config(), args.limit)
     keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "promoted", "age_days", "reposts", "redates",
             "is_new", "ghost_risk", "ghost_reason", "track", "flags", "fit", "priority", "status", "comp", "url")
     trim = lambda job: {k: job[k] for k in keep}
@@ -131,9 +148,9 @@ def cmd_queue(args):
 BOARD_FIELDS = ("title", "location", "workplace", "comp", "url", "posted_at", "first_posted_at")
 
 
-def cmd_job(args):
+@_with_db
+def cmd_job(args, conn):
     """Print one posting. Everything a job board supplied is untrusted, and marked as such."""
-    conn = connect()
     job = job_dict(get_job(conn, args.id), include_description=True)
     description = job.pop("description", "")
     for key in ("source_key", "source_id", "dedupe_key"):
@@ -156,8 +173,8 @@ def apply_triage(conn, job_id: int, fit: str, reason: str) -> None:
         set_status(conn, job_id, "shortlisted", f"Triage {fit}: {reason}")
 
 
-def cmd_triage(args):
-    conn = connect()
+@_with_db
+def cmd_triage(args, conn):
     job = get_job(conn, args.id)
     try:
         apply_triage(conn, args.id, args.fit, args.reason)
@@ -198,9 +215,10 @@ def ensure_folder(conn, job_id: int) -> str:
     return rel
 
 
-def cmd_folder(args):
+@_with_db
+def cmd_folder(args, conn):
     """Create the application folder for a job and save a copy of the posting."""
-    print(ROOT / ensure_folder(connect(), args.id))
+    print(ROOT / ensure_folder(conn, args.id))
 
 
 def _build(source: Path, name: str, author: str, paper: str = "letter", letter: tuple[Path, str] | None = None) -> str:
@@ -218,9 +236,9 @@ def _collect_files(folder: Path) -> list[str]:
     return [p.relative_to(ROOT).as_posix() for p in wanted]
 
 
-def cmd_finish(args):
+@_with_db
+def cmd_finish(args, conn):
     """Build the documents, run the fact checker, and only then mark a job ready."""
-    conn = connect()
     if not get_job(conn, args.id)["app_folder"]:
         sys.exit("No application folder. Run `pyrite folder <id>` first.")
     report = finish_job(conn, load_config(), args.id)
@@ -276,11 +294,11 @@ def finish_job(conn, cfg: dict, job_id: int) -> dict:
     return report
 
 
-def cmd_refresh(args):
+@_with_db
+def cmd_refresh(args, conn):
     """Have Claude rewrite a draft resume. The dashboard's button runs this in the background with --worker."""
     from . import refresh
 
-    conn = connect()
     if not args.worker:
         try:
             refresh.begin(conn, args.id)
@@ -293,11 +311,11 @@ def cmd_refresh(args):
         sys.exit(1)
 
 
-def cmd_prep(args):
+@_with_db
+def cmd_prep(args, conn):
     """Have Claude write an interview prep brief. The dashboard's button runs this in the background with --worker."""
     from . import prep
 
-    conn = connect()
     if not args.worker:
         try:
             prep.begin(conn, args.id)
@@ -313,13 +331,13 @@ def _run_task(kind: str) -> None:
     """Claim a run and do it here, so it shows on the dashboard and can't overlap one started there."""
     from . import tasks
 
-    conn = connect()
-    try:
-        task_id = tasks.begin(conn, kind)
-    except ValueError as err:
-        sys.exit(str(err))
-    ok = tasks.run(conn, load_config(), task_id)
-    print(tasks.result(conn, task_id))
+    with closing(connect()) as conn:
+        try:
+            task_id = tasks.begin(conn, kind)
+        except ValueError as err:
+            sys.exit(str(err))
+        ok = tasks.run(conn, load_config(), task_id)
+        print(tasks.result(conn, task_id))
     if not ok:
         sys.exit(1)
 
@@ -334,20 +352,21 @@ def cmd_run(args):
     _run_task("claude")
 
 
-def cmd_task(args):
+@_with_db
+def cmd_task(args, conn):
     """The worker behind a dashboard button. The run was claimed before this process started."""
     from . import tasks
 
-    conn = connect()
     if not tasks.run(conn, load_config(), args.id):
         sys.exit(1)
 
 
-def cmd_usage(args):
+@_with_db
+def cmd_usage(args, conn):
     """What the Claude runs started from here have used."""
     from . import claude_code
 
-    _print_json(claude_code.usage(connect()))
+    _print_json(claude_code.usage(conn))
 
 
 def cmd_check(args):
@@ -361,34 +380,36 @@ def cmd_check(args):
 
 def cmd_fill(args):
     """Write a job's fill sheet: the Workday paste sheet with this application's tailored role text."""
-    if args.job.isdigit():
-        conn = connect()
+    if not args.job.isdigit():
+        folder = Path(args.job).resolve()
+        if not folder.is_dir():
+            sys.exit(f"No folder {folder}.")
+        _print_json(_fill_sheet(folder))
+        return
+    with closing(connect()) as conn:
         job = get_job(conn, int(args.job))
         if not job["app_folder"]:
             sys.exit("No application folder. Run `pyrite folder <id>` first.")
-        folder, who = ROOT / job["app_folder"], (job["company"], job["title"], job["url"])
-        source = fill.posting_source(job["source_key"], job["url"])
-    else:
-        folder, who, source = Path(args.job).resolve(), ("", "", ""), ""
-        conn = None
-        if not folder.is_dir():
-            sys.exit(f"No folder {folder}.")
-    try:
-        report = fill.make_sheet(folder, *who, source=source)
-    except FileNotFoundError as err:
-        sys.exit(str(err))
-    if conn is not None:
+        report = _fill_sheet(ROOT / job["app_folder"], job["company"], job["title"], job["url"],
+                             source=fill.posting_source(job["source_key"], job["url"]))
         log_event(conn, int(args.job), "fill_sheet", fill.summary(report))
         conn.commit()
     _print_json(report)
 
 
-def cmd_autofill(args):
+def _fill_sheet(folder: Path, company: str = "", title: str = "", url: str = "", source: str = "") -> dict:
+    try:
+        return fill.make_sheet(folder, company, title, url, source=source)
+    except FileNotFoundError as err:
+        sys.exit(str(err))
+
+
+@_with_db
+def cmd_autofill(args, conn):
     """Type a job's fill sheet into its Workday form while you watch. Stops before Submit, which stays yours."""
     from . import workday
     if not workday.enabled():
         sys.exit(workday.OFF)
-    conn = connect()
     job = get_job(conn, args.id)
     if not job["app_folder"]:
         sys.exit("No application folder. Run `pyrite folder <id>` first.")
@@ -420,8 +441,8 @@ def cmd_autofill(args):
     print(report.summary())
 
 
-def cmd_sent(args):
-    conn = connect()
+@_with_db
+def cmd_sent(args, conn):
     job = get_job(conn, args.id)
     if not job["applied_at"]:
         sys.exit(f"Job {args.id} hasn't been applied to, so there's nothing sent to keep.")
@@ -433,28 +454,28 @@ def cmd_sent(args):
     print(f"{len(kept)} files on record in {job['app_folder']}/{store.SENT_FOLDER}/: {', '.join(sorted(kept)) or 'none'}")
 
 
-def cmd_status(args):
-    conn = connect()
+@_with_db
+def cmd_status(args, conn):
     cfg = load_config()
     set_status(conn, args.id, args.status, args.note, cfg["run"]["follow_up_days"])
     conn.commit()
     print(f"{args.id} -> {args.status}")
 
 
-def cmd_add(args):
+@_with_db
+def cmd_add(args, conn):
     """Add a posting you found yourself, such as one from LinkedIn."""
     from .server import add_manual_job
 
-    conn = connect()
     description = Path(args.description_file).read_text(encoding="utf-8") if args.description_file else ""
     job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description)
     conn.commit()
     print(job_id)
 
 
-def cmd_brief(args):
+@_with_db
+def cmd_brief(args, conn):
     """Save the morning briefing shown at the top of the dashboard."""
-    conn = connect()
     body = sys.stdin.read() if args.text == "-" else args.text
     conn.execute("INSERT INTO briefings (ts, body) VALUES (?, ?)", (now(), body.strip()))
     conn.commit()
@@ -484,9 +505,9 @@ def cmd_demo(args):
     serve(args.port)
 
 
-def cmd_seed(args):
+@_with_db
+def cmd_seed(args, conn):
     """Bring in the applications made before Pyrite existed. Safe to re-run."""
-    conn = connect()
     ts = now()
     follow_up = load_config()["run"]["follow_up_days"]
     seed_path = ROOT / "profile" / "seed.toml"
@@ -517,7 +538,8 @@ def cmd_seed(args):
                VALUES ('seed', ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'ready', ?, ?, ?, ?, ?)""",
             (source_id, company, title, location, url, _saved_posting(folder), ts, ts, ts, ts, folder, json.dumps(files), note),
         )
-        log_event(conn, cursor.lastrowid, "ready", note)
+        job_id = cast(int, cursor.lastrowid)  # Set by the INSERT above.
+        log_event(conn, job_id, "ready", note)
         if applied_on:
             # Only the day is on record, and noon UTC falls on that same calendar day across the US.
             applied_at = f"{applied_on}T12:00:00+00:00"
@@ -525,9 +547,9 @@ def cmd_seed(args):
             conn.execute(
                 """UPDATE jobs SET status = 'applied', status_changed_at = ?, applied_at = ?,
                        next_action = 'Follow up', next_action_date = ? WHERE id = ?""",
-                (applied_at, applied_at, remind, cursor.lastrowid),
+                (applied_at, applied_at, remind, job_id),
             )
-            log_event(conn, cursor.lastrowid, "applied", note)
+            log_event(conn, job_id, "applied", note)
         added += 1
     conn.commit()
     print(f"Added {added} existing applications.")

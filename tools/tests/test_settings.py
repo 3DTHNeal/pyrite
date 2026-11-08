@@ -271,7 +271,8 @@ class FactsOverHttp(SettingsBase):
             with urllib.request.urlopen(request, timeout=5) as resp:
                 return resp.status, json.loads(resp.read())
         except urllib.error.HTTPError as err:
-            return err.code, json.loads(err.read())
+            with err:
+                return err.code, json.loads(err.read())
 
     def post(self, body, **headers):
         return self.call("POST", {"Content-Type": "application/json", **headers}, json.dumps(body).encode())
@@ -310,7 +311,8 @@ class SettingsOverHttp(SettingsBase):
             with urllib.request.urlopen(request, timeout=5) as resp:
                 return resp.status, json.loads(resp.read())
         except urllib.error.HTTPError as err:
-            return err.code, json.loads(err.read())
+            with err:
+                return err.code, json.loads(err.read())
 
     def post(self, body, **headers):
         return self.call("POST", {"Content-Type": "application/json", **headers}, json.dumps(body).encode())

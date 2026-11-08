@@ -4,6 +4,8 @@ base classes and helpers the tests build on.
 Import this before anything from pyrite. It points PYRITE_HOME at the copy, so no test can read or change anyone's real
 job search, whatever workspace this machine normally uses.
 """
+import atexit
+import gc
 import os
 import shutil
 import subprocess
@@ -11,10 +13,41 @@ import sys
 import tempfile
 import unittest
 import unittest.mock as mock
+import warnings
+from datetime import datetime, timedelta
 from pathlib import Path
+
+# A file, socket or database left open fails the run. Python reports one only as a warning, often from the garbage
+# collector after the test that leaked it has passed, so they're gathered here and judged once every test has run.
+_leaks: list[str] = []
+_show_warning = warnings.showwarning
+
+
+def _note_leak(message, category, filename, lineno, file=None, line=None):
+    if issubclass(category, ResourceWarning):
+        _leaks.append(str(message))
+    _show_warning(message, category, filename, lineno, file, line)
+
+
+def _fail_on_leaks():
+    # A database connection sits in a reference cycle, so it's reported only when the collector runs. By now the test
+    # runner has put back Python's default filters, which hide ResourceWarning, so they're turned on again for this.
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", ResourceWarning)
+        gc.collect()
+    if _leaks:
+        sys.stdout.flush()
+        print(f"\nFAILED: resources left open: {len(_leaks)}. The warnings above say which; "
+              "run with -X tracemalloc=20 to see where each was opened.", file=sys.stderr, flush=True)
+        os._exit(1)
+
+
+warnings.showwarning = _note_leak
+atexit.register(_fail_on_leaks)  # Registered before the workspace's cleanup below, so it runs after it.
 
 CODE_ROOT = Path(__file__).resolve().parents[2]
 _workspace = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+atexit.register(_workspace.cleanup)
 WORKSPACE = Path(_workspace.name) / "workspace"
 shutil.copytree(CODE_ROOT / "example", WORKSPACE, ignore=shutil.ignore_patterns("data"))
 os.environ["PYRITE_HOME"] = str(WORKSPACE)  # Before anything loads: this decides where every path below points.
@@ -62,6 +95,27 @@ class Base(unittest.TestCase):
         cols = ", ".join(fields)
         marks = ", ".join("?" * len(fields))
         return self.conn.execute(f"INSERT INTO jobs ({cols}) VALUES ({marks})", tuple(fields.values())).lastrowid
+
+
+class Clock:
+    """Moves store.now() forward on demand. Timestamps are to the second, and a sweep tells its own sightings from the
+    last one's by comparing them, so a test that runs two sweeps needs a later second without waiting a real one."""
+
+    def __init__(self, test: unittest.TestCase):
+        self.offset = timedelta(0)
+        clock = self
+
+        class Shifted(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + clock.offset
+
+        patcher = mock.patch.object(store, "datetime", Shifted)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+    def advance(self, seconds: float = 1) -> None:
+        self.offset += timedelta(seconds=seconds)
 
 
 def stub_feed(monkeypatch_target, postings=None, error=None):

@@ -115,7 +115,7 @@ This project runs on my real job search, and it has to be public without showing
 [docs/operating.md](docs/operating.md) covers creating your own workspace, scheduling, reply detection and the commands. Once you've made a workspace, `pyrite doctor` lists what's still the example's and which programs are missing. To run the tests:
 
 ```bash
-python -W ignore::ResourceWarning -m unittest discover -s tools/tests
+python -m unittest discover -s tools/tests
 ```
 
 Tests that need an optional package skip without it and say which. CI runs them on Linux, Windows and macOS with Python 3.11 and 3.14, and fails if coverage of the code drops below 80% (84% at this release). It also lints with ruff, type-checks with mypy, and runs the demo with nothing installed (`pip install -r tools/requirements-dev.txt` for the same tools). `pip install -e .` gives you a `pyrite` command in place of `python tools/pyrite.py`. Building the `.docx`, `.pdf` and paste-ready `.txt` files needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. The experimental Workday autofill also needs `tools/requirements-autofill.txt`. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
