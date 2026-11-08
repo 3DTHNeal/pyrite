@@ -1,5 +1,7 @@
 """The assay: the fact checker, the document builder and the interview-brief check."""
+import contextlib
 import importlib.util
+import io
 import re
 import shutil
 import sys
@@ -269,8 +271,9 @@ class Builder(unittest.TestCase):
         shutil.copy(MODEL / "cover-letter.md", self.folder / "cover-letter.md")
         argv = ["build_resume", str(self.folder / "resume.md"), "--name", "R", "--letter-source", str(self.folder / "cover-letter.md"),
                 "--letter-name", "L", "--no-pdf"]
-        with mock.patch.object(sys, "argv", argv):
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()) as out:
             self.build.main()
+        self.assertIn("R.docx (drafter", out.getvalue())
         for name in ("R.docx", "R.txt", "L.docx", "L.txt"):
             self.assertTrue((self.folder / name).exists(), name)
         self.assertTrue((self.folder / "L.txt").read_text(encoding="utf-8").startswith("Dear Hiring Manager"))

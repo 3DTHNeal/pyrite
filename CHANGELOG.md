@@ -9,8 +9,15 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - `pyrite init <folder>` makes a workspace from the example's profile, without its fictional applications or allowed hosts, and points `.pyrite-home` at it.
 - `pyrite doctor` and the dashboard's Finish setup list also name the example's settings left in `search.toml`: its local places, confidential and unsupported terms, ordinary words, the degree every resume is expected to name, preferred cities and mail domains.
 - `pyrite --help` lists where to start, and each job id argument says what it is.
+- `pyrite doctor` and Finish setup check the master resume and letter for the lines the assay needs (`# Name`, the `@` contact line, `## Experience`, `## Education`, an employer heading) and name what's missing, instead of leaving every draft to fail. They name each "Do not use" term in `facts.md` that `forbidden` doesn't block, the example's tracks and industries left in `search.toml`, and a `workday-paste.md` that's still the example's.
+- docs/operating.md has a "How the documents are written" section on the form of a resume and letter.
 
 ### Changed
+
+- `pyrite folder` starts `resume.md` and `cover-letter.md` from your masters. It never replaces a draft already there, and the daily run's folders are made as before.
+- `pyrite doctor` wraps its lines to the terminal and, run outside a venv, says to make one rather than install into that Python. The README's setup starts with the venv.
+- Commands that need a workspace, `doctor` and `Pyrite.cmd` point to `pyrite init` when there isn't one, and `Pyrite.cmd` says so at once instead of after half a minute. `pyrite init` on the workspace already in use exits cleanly.
+- The build says "1 page", not "1 pages", and the test run prints nothing but its result.
 
 - `pyrite seed` refuses a `seed.toml` that's still the example's. An application it imports with no `applied_on` goes under Being tailored, where `pyrite finish` checks it, instead of Ready to send, so ready still means the assay passed it.
 - `pyrite add` says which job it added and what to run next, and a posting file it can't read stops it with a message instead of a traceback.

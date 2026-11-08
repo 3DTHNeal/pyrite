@@ -53,7 +53,7 @@ Run `.venv/Scripts/python.exe tools/pyrite.py queue` again. Work through `to_tai
 .venv/Scripts/python.exe tools/pyrite.py folder <id>
 ```
 
-That creates the folder, saves `posting.md` and prints the path. Write these three files into it:
+That creates the folder, saves `posting.md`, starts `resume.md` and `cover-letter.md` as copies of the master documents, and prints the path. Write these three files into it, replacing the copies:
 
 ### `resume.md`
 

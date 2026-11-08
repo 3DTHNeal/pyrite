@@ -173,9 +173,19 @@ class NewWorkspace(unittest.TestCase):
     def own_settings(self):
         """The config with every setting that describes the fictional candidate made someone else's."""
         cfg = self.cfg()
-        for section, key, _ in doctor.EXAMPLE_SETTINGS:
-            cfg.setdefault(section, {})[key] = {"Mine": ["mine.example"]} if key == "domains" else ["Mine"]
+        for path, _, _ in doctor.EXAMPLE_SETTINGS:
+            table = cfg
+            for key in path[:-1]:
+                table = table.setdefault(key, {})
+            table[path[-1]] = {"Mine": ["mine.example"]} if path[-1] == "domains" else ["Mine"]
+        # Still blocking every name the fact bank's "Do not use" section lists, as a real one should.
+        cfg["guard"]["forbidden"] = [*self.cfg()["guard"]["forbidden"], r"\bMine\b"]
         return cfg
+
+    def make_masters_mine(self, name="Sam Doe"):
+        for rel in ("profile/resume.md", "profile/cover-letter.md"):
+            path = self.root / rel
+            path.write_text(path.read_text(encoding="utf-8").replace("Alex Rivera", name), encoding="utf-8")
 
     def test_a_copied_profile_has_every_source_its_guard_names(self):
         guard = self.cfg()["guard"]
@@ -186,27 +196,77 @@ class NewWorkspace(unittest.TestCase):
     def test_whatever_is_still_the_examples_is_listed(self):
         self.assertEqual(doctor.still_example(self.root), list(doctor.OWN_FILES))
         todos = "\n".join(self.todos())
-        for expected in (*doctor.OWN_FILES, "[candidate] name", "allowed_hosts", "profile/seed.toml",
-                         *(label for _, _, label in doctor.EXAMPLE_SETTINGS)):
+        for expected in (*doctor.OWN_FILES, *doctor.OPTIONAL_FILES, "[candidate] name", "allowed_hosts", "profile/seed.toml",
+                         *(table for _, table, _ in doctor.EXAMPLE_SETTINGS), *(key for _, _, key in doctor.EXAMPLE_SETTINGS if key)):
             self.assertIn(expected, todos)
 
-    def test_the_examples_settings_are_named_together_and_only_while_unchanged(self):
+    def test_the_examples_settings_are_named_together_by_table_and_only_while_unchanged(self):
         cfg = self.own_settings()
         self.assertFalse([what for what in self.todos(cfg) if "still has the example's" in what])
-        cfg["guard"]["expected_on_resume"] = self.cfg()["guard"]["expected_on_resume"]
+        example = self.cfg()
+        cfg["guard"]["expected_on_resume"] = example["guard"]["expected_on_resume"]
         left = [what for what in self.todos(cfg) if "still has the example's" in what]
-        self.assertEqual(left, ["profile/search.toml still has the example's expected_on_resume under [guard]."])
-        cfg["guard"]["expected_on_resume"] = []  # Emptied counts as yours.
+        self.assertEqual(left, ["profile/search.toml still has the example's [guard] expected_on_resume."])
+        cfg["guard"]["ordinary_words"] = example["guard"]["ordinary_words"]
+        cfg["track"] = example["track"]
+        left = [what for what in self.todos(cfg) if "still has the example's" in what]
+        self.assertEqual(left, ["profile/search.toml still has the example's [[track]]; [guard] ordinary_words and expected_on_resume."])
+        cfg["guard"]["expected_on_resume"] = cfg["guard"]["ordinary_words"] = cfg["track"] = []  # Emptied counts as yours.
         self.assertFalse([what for what in self.todos(cfg) if "still has the example's" in what])
 
     def test_a_workspace_made_its_own_has_nothing_left(self):
-        for rel in doctor.OWN_FILES:
+        for rel in (*doctor.OWN_FILES, *doctor.OPTIONAL_FILES):
             path = self.root / rel
             path.write_text(path.read_text(encoding="utf-8") + "\nMine now.\n", encoding="utf-8")
+        self.make_masters_mine()
         self.edit_config('name = "Alex Rivera"', 'name = "Sam Doe"')
         self.edit_config("allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']", "allowed_hosts = []")
         (self.root / "profile" / "seed.toml").unlink()
-        self.assertEqual(self.todos(self.own_settings()), [])
+        cfg = self.own_settings()
+        cfg["candidate"]["name"] = "Sam Doe"
+        self.assertEqual(self.todos(cfg), [])
+
+    def test_a_master_the_assay_cant_read_is_named_with_what_it_lacks(self):
+        resume, letter = self.root / "profile" / "resume.md", self.root / "profile" / "cover-letter.md"
+        resume.write_text("Sam Doe\nsam@example.com\n\n## Experience\nAcme, 2020 to now\n", encoding="utf-8")
+        letter.write_text("# Alex Rivera\n@ Elsewhere · other@example.com\n\nDear team,\n", encoding="utf-8")
+        todos = self.todos()
+        self.assertIn("profile/resume.md has no '# Alex Rivera' line, no '@ ' contact line, no '## Education' section and "
+                      "no '### Employer | dates' heading, so no resume drafted from it can pass the assay.", todos)
+        # The resume has no contact line now, so the letter's is the first one and matches itself.
+        self.assertFalse([what for what in todos if what.startswith("profile/cover-letter.md")])
+        resume.write_text("# Alex Rivera\n@ Madison, WI · alex@example.com\n## Experience\n### Acme | 2020\n## Education\n", encoding="utf-8")
+        todos = self.todos()
+        self.assertFalse([what for what in todos if what.startswith("profile/resume.md")])
+        self.assertIn("profile/cover-letter.md has a contact line that differs from the resume's, so no letter drafted from it "
+                      "can pass the assay.", todos)
+
+    def test_a_master_still_the_examples_is_named_once_not_twice(self):
+        self.assertFalse([what for what in self.todos() if "can pass the assay" in what])
+
+    def test_do_not_use_terms_that_forbidden_doesnt_block_are_named(self):
+        facts = "# Facts\n\n## Do not use\n- Project Nightjar\n- Internal names: Bluebird, the Hive\n- Customer names\n\n## Skills\n- Python\n"
+        self.assertEqual(doctor.unguarded_terms(facts, []), ["Nightjar", "Bluebird", "Hive"])
+        self.assertEqual(doctor.unguarded_terms(facts, ["Bluebird", r"\bhive\b"]), ["Nightjar"])
+        self.assertEqual(doctor.unguarded_terms(facts, [r"project nightjar", "Bluebird", r"\bhive\b"]), [])
+        self.assertEqual(doctor.unguarded_terms("# Facts\n- Python\n", []), [])
+        example = (store.EXAMPLE_ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
+        self.assertEqual(doctor.unguarded_terms(example, self.cfg()["guard"]["forbidden"]), [])
+        path = self.root / "profile" / "facts.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n"), encoding="utf-8")
+        self.assertTrue(any("Nightjar" in what and "forbidden" in what for what in self.todos()))
+
+    def test_outside_a_venv_the_fix_makes_one_rather_than_installing_into_that_python(self):
+        self.assertIn("-m venv .venv", doctor.install_fix(in_venv=False))
+        self.assertNotIn("-m venv", doctor.install_fix(in_venv=True))
+
+    def test_doctor_wraps_long_lines_without_splitting_a_path(self):
+        path = "D:\\job-search\\" + "x" * 120 + "\\facts.md"
+        text = cli._doctor_line("TO DO", f"{'word ' * 40}{path}", "first\nsecond")
+        self.assertIn(path, text)
+        self.assertTrue(text.startswith("  TO DO  word"))
+        self.assertTrue(all(line.startswith(" " * 9) for line in text.splitlines()[1:]))
+        self.assertIn("\n         second", text)
 
     def test_a_guard_source_that_isnt_there_is_named(self):
         self.edit_config("heading_source = 'profile/resume.md'", "heading_source = 'profile/master.md'")
@@ -322,6 +382,14 @@ class Init(unittest.TestCase):
         self.assertEqual((self.folder / "profile" / "facts.md").read_text(encoding="utf-8"), "Mine.")
         self.assertFalse(self.pointer.exists())
 
+    def test_running_it_again_on_the_workspace_in_use_changes_nothing_and_isnt_an_error(self):
+        self.init()
+        (self.folder / "profile" / "facts.md").write_text("Mine.", encoding="utf-8")
+        with mock.patch.object(cli, "ROOT", self.folder.resolve()):
+            out = self.init()
+        self.assertIn("already the workspace in use", out)
+        self.assertEqual((self.folder / "profile" / "facts.md").read_text(encoding="utf-8"), "Mine.")
+
     def test_a_folder_inside_the_repository_is_refused(self):
         self.folder = CODE_ROOT / "my-job-search"
         with self.assertRaises(SystemExit) as caught:
@@ -364,6 +432,33 @@ class CommandOutput(Base):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(["add", "--company", "Initech", "--title", "Firmware Lead"])
         self.assertRegex(out.getvalue(), r"^Job (\d+): Initech, Firmware Lead\. `pyrite folder \1` makes its application folder\.")
+
+    def test_folder_starts_the_drafts_from_the_masters_and_never_overwrites_one(self):
+        self.root = Path(self.tmp.name) / "mine"
+        shutil.copytree(WORKSPACE / "profile", self.root / "profile")
+        patcher = mock.patch.object(cli, "ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["add", "--company", "Initech", "--title", "Firmware Lead"])
+        job_id = self.conn.execute("SELECT MAX(id) FROM jobs").fetchone()[0]
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            cli.main(["folder", str(job_id)])
+        folder = Path(out.getvalue().strip())
+        self.assertEqual({p.name for p in folder.iterdir()}, {"posting.md", "resume.md", "cover-letter.md"})
+        master = (self.root / CFG["guard"]["heading_source"]).read_text(encoding="utf-8")
+        self.assertEqual((folder / "resume.md").read_text(encoding="utf-8"), master)
+        self.assertIn(f"pyrite finish {job_id}", err.getvalue())
+        (folder / "resume.md").write_text("Tailored.", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            cli.main(["folder", str(job_id)])
+        self.assertEqual((folder / "resume.md").read_text(encoding="utf-8"), "Tailored.")
+        self.assertEqual(err.getvalue(), "")
+
+    def test_a_command_that_needs_a_workspace_says_how_to_make_one(self):
+        with mock.patch.object(store, "IS_EXAMPLE", True), self.assertRaises(SystemExit) as caught:
+            cli.main(["serve"])
+        self.assertIn("pyrite init <folder>", str(caught.exception.code))
 
     def test_add_with_a_posting_file_that_isnt_there_adds_nothing_and_says_why(self):
         missing = Path(self.tmp.name) / "no-posting.md"

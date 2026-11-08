@@ -112,23 +112,33 @@ This project runs on my real job search, and it has to be public without showing
 
 ## Running it yourself
 
+Make a venv with Python 3.11 or newer, and install what builds the documents. These are the Windows commands. Elsewhere, it's `python3 -m venv .venv` and then `.venv/bin/python` wherever these say `.venv/Scripts/python.exe`:
+
+```bash
+py -3 -m venv .venv
+```
+
+```bash
+.venv/Scripts/python.exe -m pip install -r tools/requirements.txt
+```
+
 Your resumes, fact bank and database live in a workspace folder outside this repository. Make one from the example, then make its files yours:
 
 ```bash
-python tools/pyrite.py init ../my-job-search --name "Your Name"
+.venv/Scripts/python.exe tools/pyrite.py init ../my-job-search --name "Your Name"
 ```
 
 ```bash
-python tools/pyrite.py doctor
+.venv/Scripts/python.exe tools/pyrite.py doctor
 ```
 
-`doctor` lists what's still the example's and which programs are missing, and the dashboard (`python tools/pyrite.py serve`) shows the same at the top of its to-do list until it's done. [docs/operating.md](docs/operating.md) covers the venv, the workspace's files, scheduling, reply detection and the commands. To run the tests:
+`doctor` lists what's still the example's, anything in your master resume or letter that would fail every draft, and which programs are missing. The dashboard (`tools/pyrite.py serve`) shows the workspace items at the top of its to-do list until they're done. [docs/operating.md](docs/operating.md) covers the workspace's files, the form the documents are written in, scheduling, reply detection and the commands. To run the tests:
 
 ```bash
-python -m unittest discover -s tools/tests
+.venv/Scripts/python.exe -m unittest discover -s tools/tests
 ```
 
-Tests that need an optional package skip without it and say which. CI runs them on Linux, Windows and macOS with Python 3.11 and 3.14, and fails if coverage of the code drops below 80% (84% at this release). It also lints with ruff, type-checks with mypy, and runs the demo with nothing installed (`pip install -r tools/requirements-dev.txt` for the same tools). `pip install -e .` gives you a `pyrite` command in place of `python tools/pyrite.py`. Building the `.docx`, `.pdf` and paste-ready `.txt` files needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. The experimental Workday autofill also needs `tools/requirements-autofill.txt`. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
+Tests that need an optional package skip without it and say which. CI runs them on Linux, Windows and macOS with Python 3.11 and 3.14, and fails if coverage of the code drops below 80% (84% at this release). It also lints with ruff, type-checks with mypy, and runs the demo with nothing installed (`pip install -r tools/requirements-dev.txt` for the same tools). `pip install -e .` gives you a `pyrite` command in place of `python tools/pyrite.py`. Building the `.docx`, `.pdf` and paste-ready `.txt` files needs LibreOffice or Word as well as `tools/requirements.txt`. The experimental Workday autofill also needs `tools/requirements-autofill.txt`. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
 
 ## Limits
 

@@ -5,6 +5,7 @@ are cheap file reads, so the dashboard lists them on every refresh. The tools (t
 Claude Code, the mail login) take longer to look for, so only `pyrite doctor` checks them.
 """
 import importlib.util
+import re
 import shutil
 import sys
 import tomllib
@@ -17,19 +18,50 @@ from .store import EXAMPLE_ROOT
 # The profile files a new workspace copies from the example and must then make its own.
 OWN_FILES = ("profile/facts.md", "profile/approved-terms.txt", "profile/run-notes.md", "profile/resume.md", "profile/cover-letter.md")
 SETUP_DOCS = 'See "Your workspace" in docs/operating.md.'
+# Optional profile files that, left as the example's, would put the fictional candidate's answers into a real application.
+OPTIONAL_FILES = {
+    "profile/workday-paste.md": "Optional. Type your own Workday answers into it, or delete it: `pyrite fill` copies it into each job's fill sheet.",
+}
+FORMAT_DOCS = 'See "How the documents are written" in docs/operating.md.'
 # Settings in search.toml that describe the fictional candidate rather than how Pyrite works. Left as they are, they
-# quietly shape a real search: which places count as local, which words the assay blocks or lets through, what every
-# resume is expected to name, and whose mail counts as a reply.
+# quietly shape a real search: which places count as local, which roles and industries rank first, which words the
+# assay blocks or lets through, what every resume is expected to name, and whose mail counts as a reply.
+# Each is (its path in the config, the table it's in as search.toml writes it, its key there, or None for the whole table).
 EXAMPLE_SETTINGS = (
-    ("location", "local", "local under [location]"),
-    ("location", "local_exact", "local_exact under [location]"),
-    ("guard", "forbidden", "forbidden under [guard]"),
-    ("guard", "unsupported", "unsupported under [guard]"),
-    ("guard", "ordinary_words", "ordinary_words under [guard]"),
-    ("guard", "expected_on_resume", "expected_on_resume under [guard]"),
-    ("promote", "cities", "cities under [promote]"),
-    ("inbox", "domains", "[inbox.domains]"),
+    (("location", "local"), "[location]", "local"),
+    (("location", "local_exact"), "[location]", "local_exact"),
+    (("track",), "[[track]]", None),
+    (("promote", "cities"), "[promote]", "cities"),
+    (("promote", "industry"), "[[promote.industry]]", None),
+    (("guard", "forbidden"), "[guard]", "forbidden"),
+    (("guard", "unsupported"), "[guard]", "unsupported"),
+    (("guard", "ordinary_words"), "[guard]", "ordinary_words"),
+    (("guard", "expected_on_resume"), "[guard]", "expected_on_resume"),
+    (("inbox", "domains"), "[inbox.domains]", None),
 )
+DO_NOT_USE = re.compile(r"(?ims)^## do not use[^\n]*\n(.*?)(?=^## |\Z)")
+CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
+
+
+def _and(items: list[str]) -> str:
+    return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else "".join(items)
+
+
+def _setting(cfg: dict, path: tuple[str, ...]):
+    value: object = cfg
+    for key in path:
+        value = value.get(key) if isinstance(value, dict) else None
+    return value
+
+
+def example_settings_left(cfg: dict, example: dict) -> str:
+    """The example's settings still in cfg, grouped by table, as "[location] local and local_exact; [[track]]"."""
+    tables: dict[str, list[str]] = {}
+    for path, table, key in EXAMPLE_SETTINGS:
+        mine = _setting(cfg, path)
+        if mine and mine == _setting(example, path):
+            tables.setdefault(table, []).extend([key] if key else [])
+    return "; ".join(f"{table} {_and(keys)}".strip() for table, keys in tables.items())
 
 
 def _text(path: Path) -> str | None:
@@ -60,13 +92,17 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up."""
     if root.resolve() == EXAMPLE_ROOT:
         return [{"what": "No workspace is set, so this is the fictional example.",
-                 "fix": f"Make a folder outside this repository, copy example/profile/ into it, and put its path in .pyrite-home. {SETUP_DOCS}"}]
+                 "fix": f"Run `pyrite init <folder>`, with a folder outside this repository, to make yours. {SETUP_DOCS}"}]
     if cfg is None:
         return [{"what": "profile/search.toml is missing.", "fix": f"Copy example/profile/ into your workspace to start. {SETUP_DOCS}"}]
     todos = []
     for rel in still_example(root):
         todos.append({"what": f"{rel} is still the fictional example's.",
                       "fix": "Replace it with your own. Claude writes from these files, and the assay checks against them."})
+    for rel, fix in OPTIONAL_FILES.items():
+        mine = _text(root / rel)
+        if mine is not None and mine == _text(EXAMPLE_ROOT / rel):
+            todos.append({"what": f"{rel} is still the fictional example's.", "fix": fix})
     if not (root / "profile" / "facts.md").exists():
         todos.append({"what": "profile/facts.md is missing.",
                       "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
@@ -87,14 +123,77 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     if leftover:
         todos.append({"what": f"allowed_hosts under [dashboard] still lists the example's {', '.join(leftover)}.",
                       "fix": "Remove them. The dashboard has no login, so it should answer only to names you use."})
-    same = [label for section, key, label in EXAMPLE_SETTINGS
-            if cfg.get(section, {}).get(key) and cfg.get(section, {}).get(key) == example.get(section, {}).get(key)]
-    if same:
-        todos.append({"what": f"profile/search.toml still has the example's {', '.join(same)}.",
-                      "fix": "They describe the fictional candidate: where they live, their confidential terms, and what their resume names. "
-                             "Set them for your own search, or empty them."})
+    left = example_settings_left(cfg, example)
+    if left:
+        todos.append({"what": f"profile/search.toml still has the example's {left}.",
+                      "fix": "They describe the fictional candidate: where they live, the roles and industries they want, their "
+                             "confidential terms, and what their resume names. Set them for your own search, or empty them."})
+    todos += _master_todos(root, cfg)
+    todos += _unguarded_todos(root, cfg)
     todos += _seed_todos(root)
     return todos
+
+
+def _master_todos(root: Path, cfg: dict) -> list[dict]:
+    """The master resume and letter, checked for the form the assay reads. A master in another form gets past a
+    look at the files and then fails every draft made from it, which is the wrong place to find out."""
+    guard = cfg.get("guard", {})
+    name = cfg.get("candidate", {}).get("name", "")
+    # The assay's contact line is the first one in the approved sources, in the order search.toml lists them.
+    contact = next((row.strip() for rel in guard.get("approved_sources", [])
+                    for row in (_text(root / rel) or "").splitlines() if row.startswith("@ ")), None)
+    todos = []
+    for rel, kind in ((guard.get("heading_source", ""), "resume"), ("profile/cover-letter.md", "letter")):
+        text = _text(root / rel) if rel else None
+        if text is None or text == _text(EXAMPLE_ROOT / rel):
+            continue  # Missing or still the example's, and either is named already.
+        lines = [row.strip() for row in text.splitlines()]
+        problems = []
+        if name and f"# {name}" not in lines:
+            problems.append(f"no '# {name}' line")
+        if not any(row.startswith("@ ") for row in lines):
+            problems.append("no '@ ' contact line")
+        elif kind == "letter" and contact and contact not in lines:
+            problems.append("a contact line that differs from the resume's")
+        if kind == "resume":
+            problems += [f"no '{heading}' section" for heading in ("## Experience", "## Education")
+                         if not any(row.startswith(heading) for row in lines)]
+            if not any(row.startswith("### ") for row in lines):
+                problems.append("no '### Employer | dates' heading")
+        if problems:
+            todos.append({"what": f"{rel} has {_and(problems)}, so no {kind} drafted from it can pass the assay.",
+                          "fix": f"Every {kind} is checked against it. {FORMAT_DOCS}"})
+    return todos
+
+
+def unguarded_terms(facts: str, forbidden: list[str]) -> list[str]:
+    """Capitalized terms under "Do not use" in facts.md that no pattern in [guard] forbidden matches. The assay reads
+    nothing from that section, so a term listed only there isn't blocked by name. The first word of each line is
+    skipped, since it's usually a label such as "Internal names:" or "Customer names"."""
+    section = DO_NOT_USE.search(facts)
+    if not section:
+        return []
+    found: list[str] = []
+    for row in section.group(1).splitlines():
+        line = row.strip().lstrip("-*").strip()
+        spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
+        for term in list(CAPITALIZED.finditer(line))[1:]:
+            covered = any(start < term.end() and term.start() < end for start, end in spans)
+            if not covered and term.group(0) not in found:
+                found.append(term.group(0))
+    return found
+
+
+def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
+    facts = _text(root / "profile" / "facts.md")
+    if facts is None or facts == _text(EXAMPLE_ROOT / "profile" / "facts.md"):
+        return []
+    terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []))
+    if not terms:
+        return []
+    return [{"what": f"profile/facts.md lists {_and(terms)} under \"Do not use\", but forbidden under [guard] in "
+                     f"profile/search.toml doesn't block {'it' if len(terms) == 1 else 'them'}.",
+             "fix": f"The assay blocks only what forbidden names, so add a pattern for each, such as '\\b{terms[0]}\\b'."}]
 
 
 def seed_still_example(root: Path) -> bool:
@@ -133,12 +232,22 @@ def _word_installed() -> bool:
         return False
 
 
+def install_fix(in_venv: bool | None = None) -> str:
+    """How to install the requirements: into the venv in use, or, outside one, into a new venv rather than this Python."""
+    if in_venv is None:
+        in_venv = sys.prefix != sys.base_prefix
+    if in_venv:
+        return f'Run: "{sys.executable}" -m pip install -r tools/requirements.txt'
+    venv_python = r".venv\Scripts\python.exe" if sys.platform == "win32" else ".venv/bin/python"
+    return (f'This Python isn\'t a venv, so make one in this folder first: "{sys.executable}" -m venv .venv\n'
+            f"Then run {venv_python} -m pip install -r tools/requirements.txt, and use {venv_python} for Pyrite from then on.")
+
+
 def tool_checks(cfg: dict | None) -> list[dict]:
     """The programs Pyrite uses, each as {"ok": True | False | None, "what", "fix"}. None means optional and missing."""
     found = []
     has_docx = importlib.util.find_spec("docx") is not None
-    found.append({"ok": has_docx, "what": "python-docx, which builds the documents",
-                  "fix": "" if has_docx else f'Run: "{sys.executable}" -m pip install -r tools/requirements.txt'})
+    found.append({"ok": has_docx, "what": "python-docx, which builds the documents", "fix": "" if has_docx else install_fix()})
     if shutil.which("soffice"):
         found.append({"ok": True, "what": "LibreOffice, which makes the PDFs", "fix": ""})
     elif _word_installed():
