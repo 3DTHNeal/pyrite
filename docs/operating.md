@@ -42,11 +42,17 @@ my-job-search/
 .venv/Scripts/python.exe tools/pyrite.py init ../my-job-search --name "Your Name"
 ```
 
-It puts your name in `search.toml` and on the `# Name` lines of the master resume and letter, leaves out the example's `seed.toml` and clears its `allowed_hosts`, and changes nothing if the folder already has a `profile/`. Then replace everything else in `profile/`:
+It puts your name in `search.toml` and on the `# Name` lines of the master resume and letter, leaves out the example's `seed.toml` and clears its `allowed_hosts`, and changes nothing if the folder already has a `profile/`.
+
+With `--blank`, the profile files start with none of the fictional candidate's content: `facts.md` and `run-notes.md` have their headings and a comment under each on what goes there, the master resume has your name and its section headings and the letter your name, and `search.toml` keeps the example's comments and the settings for how Pyrite works, with every setting that describes the candidate emptied. The optional `workday-paste.md` isn't written. `doctor` then names what's still blank, and that `search.toml` has no roles or companies yet. Comments (`<!-- ... -->`) in a source approve nothing, so leaving them in is harmless.
+
+With `--git`, `init` also makes the workspace a git repository of its own, with a `.gitignore` for what shouldn't be kept: SQLite's `-wal` and `-shm` files, the `*.previous.*` copies a save keeps, the browser profile autofill signs in with, the BLS downloads and Word's `~$` lock files. It never adds a remote or pushes. `data/pyrite.db` is kept in the repository on purpose: it's the one file that can't be regenerated, so the repository is its backup. Commit when nothing is running, with no pan, Claude run or dashboard save under way, so the copy is whole. The built `.docx`, `.pdf` and `.txt` files are kept too, since Pyrite checks them against what passed and what was sent, and a rebuild never comes out byte for byte the same. To keep a copy off this computer, push it to a private repository you make yourself. For a workspace you already have, run `init` on the workspace in use with `--git`: it sets up the repository and changes nothing else.
+
+Then replace everything else in `profile/`:
 
 - `facts.md`, `approved-terms.txt` and `run-notes.md` with your own.
 - `resume.md` and `cover-letter.md` with your master resume and letter, written in the form under [How the documents are written](#how-the-documents-are-written). The `[guard]` section of `search.toml` names them as the sources every draft is checked against, and `resume.md` as the one whose employers, titles and dates a draft must match.
-- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks, industries and companies to watch, and under `[guard]` your own confidential and unsupported terms and `expected_on_resume`. The assay reads nothing from the "Do not use" and "Unsupported" sections of `facts.md`, so every term in them needs a pattern under `forbidden` or `unsupported` to be blocked. `allowed_hosts` under `[dashboard]` lists names the dashboard would answer to, so add only ones you use.
+- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks, industries and companies to watch, and under `[guard]` your own confidential and unsupported terms and `expected_on_resume`. The assay blocks each capitalized name listed under "Do not use" in `facts.md` without a pattern of its own, so `forbidden` is for what a name alone won't catch, such as a lowercase term. It reads the "Unsupported" section only through `unsupported`, so each line there needs a pattern. `allowed_hosts` under `[dashboard]` lists names the dashboard would answer to, so add only ones you use.
 - `workday-paste.md` with your own Workday answers, or delete it if you won't use `pyrite fill`.
 - `seed.toml`, if you want it, with the applications you made before Pyrite. `pyrite seed` imports them: one with `applied_on` as applied, and one without under Being tailored, where `pyrite finish` checks it.
 
@@ -62,7 +68,7 @@ Then ask what's left:
 .venv/Scripts/python.exe tools/pyrite.py doctor
 ```
 
-It lists every profile file that's still the example's, the example's settings left in `search.toml`, each source under `[guard]` that isn't in your workspace, a master resume or letter that isn't in the form the assay reads, each "Do not use" term in `facts.md` that `forbidden` doesn't block, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
+It lists every profile file that's still the example's, the example's settings left in `search.toml`, each source under `[guard]` that isn't in your workspace, a master resume or letter that isn't in the form the assay reads, a "Do not use" name the assay can't block by name because your sources also state it as fact, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
 
 With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder`, `finish` and `serve`, then refuse to run, so nothing real ends up inside this repository. `pyrite demo` is the way to look around without a workspace.
 
@@ -123,7 +129,14 @@ The builder and its writing rules together are the drafter, and they carry a ver
 
 ## The dashboard
 
-`tools/pyrite.py serve` runs it at <http://127.0.0.1:8787>. It only listens on this machine. On Windows, double-click `Pyrite.cmd`, which starts the dashboard if it's down and replaces it if it has hung. If another program holds port 8787, it says so and closes nothing. To start it at login, put a shortcut to `.venv\Scripts\pythonw.exe tools\pyrite.py serve` in your Startup folder, with this folder as its working directory.
+`tools/pyrite.py serve` runs it at <http://127.0.0.1:8787>. It only listens on this machine. `tools/pyrite.py open` opens it in your browser, starting it in the background first if it isn't running, and replacing it if it holds the port but has stopped answering. If another program holds the port, it says so and closes nothing. On Windows, double-click `Pyrite.cmd`, which runs `open`. To start it at login, put a shortcut to `.venv\Scripts\pythonw.exe tools\pyrite.py serve` in your Startup folder, with this folder as its working directory, or on Linux use `tools/pyrite/systemd/pyrite-dashboard.service`.
+
+To use another port, such as for a second copy of Pyrite with its own workspace, set it under `[dashboard]` in `search.toml`. `serve`, `open`, `Pyrite.cmd` and the systemd unit all use it, and `serve --port` overrides it for one run:
+
+```toml
+[dashboard]
+port = 8790
+```
 
 The dashboard labels its parts in plain words. The code and these docs sometimes use the prospector's name each started with:
 
@@ -304,7 +317,7 @@ The sections under **About you** that have editors so far:
 - **Work history** edits employers, roles, titles, places and dates, and lines such as Education. Each change is made to its own line of the Timeline in `facts.md`, so notes after the dates and the way you wrote things stay. The same change is made to the matching `###` and `####` headings in `profile/resume.md`, and an employer's dates follow its roles when they matched them before. A role is refused if `facts.md` wouldn't read it back as typed, such as a title with a comma that isn't in your master resume. **On every resume** sets `expected_on_resume`.
 - **Achievements** edits the themed sections of `facts.md` a fact at a time, keeping any lines under a fact with it, and adds sections before "Do not use". The **achievement builder** turns what you did, the before and after, and where it was measured into one fact line, and points out filler words, a percentage with no setting, and "Led" or "Managed" on a role whose title doesn't support it. Where it was measured is saved under **Wording** in `run-notes.md`, so drafts keep it. A fact that names something on Off limits is pointed out before you save.
 - **Master resume** edits `profile/resume.md` and `profile/cover-letter.md`: the headline, the text under each heading, and the letter's body. The name, contact line and headings come from the sections above and can't be typed here. Each change runs the fact check on both, and lists what only the master says, such as a number not in `facts.md`. Drafts may use those, because the master is an approved source, so it's worth checking each is true. If `heading_source` names another file, the section says so.
-- **Off limits** lists what drafts must never mention and what you haven't done. **Block it** adds a line to "Do not use" or "Unsupported" in `facts.md` and a pattern to `forbidden` or `unsupported` under `[guard]`, written to catch plurals, hyphens and spacing. A term listed in `facts.md` that no pattern blocks is named, with a button to block it. **Test a sentence** shows how the assay reads any sentence, including when a denial makes a claim acceptable. **Advanced** shows and edits the patterns themselves. Taking anything off asks for a code.
+- **Off limits** lists what drafts must never mention and what you haven't done. **Block it** adds a line to "Do not use" or "Unsupported" in `facts.md` and a pattern to `forbidden` or `unsupported` under `[guard]`, written to catch plurals, hyphens and spacing. A capitalized name under "Do not use" is blocked by name even with no pattern, and the section lists those. A name that your sources also state as fact can't be blocked that way, so it's named with a button to add a pattern. **Test a sentence** shows how the assay reads any sentence, including when a denial makes a claim acceptable. **Advanced** shows and edits the patterns themselves. Taking anything off asks for a code.
 - **Skills and terms** shows `approved-terms.txt` a term at a time, under the comments that group them. Taking a term off saves straight away; approving one asks for a code.
 
 Lists in `search.toml` are changed an item at a time, so the other items, their lines and any comments among them stay as they were.
@@ -335,7 +348,8 @@ The assay is Pyrite's fact checker, named for the test that tells gold from fool
 
 It also warns, without blocking, about wording that readers now take as machine-written or empty: em dashes, "spearheaded", "leveraged", "results-driven" and the like, and a cover letter over 350 words. Beside the result, the dashboard shows what share of the posting's skill terms the resume uses, and says so when that share is high enough to read as copied (above about 85%) or too low for a skills filter (below about 40%).
 
-- **What counts as a source.** Your approved sources, minus the "Do not use" and "Unsupported" sections of `facts.md`, which approve nothing. The posting never counts, and neither does its title. A resume that opens a bullet with a tool the posting names, and your sources don't, is blocked.
+- **Confidential names.** A draft may match no pattern under `forbidden`, and no capitalized name listed under "Do not use" in your sources. The first word of each sentence there is taken for a label, such as "Internal names:", and words in parentheses or quotes for an explanation, so neither is blocked. Neither is your own name, or a name your sources also state as fact, which `doctor` points out.
+- **What counts as a source.** Your approved sources, minus the "Do not use" and "Unsupported" sections of `facts.md` and any `<!-- comments -->`, which approve nothing. The posting never counts, and neither does its title. A resume that opens a bullet with a tool the posting names, and your sources don't, is blocked.
 - **Numbers.** Digits must appear in your sources. Numbers written as words from eleven up are blocked unless your sources use the same word, so write them as digits.
 - **Disclaimers.** A sentence may name an unsupported claim only to deny it: "I have not led that", or "the posting lists it, and I have not done it". "Led it with no delays" is still a claim.
 - **Every line is checked.** Only your exact approved contact line is exempt, and an indented heading counts as a heading.

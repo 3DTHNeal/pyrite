@@ -26,7 +26,7 @@ BUILD = CODE_ROOT / "tools" / "build_resume.py"
 BUILD_TIMEOUT_SECONDS = 300
 # With no workspace set, these would write into the fictional example inside this repository.
 NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish", "refresh", "prep", "status", "outreach", "add", "brief", "serve", "seed",
-                   "sweep", "run", "task", "fill", "autofill"}
+                   "sweep", "run", "task", "fill", "autofill", "open"}
 
 
 def quiet_hours(iso: str) -> float:
@@ -628,9 +628,17 @@ def cmd_brief(args, conn):
 
 
 def cmd_serve(args):
+    from .launch import dashboard_port
     from .server import serve
 
-    serve(args.port)
+    serve(args.port or dashboard_port(load_config()))
+
+
+def cmd_open(args):
+    """Open the dashboard in the browser, starting it first if it isn't answering."""
+    from . import launch
+
+    launch.open_dashboard(args.port or launch.dashboard_port(load_config()))
 
 
 def cmd_code(args):
@@ -660,7 +668,7 @@ def cmd_where(args):
 def cmd_init(args):
     """Make a new workspace from the example's profile, and point this copy of Pyrite at it."""
     try:
-        told = workspace.create(args.folder, args.name)
+        told = workspace.create(args.folder, args.name, blank=args.blank, git=args.git)
     except workspace.Refused as err:
         sys.exit(str(err))
     for line in told:
@@ -928,8 +936,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser("serve", help="run the dashboard")
-    p.add_argument("--port", type=int, default=8787)
+    p.add_argument("--port", type=int, help="the port to listen on, instead of port under [dashboard] in search.toml (8787 if unset)")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("open", help="open the dashboard in your browser, starting it if it isn't running and replacing it if it has hung")
+    p.add_argument("--port", type=int, help="the port it runs on, instead of port under [dashboard] in search.toml (8787 if unset)")
+    p.set_defaults(func=cmd_open)
 
     sub.add_parser("seed", help="import applications listed in profile/seed.toml").set_defaults(func=cmd_seed)
     sub.add_parser("where", help="print which workspace is in use").set_defaults(func=cmd_where)
@@ -938,6 +950,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it")
     p.add_argument("folder", help="where your workspace goes, outside this repository")
     p.add_argument("--name", default="", help='required: your name, as it goes on your documents, in quotes: --name "Sam Doe"')
+    p.add_argument("--blank", action="store_true", help="write the profile files with headings and comments on what goes where, "
+                                                        "instead of copying the fictional example's")
+    p.add_argument("--git", action="store_true", help="make the workspace a private git repository of its own, with a .gitignore. "
+                                                      "Never adds a remote. On the workspace in use, does only this")
     p.set_defaults(func=cmd_init)
     sub.add_parser("doctor", help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 
