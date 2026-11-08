@@ -11,10 +11,11 @@ right: a draft based on a file that has changed since is refused, as a save woul
 import difflib
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, doctor, factsdoc, profile, store, tomledit
+from . import checks, confirm, factsdoc, profile, store, tomledit
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -148,6 +149,25 @@ def _excluded(doc: factsdoc.Doc, kind: str) -> factsdoc.Section | None:
     return None
 
 
+def _reader(texts: dict) -> Callable[[str], str]:
+    """A source's text as the page has it drafted, or as saved for a file the Profile tab doesn't write."""
+    by_path = {path: texts[key] for key, path in profile.FILES.items()}
+
+    def read(rel: str) -> str:
+        if rel in by_path:
+            return by_path[rel]
+        path = store.ROOT / rel
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    return read
+
+
+def _by_name(cfg: dict, read: Callable[[str], str]) -> dict:
+    """The names under "Do not use" that the assay blocks with no pattern of their own, and the ones it can't block
+    that way because your sources also state them."""
+    blocked, shared = checks.listed_terms(cfg, read)
+    return {"blocked": [term for term, _pattern, _rel in blocked], "shared": [term for term, _rel in shared]}
+
+
 def _term_lines(text: str) -> list[dict]:
     """approved-terms.txt as groups: each comment block, and the terms on the lines after it."""
     groups: list[dict] = [{"note": "", "terms": []}]
@@ -229,8 +249,7 @@ def view() -> dict:
         "heading_source": {"path": heading, "written": _written(heading)},
         "expected": [{"text": str(item.get("text", "")), "label": str(item.get("label", ""))}
                      for item in guard.get("expected_on_resume", []) if isinstance(item, dict)],
-        "off_limits_lists": {**lists, "unguarded": doctor.unguarded_terms(
-            texts["facts"], guard.get("forbidden", []), str(cfg.get("candidate", {}).get("name", "")))},
+        "off_limits_lists": {**lists, "by_name": _by_name(cfg, _reader(texts))},
         "term_groups": _term_lines(texts["terms"]),
         "master_blocks": {"resume": master_blocks(texts["resume"], "resume"),
                           "letter": master_blocks(texts["letter"], "letter")},
@@ -818,19 +837,8 @@ def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer
 
 # ---------- Off limits ----------
 
-def term_pattern(term: str) -> str:
-    """A pattern that blocks a term as people write it: any case, a hyphen or space or nothing between its words, and
-    a plural. "SkyLift 900" blocks SkyLift-900 and skylift 900s."""
-    words = [w for w in re.split(r"[\s-]+", re.sub(r"^the\s+", "", term.strip(), flags=re.I)) if w]
-    if not words:
-        raise ValueError("Type the name or claim to block.")
-    body = r"[\s-]?".join(re.escape(w) for w in words)
-    last = words[-1][-1]
-    if last.isalpha() and last.lower() != "s":
-        body += "s?"
-    start = r"\b" if re.match(r"\w", words[0]) else r"(?<!\w)"
-    end = r"\b" if re.match(r"\w", last) else r"(?!\w)"
-    return start + body + end
+# The pattern Block it writes, which is also how the assay blocks a name listed under Do not use with none of its own.
+term_pattern = checks.term_pattern
 
 
 def _pattern(raw) -> str:
@@ -923,8 +931,8 @@ def _offlimits(texts: dict, cfg: dict, edits: dict) -> Draft:
     new_guard = {**guard, "forbidden": lists["forbidden"], "unsupported": lists["unsupported"]}
     test = _one_line(edits.get("test"), "The sentence to test")
     return Draft(out, count, notes, {
-        "test": checks.explain(test, new_guard) if test else None,
-        "unguarded": doctor.unguarded_terms(out["facts"], lists["forbidden"], name),
+        "test": checks.explain(test, checks.with_listed(new_guard, cfg, _reader(out))) if test else None,
+        "by_name": _by_name({**cfg, "guard": new_guard}, _reader(out)),
         "patterns": {"never": lists["forbidden"], "nottrue": lists["unsupported"]},
     })
 
@@ -1156,7 +1164,8 @@ def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
         out["run_notes"] = _add_wording(texts["run_notes"], rules)
         count += len(rules)
 
-    guard = cfg.get("guard", {})
+    # As the fact bank was read, so a fact that names something on Do not use is pointed out before it's added.
+    guard = checks.with_listed(cfg.get("guard", {}), cfg, _reader(texts))
     for fact in touched:
         for hit in checks.explain(fact, guard)["hits"]:
             words = checks._matchable(fact)[hit["start"]:hit["end"]]
@@ -1193,24 +1202,18 @@ def _assay(texts: dict, cfg: dict, key: str, kind: str) -> dict:
     guard = {"forbidden": [], "unsupported": [], "disclaimers": [], "approved_sources": [], **cfg.get("guard", {})}
     checked = {**cfg, "guard": guard}
     own = profile.FILES[key]
-    by_path = {path: texts[k] for k, path in profile.FILES.items()}
-
-    def source(rel: str) -> str:
-        if rel in by_path:
-            return by_path[rel]
-        path = store.ROOT / rel
-        return path.read_text(encoding="utf-8") if path.is_file() else ""
-
+    source = _reader(texts)
+    blocked = checks.blocked_patterns(checked, source)
     approved = list(guard["approved_sources"])
     every = "\n".join(checks.claimable(source(rel)) for rel in approved)
-    errors, warnings = checks.check_text(texts[key], kind, checked, every)
+    errors, warnings = checks.check_text(texts[key], kind, checked, every, blocked=blocked)
     if kind == "resume" and guard.get("heading_source") == own:
         more, also = checks.check_resume_structure(texts[key], checked)
         errors, warnings = errors + more, warnings + also
     only = []
     if own in approved:
         others = "\n".join(checks.claimable(source(rel)) for rel in approved if rel != own)
-        found, _ = checks.check_text(texts[key], kind, checked, others)
+        found, _ = checks.check_text(texts[key], kind, checked, others, blocked=blocked)
         only = [error.split(". Remove them")[0] for error in found if error not in errors and " not in " in error]
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}
 

@@ -209,7 +209,7 @@ def match_track(title: str, cfg: dict, job: dict | None = None) -> tuple[str, in
     top = _any([rf"\b{p}\b" for p in scoring["level_top"]], title)
     mid = _any([rf"\b{p}\b\.?" for p in scoring["level_mid"]], title)
     level_points = 10 if top else 5 if mid else 0
-    for track in cfg["track"]:
+    for track in cfg.get("track", []):  # A blank search.toml has none yet.
         if _any(track["title"], title):
             if track.get("needs_level") and not (top or mid):
                 continue

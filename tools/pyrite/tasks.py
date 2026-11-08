@@ -59,6 +59,9 @@ def not_ready(kind: str) -> str | None:
     if kind in WRITERS and _facts_still_example():
         return ("profile/facts.md is still the fictional example's, so Claude would judge and write for someone else. "
                 "Make it yours first: `pyrite doctor` lists what else is left.")
+    if kind in WRITERS and "profile/facts.md" in doctor.still_blank(ROOT):
+        return ("profile/facts.md is still blank, so Claude has nothing true to write from. Fill it in first: "
+                "`pyrite doctor` lists what else is left.")
     return None
 
 

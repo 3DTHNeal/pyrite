@@ -161,9 +161,9 @@ flags = [
 ]
 
 # What the assay, Pyrite's fact checker, blocks in a resume or cover letter.
-# These restate the "Do not use" and "Unsupported" sections of facts.md. Keep them in step with it:
-# the assay reads nothing from those two sections, so a term listed only there isn't blocked by
-# name. It just can't be used as an approved word or number.
+# It blocks each capitalized name listed under "Do not use" in facts.md by itself, so `forbidden`
+# is for what a name alone won't catch, such as a lowercase term or a name your facts also state.
+# The "Unsupported" section is read only through `unsupported`: each line there needs a pattern.
 [guard]
 forbidden = ['Bluebird', 'Falconer', '\bhive\b', 'SkyLift']
 # Blocked unless the sentence denies it: with one of `disclaimers` before the claim ("I have not
@@ -205,6 +205,9 @@ max_pages = 2
 autofill = false
 
 [dashboard]
+# The port it listens on, which `pyrite serve`, `pyrite open` and Pyrite.cmd all use. Set another
+# to run a second copy of Pyrite beside this one.
+# port = 8787
 # Extra names the dashboard answers to besides localhost, such as a private VPN name.
 # Never add a public name, because the dashboard has no login of its own.
 allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']

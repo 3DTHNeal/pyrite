@@ -17,6 +17,7 @@ MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
 DATES = re.compile(rf"(?P<start>{MONTH} \d{{4}}|\d{{4}})(?P<sep>\s*(?:[–—-]|to)\s*)"
                    rf"(?P<end>{MONTH} \d{{4}}|\d{{4}}|[Pp]resent|[Nn]ow)")
 BOLD = re.compile(r"\*\*(?P<bold>.+?)\*\*")
+COMMENT_LINE = re.compile(r"<!--.*?-->")
 
 
 class FactsError(ValueError):
@@ -157,12 +158,12 @@ class Doc:
         return found
 
     def contact(self) -> tuple[int, str] | None:
-        """The contact line: the first line of text under ## Contact."""
+        """The contact line: the first line of text under ## Contact, past any <!-- comment --> saying what goes there."""
         section = self.section("contact")
         if not section:
             return None
         for index in range(section.start + 1, section.end):
-            if self.bare(index).strip():
+            if self.bare(index).strip() and not COMMENT_LINE.fullmatch(self.bare(index).strip()):
                 return index, self.bare(index).strip()
         return None
 

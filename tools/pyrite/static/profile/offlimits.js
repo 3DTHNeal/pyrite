@@ -1,7 +1,8 @@
 "use strict";
 // Off limits: what drafts must never mention, and what you haven't done. Each is a line in facts.md, which tells the
-// drafter, and a pattern under [guard], which the fact check blocks. Blocking a term writes both. Taking anything off
-// lets drafts say more, so saving that asks for a code from this computer.
+// drafter, and a pattern under [guard]. The fact check reads both: a capitalized name under Do not use is blocked by
+// name even with no pattern. Blocking a term writes both. Taking anything off lets drafts say more, so saving that
+// asks for a code from this computer.
 
 profileStep("offlimits", {
   render(ctx) {
@@ -14,14 +15,14 @@ profileStep("offlimits", {
     const off = !ctx.editable;
     const review = h("div", { class: "profile-review", "aria-live": "polite" }, profileReview(null));
     const tested = h("div", { "aria-live": "polite" });
-    const unguarded = h("div");
+    const byName = h("div");
     let last = null;
     const send = profileDrafter(ctx, (result, err) => {
       profileShowReview(review, result, err);
       if (result) {
         last = result.preview;
         showTest();
-        showUnguarded(result.preview.unguarded);
+        showByName(result.preview.by_name);
       }
     });
     const changed = (now) => send({ never: form.never, nottrue: form.nottrue, test: form.test }, now);
@@ -106,15 +107,23 @@ profileStep("offlimits", {
         }));
     };
 
-    function showUnguarded(terms) {
-      fill(unguarded, terms && terms.length ? h("div", { class: "callout bad" },
-        h("b", {}, `Listed under Do not use, but nothing blocks ${terms.length === 1 ? "it" : "them"}: ${terms.join(", ")}`),
-        h("p", {}, "The fact check reads only the patterns, so a draft could still name these."),
-        h("div", { class: "row" }, terms.map((term) => h("button", { class: "btn small", type: "button", disabled: off, onclick: () => {
-          if (!form.never.add.includes(term)) form.never.add.push(term);
-          draw();
-          changed(true);
-        } }, `Block ${term}`)))) : null);
+    // Names under Do not use with no pattern of their own. The fact check blocks them by name, except any your sources
+    // also state as fact, which it can't block without failing every draft that states it.
+    function showByName(found) {
+      const blocked = (found && found.blocked) || [];
+      const shared = (found && found.shared) || [];
+      fill(byName,
+        shared.length ? h("div", { class: "callout bad" },
+          h("b", {}, `Listed under Do not use, but your sources also state ${shared.length === 1 ? "it" : "them"}, so nothing blocks ${shared.length === 1 ? "it" : "them"}: ${shared.join(", ")}`),
+          h("p", {}, "If it's confidential, take it out of the rest of your sources, or block it here to add a pattern for it."),
+          h("div", { class: "row" }, shared.map((term) => h("button", { class: "btn small", type: "button", disabled: off, onclick: () => {
+            if (!form.never.add.includes(term)) form.never.add.push(term);
+            draw();
+            changed(true);
+          } }, `Block ${term}`)))) : null,
+        blocked.length ? h("div", { class: "callout info" },
+          h("b", {}, `Blocked by name from your Do not use lines: ${blocked.join(", ")}`),
+          h("p", {}, "The fact check blocks each capitalized name under Do not use, so these need no pattern of their own. If one is only part of an explanation, put it in parentheses there.")) : null);
     }
 
     const sentence = h("input", { type: "text", value: form.test, "aria-label": "A sentence to test",
@@ -147,7 +156,7 @@ profileStep("offlimits", {
     ];
 
     const main = h("div", { class: "stack profile-form" },
-      unguarded,
+      byName,
       h("div", { class: "profile-pair" }, panel("never"), panel("nottrue")),
       h("small", { class: "muted" }, "Blocking takes effect when you save. Taking something off lets drafts say more, so saving that asks for a code from this computer."),
       h("section", { class: "panel stack", "aria-label": "Test a sentence" },
@@ -163,7 +172,7 @@ profileStep("offlimits", {
         advancedPanel("never"), advancedPanel("nottrue")),
       review);
     draw();
-    showUnguarded(lists.unguarded);
+    showByName(lists.by_name);
     showTest();
     changed(true);
     return { main };

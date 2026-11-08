@@ -13,7 +13,7 @@ from pathlib import Path
 
 from support import BAD_DRAFT, BRIEF, CFG, CONFIDENTIAL, LETTER, LETTER_ROLE, MODEL, RESUME, SOURCES, resume_errors
 
-from pyrite import checks
+from pyrite import checks, store
 
 
 class FactChecker(unittest.TestCase):
@@ -45,6 +45,30 @@ class FactChecker(unittest.TestCase):
             with self.subTest(term):
                 errors = resume_errors(RESUME + f"\n- Built {term} tooling.\n")
                 self.assertTrue(any("confidential term" in e for e in errors), errors)
+
+    def test_a_name_listed_only_under_do_not_use_is_blocked_by_name(self):
+        facts = (store.ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
+        listed = facts.replace("## Do not use\n", "## Do not use\n- Codename Nightjar (an internal name)\n")
+        self.assertFalse(any(re.search(pattern, "Nightjar", re.I) for pattern in CFG["guard"]["forbidden"]))  # No pattern of its own.
+
+        def read(text):
+            return lambda rel: text if rel == "profile/facts.md" else (store.ROOT / rel).read_text(encoding="utf-8")
+
+        blocked = checks.blocked_patterns(CFG, read(listed))
+        errors, _ = checks.check_text(RESUME + "\n- Shipped nightjars on time.\n", "resume", CFG, SOURCES, "Acme", "Principal Engineer",
+                                      blocked=blocked)
+        self.assertIn("Resume uses a confidential term: 'nightjars', which profile/facts.md lists under \"Do not use\"", errors)
+        # The rest of the draft is judged as before: the name isn't named again as a term outside your sources.
+        self.assertFalse([e for e in errors if "not in your approved sources" in e], errors)
+        # A name your sources also state as fact can't be blocked by name, or every draft that states it would fail.
+        stated = listed.replace("## Leadership\n", "## Leadership\n- Ran the Nightjar launch\n")
+        self.assertEqual(checks.listed_terms(CFG, read(stated)), ([], [("Nightjar", "profile/facts.md")]))
+
+    def test_comments_in_a_source_approve_nothing(self):
+        text = "# Fact bank\n<!-- Tools such as Kubernetes, and numbers such as 2026. -->\n## Skills\n- Python\n"
+        self.assertNotIn("Kubernetes", checks.claimable(text))
+        self.assertNotIn("2026", checks.claimable(text))
+        self.assertIn("- Python", checks.claimable(text))
 
     def test_a_placeholder_is_named_once_not_again_as_a_term(self):
         errors = resume_errors(RESUME + "\n- Led a [X] migration.\n")
