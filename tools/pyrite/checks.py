@@ -65,6 +65,12 @@ def claimable(text: str) -> str:
     return "".join(section for section in sections if not EXCLUDED_SECTION.match(section))
 
 
+def missing_sources(cfg: dict) -> list[str]:
+    """Approved sources named in search.toml that aren't in the workspace. A copied example config names the example's
+    own applications, so a new workspace has these until its owner points them at their own files."""
+    return [rel for rel in cfg["guard"]["approved_sources"] if not (ROOT / rel).exists()]
+
+
 def _read_sources(cfg: dict) -> str:
     parts = []
     for rel in cfg["guard"]["approved_sources"]:
@@ -347,7 +353,12 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
 
 def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
     errors, warnings = [], []
-    reference = (ROOT / cfg["guard"]["heading_source"]).read_text(encoding="utf-8")
+    source = ROOT / cfg["guard"]["heading_source"]
+    if not source.exists():
+        # Nothing to compare the employers, titles and dates with, so nothing can pass that check.
+        return [f"heading_source under [guard] in profile/search.toml is {cfg['guard']['heading_source']!r}, which isn't in "
+                "your workspace. Point it at your own master resume."], warnings
+    reference = source.read_text(encoding="utf-8")
     # Stripped first, as the builder does: an indented heading still prints as a heading.
     headings = lambda doc: {l.strip() for l in doc.splitlines() if l.strip().startswith(("### ", "#### "))}
     approved, present = headings(reference), headings(text)
@@ -416,6 +427,8 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
     """Run every gate over an application folder."""
     errors, warnings = [], []
     sources = _read_sources(cfg)
+    warnings += [f"approved_sources under [guard] in profile/search.toml names {rel!r}, which isn't in your workspace, "
+                 "so nothing in it counts as a source." for rel in missing_sources(cfg)]
     posting = description or saved_posting(folder)
 
     resume_path = folder / "resume.md"

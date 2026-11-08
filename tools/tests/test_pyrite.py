@@ -4,6 +4,7 @@ These run on a throwaway copy of the fictional example workspace, whatever works
 machine normally uses, so they can never read or change anyone's real job search.
 """
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -204,6 +205,7 @@ class FactChecker(unittest.TestCase):
             self.assertTrue(any("Kubernetes" in e for e in report["errors"]), report["errors"])
 
 
+@unittest.skipUnless(importlib.util.find_spec("docx"), "python-docx isn't installed: pip install -r tools/requirements.txt")
 class Builder(unittest.TestCase):
     """The documents a parser sees: plain text for paste boxes, and a PDF read back the way an ATS reads it."""
 
@@ -2641,6 +2643,15 @@ except Exception:  # noqa: BLE001  Playwright, or its browser, isn't installed h
 FIXTURE = (CODE_ROOT / "tools" / "tests" / "fixtures" / "workday_experience.html").resolve().as_uri()
 
 
+@contextlib.contextmanager
+def playwright_installed():
+    """The dashboard's autofill checks, as on a machine that has Playwright. Playwright is optional, so the tests of
+    those checks don't need it."""
+    real = importlib.util.find_spec
+    with mock.patch.object(workday.importlib.util, "find_spec", lambda name, *a: object() if name == "playwright" else real(name, *a)):
+        yield
+
+
 def set_autofill(root: Path, value: str) -> None:
     """Rewrite the workspace's `autofill = ...` line under [workday]."""
     path = root / "profile" / "search.toml"
@@ -2688,7 +2699,8 @@ class AutofillSwitch(ClaudeRun):
     def test_on_lets_a_workday_posting_through(self):
         set_autofill(self.root, "true")
         self.workday_job()
-        detail = server.job_detail(self.conn, self.job, CFG)
+        with playwright_installed():
+            detail = server.job_detail(self.conn, self.job, CFG)
         self.assertTrue(detail["can_autofill"], detail["autofill_refusal"])
 
     def test_only_workday_hosts_count(self):
@@ -2845,6 +2857,7 @@ class Autofill(ClaudeRun):
     def test_the_dashboard_button_starts_a_worker_and_shows_its_state(self):
         self.conn.execute("UPDATE jobs SET url = ? WHERE id = ?", ("https://acme.wd5.myworkdayjobs.com/External/job/Role_R1", self.job))
         self.conn.commit()
+        self.enterContext(playwright_installed())
         detail = server.job_detail(self.conn, self.job, CFG)
         self.assertTrue(detail["can_autofill"], detail["autofill_refusal"])
         with mock.patch.object(workday.subprocess, "Popen") as popen:
@@ -3050,6 +3063,35 @@ class Autofill(ClaudeRun):
         self.assertEqual(degrees, ["Bachelors"])
         self.assertIn("education 1 school: Northfield Community College (typed, since this employer's box takes any name)", report.filled)
         self.assertFalse(any("left off" in s for s in report.skipped), report.skipped)
+
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_a_whole_list_shown_while_a_slow_search_loads_is_not_its_answer(self):
+        # As on one tenant: each search shows the field-of-study list A to Z at once, and the answer seconds later opens
+        # the list again even after Escape. Taking the A-to-Z list for the answer reported the wrong entries, and the late
+        # answer left a list open that blocked the next entry's Add button and was read as the skills search's answer.
+        report = workday.Report()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            workday.SETTLE_MS = 100
+            page.evaluate("window.fullListFirst = true")
+            workday.fill_education(page, [{"school": "Western Prairie University", "degree": "Bachelor of Science",
+                                           "field": "Coastal Welding Technology", "gpa": "", "from": "", "to": ""}], report)
+            page.wait_for_timeout(4000)
+            still_open = workday._options(page).count()
+            field = page.evaluate("document.querySelector('[id$=\"--fieldOfStudy\"]').dataset.selected || ''")
+            browser.close()
+        self.assertEqual(field, "")
+        self.assertIn("education 1 field of study: no entry called 'Coastal Welding Technology'. "
+                      "Workday offers: Coastal and Ocean Engineering Technology", report.skipped)
+        self.assertEqual(still_open, 0, "a late answer opened the list again")
+
+    def test_a_miss_names_the_closest_entries_first(self):
+        listed = ["Accounting or Taxation", "Acoustics", "Business Administration, Management", "Electrical Engineering"]
+        self.assertEqual(workday._closest_first(listed, ["Business Administration"])[0], "Business Administration, Management")
+        self.assertEqual(workday._closest_first(listed, ["Electrical and Computer Engineering Technology"])[0], "Electrical Engineering")
+        self.assertEqual(workday._closest_first(listed, ["Underwater Welding"]), listed)
 
 
 class Gate(ClaudeRun):

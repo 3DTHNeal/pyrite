@@ -303,14 +303,19 @@ def _literal(text: str) -> str:
     return re.escape(text).replace("/", r"\/")
 
 
-def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS_MS, chosen_names: list[str] | None = None):
+def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS_MS, chosen_names: list[str] | None = None,
+             loading: list[set[str]] | None = None):
     """Wait for a search to answer. Returns the picker's already-chosen entry (one of `chosen_names`, by default `names`),
     an exact match for one of `names`, or neither once the list has settled.
 
     `before` is what was on show before the search, so a list left over from the last picker isn't taken for this one's.
     Two searches can answer with the same entries, though ("Linux", then "Linux Server"), so a list that hasn't changed
     by the end of the grace period counts as this search's answer.
+
+    `loading` are lists the picker showed the moment the search was sent. An answer takes a round trip, so those are the
+    picker's own unfiltered list, which some tenants show while a slow search loads, and never settle as its answer.
     """
+    loading = [s for s in (loading or []) if s]
     pattern = "|".join(_literal(n) for n in names)
     picked = "|".join(_literal(n) for n in (chosen_names or names))
     chosen = page.get_by_role("option", name=re.compile(rf"^(?:{picked}), press delete", re.I))
@@ -327,7 +332,7 @@ def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS
             return None, exact
         # Settled means a fresh, non-empty list that stopped changing, or Workday saying there's nothing. An empty list
         # is only the old one cleared while the new one loads.
-        if (fresh and shown and shown == last) or _says_none(page) or time.monotonic() > deadline:
+        if (fresh and shown and shown == last and shown not in loading) or _says_none(page) or time.monotonic() > deadline:
             return None, None
         last = shown
         page.wait_for_timeout(400)
@@ -364,10 +369,13 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
         allowed = wanted[:wanted.index(term) + 1] if term in wanted else wanted
         before = set(_texts(_options(page)))
         box.fill(term)
+        typed = set(_texts(_options(page)))
         box.press("Enter")
+        sent = set(_texts(_options(page)))
+        loading = [s for s in (typed, sent) if s != before]
         page.wait_for_timeout(SETTLE_MS // 3)
         # What the picker selected by itself counts whichever name it is; it is on the form already.
-        chosen, exact = _results(page, allowed, before, chosen_names=wanted)
+        chosen, exact = _results(page, allowed, before, chosen_names=wanted, loading=loading)
         if chosen is None and exact is None:
             found = [t.strip() for t in _texts(_options(page)) if t.strip() and "press delete" not in t.lower()]
             seen += [t for t in found if t not in seen]
@@ -394,18 +402,36 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
         page.wait_for_timeout(300)
         report.decisions.append(f"{what}: no entry called {wanted[0]!r}, picked {shown[0]!r}. Others: {', '.join(shown[1:6])}")
         return shown[0]
-    offered = f". Workday offers: {', '.join((seen or shown)[:12])}" if (seen or shown) else ""
+    # Entries sharing words with the wanted names lead, so a whole A-to-Z list a tenant showed can't crowd them out,
+    # and "; " keeps a name with a comma in it, such as "Business Administration, Management", in one piece.
+    offered = f". Workday offers: {'; '.join(_closest_first(seen or shown, wanted)[:12])}" if (seen or shown) else ""
     if not offered and said_none:
         offered = f". Nothing came up for: {', '.join(said_none)}"
     if keep_text:
         box.fill(wanted[0])
-        page.keyboard.press("Escape")
+        _close_list(page, box)
         report.skipped.append(f"{what}: this employer's list has no {wanted[0]!r}, so it's typed as is. Check what the page did with it{offered}")
     else:
         report.skipped.append(f"{what}: no entry called {wanted[0]!r}{offered}")
         box.fill("")
-        page.keyboard.press("Escape")  # A search left open reads as a pick still to finish.
+        _close_list(page, box)  # A search left open reads as a pick still to finish, and covers the buttons below it.
     return ""
+
+
+def _closest_first(names: list[str], wanted: list[str]) -> list[str]:
+    """`names` with those sharing the most words with any wanted name first, in their order otherwise."""
+    words = [set(_same(w).split()) - STOP for w in wanted]
+    return sorted(names, key=lambda n: -max((len(set(_same(n).split()) & w) for w in words), default=0))
+
+
+def _close_list(page, box) -> None:
+    """Close a search's list and make sure it stays closed. A slow answer can arrive after Escape and open it again,
+    and a list left open covers the fields under it and is read as the next picker's answer."""
+    for _ in range(5):
+        box.press("Escape")
+        page.wait_for_timeout(300)
+        if not _options(page).count():
+            return
 
 
 def _same(text: str) -> str:

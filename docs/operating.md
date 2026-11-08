@@ -30,7 +30,7 @@ my-job-search/
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
 
-Copy `example/profile/` to start, and replace everything in it. The `[candidate]` and `[guard]` sections of `search.toml` matter most.
+Copy `example/profile/` to start, and replace everything in it. The `[candidate]` and `[guard]` sections of `search.toml` matter most. The example's `[guard]` points `heading_source` and `approved_sources` at one of its own applications, which a new workspace doesn't have: point them at your master resume and letter, or the assay blocks every draft and says why. Also clear the example's `allowed_hosts` under `[dashboard]`, since those are names the dashboard would answer to.
 
 Then point the code at your workspace. Either set `PYRITE_HOME`, or put the path on one line in a file called `.pyrite-home` in this folder, which git ignores. Check it with:
 
@@ -144,7 +144,7 @@ autofill = true
 Only the file can turn it on: the dashboard's Settings tab can't. Check that automated form filling is acceptable under the terms of the site you use it on. With it on, **Fill Workday form** on a job, or `pyrite autofill <id>`, opens the job's posting in a browser window of its own, waits for you to sign in and reach the form, and types the sheet in: the work history with its tailored descriptions, education, languages, the skills picker, websites, the resume upload, and the standard application questions. From the command line it pauses before saving each page so you can look; from the dashboard it goes straight through and leaves the browser open for you. Either way it reports what it left for you (the sheet's per-application answers, questions it didn't recognize, skills Workday has no entry for) and which near-matches it picked, on the job's panel and in `autofill-log.txt` in its folder, and stops at the first page it doesn't know, which is the voluntary disclosures or the review page. The button shows only for a Workday posting that hasn't been sent. On Workday's Apply menu choose **Apply Manually**; a page Workday kept as a draft is left as it is. It has no way to submit: the only footer button it presses is one that saves or continues, and a button that submits is refused. It needs Playwright once:
 
 ```bash
-.venv/Scripts/python.exe -m pip install playwright
+.venv/Scripts/python.exe -m pip install -r tools/requirements-autofill.txt
 ```
 
 ```bash

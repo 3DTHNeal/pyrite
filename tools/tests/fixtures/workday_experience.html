@@ -98,6 +98,9 @@ function addWork() {
 // A single-value search picker: Enter finds matches; an exact match is taken at once and shown as a removable value.
 // Like a real tenant, the old list is cleared at once and the answer arrives after a round trip, as "No Items." when nothing matched.
 const ROUND_TRIP_MS = 300;
+// Some tenants show the picker's whole list, A to Z, the moment a search is sent, and put the answer in its place when it
+// arrives, opening the list again if it was closed meanwhile. Set window.fullListFirst to build pickers that way.
+window.fullListFirst = false;
 function searchPicker(input, names, single, roundTrip = ROUND_TRIP_MS) {
   const list = input.nextElementSibling;
   input.addEventListener("keydown", (ev) => {
@@ -109,9 +112,11 @@ function searchPicker(input, names, single, roundTrip = ROUND_TRIP_MS) {
     const words = q.split(/\s+/).filter((w) => w.length > 2);
     const score = (s) => (s.toLowerCase().includes(q) ? 100 : 0) + words.filter((w) => s.toLowerCase().split(/\W+/).includes(w)).length;
     const hits = names.filter((s) => score(s) > 0).sort((a, b) => score(b) - score(a));
-    list.innerHTML = "";
+    list.innerHTML = window.fullListFirst
+      ? [...names].sort().map((s) => `<li role="option" aria-label="${s}">${s}</li>`).join("") : "";
     list.hidden = false;
     setTimeout(() => {
+      if (window.fullListFirst) { list.innerHTML = ""; list.hidden = false; }
       if (!hits.length) { list.innerHTML = "<li>No Items.</li>"; return; }
       const exact = hits.find((s) => s.toLowerCase() === q);
       if (single && exact) { selectSingle(input, list, exact); return; }

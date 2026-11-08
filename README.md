@@ -14,7 +14,7 @@ The interesting problem isn't generating a resume. It's that a language model wi
 
 ## Try it
 
-Python 3.11 or newer, no install needed:
+Python 3.11 or newer, no install needed. Where `python` is older or missing, use `python3`, or `py -3.11` on Windows:
 
 ```bash
 python tools/pyrite.py demo
@@ -112,7 +112,7 @@ This project runs on my real job search, and it has to be public without showing
 python -W ignore::ResourceWarning -m unittest discover -s tools/tests
 ```
 
-Building the `.docx`, `.pdf` and paste-ready `.txt` files also needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
+Tests that need an optional package skip without it and say which. Building the `.docx`, `.pdf` and paste-ready `.txt` files needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. The experimental Workday autofill also needs `tools/requirements-autofill.txt`. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
 
 ## Limits
 
