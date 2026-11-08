@@ -350,6 +350,12 @@ class CommandLine(unittest.TestCase):
                 err.write(str(stop.code) if not isinstance(stop.code, int) else "")
         return out.getvalue(), err.getvalue(), code
 
+    def test_a_missing_job_id_shows_a_clear_error_without_a_traceback(self):
+        _, err, code = self.run_cli("job", "999")
+        self.assertEqual(code, 1)
+        self.assertIn("No job 999. pyrite queue lists the open ones.", err)
+        self.assertNotIn("Traceback", err)
+
     def test_the_bare_command_prints_help_with_where_to_start(self):
         out, _, code = self.run_cli()
         self.assertEqual(code, 0)

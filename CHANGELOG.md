@@ -50,6 +50,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- Commands given a job id that doesn't exist now show a clear error instead of a raw traceback.
 - Finish setup no longer takes words from an explanation under "Do not use" for secret names. It used to name your own name, a site mentioned in passing and an instruction such as "Say", and suggest forbidding them, which would have failed every draft. Asides in parentheses, quoted wording, the first word of each sentence and the words of `[candidate] name` are skipped.
 - Reply detection skips the receipts an application sets off, such as "You have successfully applied", "Thank you for applying" and candidate-account password and code mail. "Thank you for your interest" is still flagged, since rejections often say it. When mail matches several applications at one company and its subject names one title, only that application gets it.
 - The Gmail mail check tries once more when Claude writes its tool call out as text instead of making it. A run that hands back no usable list is counted as failed in Claude usage, and `pyrite doctor` says when the last mail check failed.
