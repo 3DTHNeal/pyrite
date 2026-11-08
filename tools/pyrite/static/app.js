@@ -193,6 +193,9 @@ function renderSweep() {
   if (run) {
     const reposted = run.stats.reposted ? `, ${run.stats.reposted} reposted` : "";
     parts.push(`Boards checked ${ago(run.finished_at)}: ${run.stats.postings.toLocaleString()} postings read across ${run.stats.sources} sources, ${run.stats.new} new${reposted}.`);
+    // A sweep after an update that changed scoring rescores prospects first. What it dropped is named, as nothing else of it is left.
+    const r = run.stats.rescored;
+    if (r) parts.push(`Scoring changed, so ${plural(r.kept, "prospect")} got new scores${r.dropped ? ` and ${r.dropped} that no longer pass ${r.dropped === 1 ? "was" : "were"} dropped: ${r.removed.join("; ")}` : ""}.`);
   } else {
     parts.push("The boards haven't been checked yet.");
   }
@@ -368,6 +371,7 @@ function cardMeta(job) {
   if (job.posting_closed_at) meta.push(pill("bad", "Posting down"));
   if (job.follow_up_due) meta.push(pill("warn", job.next_action === "Follow up" ? "Follow up" : "Next step due", job.next_action));
   if (job.quiet) meta.push(pill("warn", "Gone quiet"));
+  if (job.reached_out && sent) meta.push(pill("info", "Reached out"));
   if (job.days_since_applied !== null && job.status === "applied") meta.push(h("span", {}, `Applied ${daysAgo(job.days_since_applied)}`));
   if (job.location_kind === "local") meta.push(h("span", {}, "Local"));
   if (job.location_kind === "remote") meta.push(h("span", {}, "Remote"));
@@ -1523,6 +1527,33 @@ async function watchRefresh(id) {
 
 // `list` is the order of the list it was opened from, for Previous, Next and moving on after a pass. Returns whether
 // the job could be opened.
+// Today in this computer's time zone, as a date input wants it.
+function localToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+// Logs a note or message about a sent application. Each one shows in the timeline, and the follow-up reminder moves to a week after it.
+function outreachBlock(job) {
+  if (!job.can_reach_out) return null;
+  const today = localToday();
+  const day = h("input", { type: "date", max: today, "aria-label": "Day you reached out" });
+  keepDraft(job.id, "outreachDay", day, today);
+  const to = h("input", { placeholder: "Who, such as the hiring manager (optional)", "aria-label": "Who you reached out to" });
+  keepDraft(job.id, "outreachTo", to, "");
+  const note = h("input", { placeholder: "What you sent or asked (optional)", "aria-label": "Note about reaching out" });
+  keepDraft(job.id, "outreachNote", note, "");
+  const said = job.reached_out
+    ? "Logged in the timeline. Log each note you send, such as a follow-up."
+    : "A short note to the hiring manager within a few days of applying. Logging it moves the follow-up reminder to a week after it.";
+  return h("div", {}, h("h3", {}, "Reaching out"), h("p", { class: "muted" }, said),
+    h("div", { class: "stack" }, to, note, h("div", { class: "row" }, day,
+      h("button", { class: "btn", type: "button",
+        onclick: () => tryAct(job.id, { action: "reached_out", date: day.value, to: to.value, note: note.value }, "Couldn't log that",
+          ["outreachDay", "outreachTo", "outreachNote"]) }, "Reached out"))));
+}
+
+// `list` is the order of the list it was opened from, for Previous, Next and moving on after a pass.
 async function openJob(id, list) {
   let job;
   try {
@@ -1603,6 +1634,7 @@ async function openJob(id, list) {
       h("div", { class: "row" }, nextDate, h("button", { class: "btn", type: "button",
         onclick: () => tryAct(job.id, { action: "next_action", text: nextText.value, date: nextDate.value }, undefined, ["nextText", "nextDate"]) }, "Save"),
       nextStatus))),
+    outreachBlock(job),
     h("div", {}, h("h3", {}, "Your notes"), h("div", { class: "stack" }, notesEl, h("div", { class: "row" },
       h("button", { class: "btn", type: "button", onclick: () => tryAct(job.id, { action: "note", notes: notesEl.value }, undefined, ["notes"]) }, "Save notes"),
       notesStatus))),

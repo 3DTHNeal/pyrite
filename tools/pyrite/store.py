@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import tomllib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 CODE_ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +74,8 @@ DEFAULT_FIX_ATTEMPTS = 6
 # Event kinds for mail that might be a reply. Neither one changes a job's status.
 REPLY_DETECTED = "reply_detected"
 REPLY_DISMISSED = "reply_dismissed"
+# Logged when you reach out about an application, such as a note to the hiring manager. It doesn't change the status.
+REACHED_OUT = "reached_out"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -189,6 +191,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     ok INTEGER,
     detail TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS mail_alerts (
     id INTEGER PRIMARY KEY,
     message_id TEXT NOT NULL UNIQUE,
@@ -227,7 +233,36 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    _stamp_scoring(conn)
     return conn
+
+
+SCORING_VERSION = "scoring_version"
+
+
+def get_meta(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_meta(conn, key: str, value: str) -> None:
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def _stamp_scoring(conn) -> None:
+    """Record which scoring a database's postings have. A new one has none to rescore, so it starts at the current
+    version. One from before versions were kept starts at 0, so its next sweep brings every prospect up to date."""
+    if get_meta(conn, SCORING_VERSION) is not None:
+        return
+    from . import score
+
+    empty = conn.execute("SELECT 1 FROM jobs LIMIT 1").fetchone() is None
+    conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)", (SCORING_VERSION, str(score.VERSION if empty else 0)))
+    conn.commit()
+
+
+def scoring_version(conn) -> int:
+    return int(get_meta(conn, SCORING_VERSION) or 0)
 
 
 def _migrate(conn) -> None:
@@ -454,6 +489,36 @@ def set_status(conn, job_id: int, status: str, note: str = "", follow_up_days: i
     if status == "applied" and not job["applied_at"]:
         # From here on the documents are the record of what was sent, so keep a copy and freeze the draft.
         freeze_sent(conn, job_id)
+
+
+def log_outreach(conn, job_id: int, on: str = "", to: str = "", note: str = "", follow_up_days: int = 7) -> None:
+    """Record reaching out about a sent application, on the day `on` (today if empty), to whoever `to` names.
+
+    While the automatic follow-up reminder still stands, it moves to `follow_up_days` after the later of the application
+    and this, so it comes a week after you last made contact. A next step you set yourself is left alone.
+    """
+    job = get_job(conn, job_id)
+    if not job["applied_at"] or job["status"] not in ACTIVE:
+        raise ValueError("Reaching out is logged on an application you've sent and haven't closed.")
+    today = datetime.now().astimezone().date()
+    try:
+        day = date.fromisoformat(on) if on else today
+    except ValueError:
+        raise ValueError("Give the day as YYYY-MM-DD.") from None
+    if day > today:
+        raise ValueError("That day hasn't come yet. Log reaching out once you have.")
+    to, note = " ".join(to.split())[:120], note.strip()[:2000]
+    detail = f"On {day:%b} {day.day}" + (f", to {to}" if to else "") + "." + (f" {note}" if note else "")
+    if job["status"] == "applied" and job["next_action"] == "Follow up":
+        applied = datetime.fromisoformat(job["applied_at"]).astimezone().date()
+        remind = (max(applied, day) + timedelta(days=follow_up_days)).isoformat()
+        conn.execute("UPDATE jobs SET next_action_date = ? WHERE id = ?", (remind, job_id))
+    log_event(conn, job_id, REACHED_OUT, detail)
+
+
+def outreach(conn) -> set[int]:
+    """The jobs you've logged reaching out about."""
+    return {row[0] for row in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (REACHED_OUT,))}
 
 
 def possible_replies(conn) -> dict[int, dict]:
