@@ -923,4 +923,8 @@ def main(argv=None):
             f"No workspace is set, so `pyrite {args.command}` would write into the fictional example inside this repository.\n"
             f"`{INIT_EXAMPLE}` makes your own workspace outside it and points Pyrite there. `pyrite demo` looks around without one."
         )
-    args.func(args)
+    try:
+        args.func(args)
+    except store.JobNotFound as err:
+        # Every command that takes a job number looks it up, so this is the one place the missing one is named.
+        sys.exit(f"No job {err.job_id}. `pyrite queue` lists the open ones.")

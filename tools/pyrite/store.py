@@ -339,10 +339,21 @@ def log_event(conn, job_id: int, kind: str, detail: str = "") -> None:
     )
 
 
+class JobNotFound(KeyError):
+    """A job number that isn't in the database. `str()` gives the plain sentence, without a KeyError's quotes."""
+
+    def __init__(self, job_id: int):
+        super().__init__(job_id)
+        self.job_id = job_id
+
+    def __str__(self) -> str:
+        return f"no job {self.job_id}"
+
+
 def get_job(conn, job_id: int) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:
-        raise KeyError(f"no job {job_id}")
+        raise JobNotFound(job_id)
     return row
 
 
