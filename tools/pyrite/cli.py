@@ -109,7 +109,9 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
     """What a run should work on, best first: the postings to judge and the drafts to write."""
     run_cfg = cfg["run"]
     today = date.today()
-    ranked = lambda row: {**job_dict(row), **score.freshness(dict(row), cfg, today)}
+    last = discover.last_full_sweep(conn)
+    swept_at = last["started_at"] if last else None
+    ranked = lambda row: {**job_dict(row), **score.freshness(dict(row), cfg, today, swept_at)}
     # Your own picks first, then the newest listings that haven't been reposted.
     triage = sorted(
         (ranked(r) for r in conn.execute("SELECT * FROM jobs WHERE status = 'new'")),
@@ -126,7 +128,6 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
         ) if r["id"] not in stuck),
         key=lambda j: (-j["priority"], fit_order.get(j["fit"], 2), -j["rank"]),
     )[:limit or run_cfg["tailor_per_day"]]
-    last = discover.last_full_sweep(conn)
     failing = [dict(r) for r in conn.execute(
         "SELECT company, source_key, last_error FROM source_status WHERE last_error != ''"
     )]
@@ -138,7 +139,7 @@ def cmd_queue(args, conn):
     """What the daily run should work on, best first."""
     found = queue(conn, load_config(), args.limit)
     keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "promoted", "age_days", "reposts", "redates",
-            "is_new", "ghost_risk", "ghost_reason", "track", "flags", "fit", "priority", "status", "comp", "url")
+            "is_new", "ghost_risk", "ghost_reason", "unconfirmed", "scam_signs", "track", "flags", "fit", "priority", "status", "comp", "url")
     trim = lambda job: {k: job[k] for k in keep}
     last = found["last"]
     _print_json({

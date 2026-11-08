@@ -539,6 +539,19 @@ class ScamRules(unittest.TestCase):
                                       body="Wire transfer received. Confirm your bank account details."), [])
         self.assertEqual(self.reasons(from_address="deals@shop.example", subject="Gift cards 50% off"), [])
 
+    def test_task_scams_checks_for_equipment_and_chat_interviews_are_strong_signs(self):
+        task = self.reasons(from_address="jo@talent-x.com", subject="Remote job opportunity",
+                            body="Complete simple tasks rating apps and earn $300 per day, paid in USDT.")
+        self.assertTrue(any("task scam" in r for r in task))
+        check = self.reasons(from_address="jo@talent-x.com", subject="Job offer",
+                             body="We will send you a check to purchase your home office equipment.")
+        self.assertTrue(any("send you a check" in r or "equipment" in r for r in check))
+        chat = self.reasons(from_address="jo@talent-x.com", subject="Interview invitation",
+                            body="The interview will be on Microsoft Teams chat at 10am.")
+        self.assertTrue(any("Wants to talk over" in r for r in chat))
+        # The same words from the company's own domain are only weak, and one weak sign isn't a warning.
+        self.assertEqual(self.reasons(subject="Contoso interview", body="We'll ship you a laptop and other equipment."), [])
+
     def test_job_boards_and_tracking_systems_never_look_like_lookalikes(self):
         self.assertEqual(self.reasons(from_address="jobs-noreply@linkedin.com", subject="Contoso is hiring"), [])
         self.assertEqual(self.reasons(from_address="contoso@myworkday.com", subject="Thanks for applying to Contoso"), [])

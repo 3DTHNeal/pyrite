@@ -32,7 +32,7 @@ Look at `hours_since_sweep` and `failing_sources`, and note any failures for the
 
 ## 2. Triage
 
-Read `profile/facts.md` first. `to_triage` lists the newest listings that haven't been reposted first. `ghost_risk` and `ghost_reason` mean a listing has been up a long time or keeps coming back. That's a reason for doubt, not a reason to skip on its own: say so in your verdict when it applies, and in the briefing if a ghost risk is the strongest match. For each job in `to_triage`, read it with `.venv/Scripts/python.exe tools/pyrite.py job <id>`, then record a verdict:
+Read `profile/facts.md` first. `to_triage` lists the newest listings that haven't been reposted first. `ghost_risk` and `ghost_reason` mean a listing has been up a long time, keeps coming back, or says it stays up for ongoing hiring. That's a reason for doubt, not a reason to skip on its own: say so in your verdict when it applies, and in the briefing if a ghost risk is the strongest match. `unconfirmed` means the latest pan didn't see the listing, so it may be down: say so too. `scam_signs` lists a posting's scam tells, such as asking for a fee or a chat app: give it skip and say why. For each job in `to_triage`, read it with `.venv/Scripts/python.exe tools/pyrite.py job <id>`, then record a verdict:
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py triage <id> --fit strong --reason "One plain sentence for the candidate on why."

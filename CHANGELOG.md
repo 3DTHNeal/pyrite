@@ -14,8 +14,18 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - `pyrite help`, and `pyrite help <command>` for one command. `pyrite` on its own prints the help instead of an error.
 - A mistyped command suggests the one meant, such as `pyrite doctor` for `dcotor`, and a value with a space left out of quotes, such as `--name Alex Rivera`, says to quote it.
 - `pip install -r requirements.txt` works from the top of the repository.
+- A pan drops postings that aren't openings: a "General Application", "Expression of Interest" or "Talent Community", or one that says it has no open position right now. It also drops postings with a scam's tells: a fee to pay, an interview over WhatsApp or Telegram, or a check sent to you. `rescore` drops ones already listed that you haven't acted on.
+- **Possible scam** on a posting with those tells, such as one you added yourself, and a to-do item for it.
+- **Not rechecked** on a listing the latest full pan didn't see, because its board failed, left the watch list or didn't answer. It may be down.
+- **Possible ghost** also covers a posting that calls itself an evergreen or pipeline role, and a listing with no date that a pan first found 90 days ago or more.
+- Mail scam warnings catch task scams (paid "jobs" rating apps or products), a check sent to buy equipment, and interviews over a chat.
 
 ### Changed
+
+- **New** needs the latest pan to have seen the listing and nothing marking it as a possible ghost.
+- A listing is never younger than the day a pan first found it, so a date a board moved forward without a pan seeing it can't make it look new.
+- Two Workday postings under the same requisition id with mostly the same title are one job, so a rewritten repost is counted as one, and titles are compared with short forms such as "Sr." and "Engr" spelled out.
+- Prospects' **Hide possible ghosts** is now **Only listings that look real**, and hides scams and listings not rechecked too.
 
 - `pyrite folder` starts `resume.md` and `cover-letter.md` from your masters. It never replaces a draft already there, and the daily run's folders are made as before.
 - `pyrite doctor` wraps its lines to the terminal and, run outside a venv, says to make one rather than install into that Python. The README's setup starts with the venv.
@@ -44,6 +54,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - Notes and a next step typed in the job panel but not saved are no longer thrown away when another button redraws the panel, when you step to the next job or when you close it. They show "Not saved yet" until saved, and leaving the page asks first.
 - A double click or a held key can no longer send the same action twice: the job panel's buttons, the Prospects row's Tailor and Pass, and Add a posting wait for the first one to finish.
 - Escape in the Add a posting form no longer closes the job panel behind it as well.
+- A listing whose board gave no date at first, and one later, now gets that date and an age, instead of staying undated.
 
 ## [0.1.0] - 2026-11-09
 
