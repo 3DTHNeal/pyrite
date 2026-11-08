@@ -91,8 +91,11 @@ SETTLE_MS = 1500
 # How long a search picker gets to show its results, and a saved page to turn into the next one.
 RESULTS_MS = 8000
 PAGE_TURN_MS = 12000
-# How long a search's list is given to change before an unchanged one is taken as the answer.
+# How long a search's list is given to change before an exact match in an unchanged one is taken.
 GRACE_MS = 1500
+# How long before an unchanged list with no match counts as a search's answer. Some tenants leave the last search's
+# list on show under a spinner while the next one loads, and taking it for the answer leaves that answer still to come.
+STALE_MS = 4000
 
 
 def ask(prompt: str) -> str:
@@ -313,7 +316,11 @@ def _type(box, value: str) -> bool:
         box.fill(value)
         if _holds(box, value):
             return True
-    box.click()
+    try:
+        box.click(timeout=TICK_MS)
+    except Exception:
+        # Something drawn over the box takes the click, such as a list another field left open. Focus needs no pointer.
+        box.focus()
     box.press("ControlOrMeta+a")
     box.press("Backspace")
     box.press_sequentially(value, delay=20 if len(value) < 100 else 0)
@@ -330,6 +337,14 @@ def _put(box, value: str, report: Report, what: str) -> bool:
         shown = "?"
     report.skipped.append(f"{what}: typed {value[:60]!r}, but the box shows {shown[:60]!r}, so check it")
     return False
+
+
+def _why(err: Exception) -> str:
+    """An error's first line, and what covered the element when a click timed out, which Playwright says further down:
+    "Timeout 8000ms exceeded" alone doesn't say which list or banner was in the way."""
+    lines = str(err).splitlines() or [repr(err)]
+    cover = next((line.strip(" -") for line in lines if "intercepts pointer events" in line), "")
+    return lines[0][:160] + (f" ({cover[:160]})" if cover else "")
 
 
 def _ticked(box) -> bool:
@@ -405,8 +420,10 @@ def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS
     an exact match for one of `names`, or neither once the list has settled.
 
     `before` is what was on show before the search, so a list left over from the last picker isn't taken for this one's.
-    Two searches can answer with the same entries, though ("Linux", then "Linux Server"), so a list that hasn't changed
-    by the end of the grace period counts as this search's answer.
+    Two searches can answer with the same entries, though ("Linux", then "Linux Server"), so an exact match in a list
+    that hasn't changed by the end of the grace period is taken. An unchanged list with no match takes longer to count
+    as the answer, since a tenant can keep the old list on show while a slow search loads, and closing the list then
+    lets the late answer open it again over the fields below.
 
     `loading` are lists the picker showed the moment the search was sent. An answer takes a round trip, so those are the
     picker's own unfiltered list, which some tenants show while a slow search loads, and never settle as its answer.
@@ -417,7 +434,7 @@ def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS
     chosen = page.get_by_role("option", name=re.compile(rf"^(?:{picked}), press delete", re.I))
     exact = page.get_by_role("option", name=re.compile(rf"^(?:{pattern})( not checked| checked)?$", re.I))
     now = time.monotonic()
-    deadline, grace = now + timeout_ms / 1000, now + GRACE_MS / 1000
+    deadline, grace, stale = now + timeout_ms / 1000, now + GRACE_MS / 1000, now + min(timeout_ms, STALE_MS) / 1000
     last: set[str] | None = None
     while True:
         if chosen.count():
@@ -426,9 +443,10 @@ def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS
         fresh = shown != before or time.monotonic() > grace
         if fresh and exact.count():
             return None, exact
-        # Settled means a fresh, non-empty list that stopped changing, or Workday saying there's nothing. An empty list
+        # Settled means a new, non-empty list that stopped changing, or Workday saying there's nothing. An empty list
         # is only the old one cleared while the new one loads.
-        if (fresh and shown and shown == last and shown not in loading) or _says_none(page) or time.monotonic() > deadline:
+        answered = shown != before or time.monotonic() > stale
+        if (answered and shown and shown == last and shown not in loading) or _says_none(page) or time.monotonic() > deadline:
             return None, None
         last = shown
         page.wait_for_timeout(400)
@@ -567,12 +585,39 @@ def _closest_first(names: list[str], wanted: list[str]) -> list[str]:
 
 def _close_list(page, box) -> None:
     """Close a search's list and make sure it stays closed. A slow answer can arrive after Escape and open it again,
-    and a list left open covers the fields under it and is read as the next picker's answer."""
-    for _ in range(5):
-        box.press("Escape")
+    and a list left open covers the fields under it and is read as the next picker's answer.
+
+    A list still loading shows no entries, so one that looks closed is watched until it has stayed closed for the
+    settle time. One that Escape won't shut is closed as a click elsewhere on the page would close it.
+    """
+    box.press("Escape")
+    deadline = time.monotonic() + RESULTS_MS / 1000
+    closed_since: float | None = None
+    tries = 1
+    while time.monotonic() < deadline:
         page.wait_for_timeout(300)
-        if not _options(page).count():
+        if _options(page).count():
+            closed_since = None
+            if tries < 2:
+                box.press("Escape")
+            else:
+                _click_away(page, box)
+            tries += 1
+        elif closed_since is None:
+            closed_since = time.monotonic()
+        elif time.monotonic() - closed_since >= SETTLE_MS / 1000:
             return
+
+
+def _click_away(page, box) -> None:
+    """Shut a list the way a click elsewhere does: the box loses focus, and the page hears a press outside the list.
+    The press goes to the page's body, which no link or button is, so it can't do anything else."""
+    try:
+        box.evaluate("e => e.blur()")
+        page.evaluate("""() => { for (const type of ["mousedown", "mouseup", "click"])
+            document.body.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true})); }""")
+    except Exception:
+        pass
 
 
 def _same(text: str) -> str:
@@ -723,7 +768,7 @@ def fill_roles(page, roles: list[dict], report: Report) -> None:
         try:
             _fill_role(page, titles.nth(i).get_attribute("id").rsplit("--", 1)[0], role, report, what)
         except Exception as err:
-            report.skipped.append(f"{what}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
+            report.skipped.append(f"{what}: stopped on an error, so finish it by hand: {_why(err)}")
             page.keyboard.press("Escape")
 
 
@@ -858,7 +903,7 @@ def fill_education(page, education: list[dict], report: Report) -> None:
         try:
             _education_details(page, block, entry, report, what)
         except Exception as err:
-            report.skipped.append(f"{what}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
+            report.skipped.append(f"{what}: stopped on an error, so finish it by hand: {_why(err)}")
             page.keyboard.press("Escape")
 
 
@@ -1003,7 +1048,7 @@ def fill_experience(page, data: dict, report: Report, overrides: dict[str, str] 
         try:
             fill_section()
         except Exception as err:
-            report.skipped.append(f"{name}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
+            report.skipped.append(f"{name}: stopped on an error, so finish it by hand: {_why(err)}")
             page.keyboard.press("Escape")
 
 
@@ -1575,7 +1620,7 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
                 elif step == "Application Questions":
                     fill_questions(page, data.get("questions", {}), report)
             except Exception as err:
-                report.skipped.append(f"{step}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
+                report.skipped.append(f"{step}: stopped on an error, so finish it by hand: {_why(err)}")
             if pause and step != "Autofill with Resume":
                 answer = ask(f"{step} is filled. Look it over in the browser, then press Enter here to save and continue, or type q to stop: ")
                 if answer.strip().lower().startswith("q"):

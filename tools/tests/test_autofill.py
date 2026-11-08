@@ -650,6 +650,65 @@ class Autofill(ClaudeRun):
                       "Workday offers: 'Coastal and Ocean Engineering Technology'", report.skipped)
         self.assertEqual(still_open, 0, "a late answer opened the list again")
 
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_a_list_kept_on_show_while_a_slow_search_loads_is_not_its_answer(self):
+        # As on Medtronic's tenant: the next search keeps the last one's results on show under a spinner, and its answer
+        # opens the list again seconds later. Taking the old results for the answer and closing the list left it open over
+        # the year boxes, whose clicks then timed out, and its entries were read as every later skill search's answer.
+        report = workday.Report()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            workday.SETTLE_MS = 100
+            page.evaluate("window.keepListWhileLoading = true")
+            workday.fill_education(page, [{"school": "Western Prairie University", "degree": "Bachelor of Science",
+                                           "field": "Coastal Welding Technology", "gpa": "", "from": "2004", "to": "2008"}], report)
+            page.wait_for_timeout(4000)
+            still_open = workday._options(page).count()
+            years = page.evaluate("[...document.querySelectorAll('[id*=\"YearAttended-\"]')].map(e => e.value)")
+            browser.close()
+        self.assertEqual(still_open, 0, "a late answer opened the list again")
+        self.assertEqual(years, ["2004", "2008"])
+        self.assertFalse(any("stopped on an error" in s for s in report.skipped), report.skipped)
+
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_a_closed_list_is_watched_until_it_stays_closed(self):
+        page_html = """<input id="box"><ul id="list" role="listbox"><li role="option">Electronics Technician</li></ul>
+            <script>
+            const list = document.getElementById("list");
+            let reopen = window.reopenOnce;
+            document.getElementById("box").addEventListener("keydown", (ev) => {
+              if (ev.key !== "Escape" || window.ignoreEscape) return;
+              list.hidden = true;
+              // A slow answer arriving after Escape opens the list again, once.
+              if (reopen) { reopen = false; setTimeout(() => { list.hidden = false; }, 800); }
+            });
+            // A press anywhere outside the list shuts it, as on Workday.
+            document.addEventListener("mousedown", (ev) => { if (!list.contains(ev.target)) list.hidden = true; });
+            </script>"""
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            saved, workday.SETTLE_MS = workday.SETTLE_MS, 1500
+            try:
+                for setup in ("window.reopenOnce = true", "window.ignoreEscape = true"):
+                    # A page each, since new content keeps the window and its scripts' names.
+                    page = browser.new_page()
+                    page.set_content(f"<script>{setup}</script>{page_html}")
+                    workday._close_list(page, page.locator("#box"))
+                    page.wait_for_timeout(1000)
+                    self.assertEqual(workday._options(page).count(), 0, setup)
+            finally:
+                workday.SETTLE_MS = saved
+                browser.close()
+
+    def test_a_click_that_timed_out_says_what_was_in_the_way(self):
+        err = Exception("Locator.click: Timeout 8000ms exceeded.\nCall log:\n  - waiting for locator\n"
+                        '  - <div data-automation-id="activeListContainer">…</div> intercepts pointer events\n  - retrying')
+        self.assertEqual(workday._why(err), 'Locator.click: Timeout 8000ms exceeded. '
+                                            '(<div data-automation-id="activeListContainer">…</div> intercepts pointer events)')
+        self.assertEqual(workday._why(Exception("Target closed")), "Target closed")
+
     def test_the_one_entry_that_starts_with_or_contains_a_name_is_found(self):
         def found(names, wanted):
             return workday._containing(names, wanted)
