@@ -1,0 +1,4 @@
+# Lint, type check and coverage, as CI runs them. Pinned so a new release can't turn CI red by itself.
+ruff==0.17.4
+mypy==2.4.1
+coverage==7.17.2

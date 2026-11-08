@@ -29,3 +29,11 @@ search.previous.toml
 # The fact bank and approved terms from before the last save on the dashboard's Facts tab
 facts.previous.md
 approved-terms.previous.txt
+
+# Tool caches and build output
+.coverage
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/

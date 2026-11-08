@@ -1,5 +1,9 @@
 # Pyrite
 
+[![CI](https://github.com/3DTHNeal/pyrite/actions/workflows/ci.yml/badge.svg)](https://github.com/3DTHNeal/pyrite/actions/workflows/ci.yml)
+![Python 3.11 to 3.14](https://img.shields.io/badge/python-3.11%20%E2%80%93%203.14-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **A job-search system where AI does the reading and drafting, and plain code decides whether a draft is allowed to exist.**
 
 I built this for my own job search. Every morning it reads company job boards, ranks what it finds, tailors a resume and cover letter for the best matches, and has them waiting on a local dashboard. It never applies to anything: I read each draft and send it myself.
@@ -44,6 +48,8 @@ Resume has numbers not in the fact bank: 2015, 26262, 40
 Resume names terms not in your approved sources: Kubernetes, VP, ISO, X. Remove them, or add them to profile/approved-terms.txt if they're true.
 Employer, title or dates differ from your record: '#### VP of Engineering | Madison, WI | Jan 2015 – Oct 2026'
 ```
+
+It also refuses the disguises that would slip a word past a pattern: invisible characters, a letter borrowed from another alphabet, and a word split in two by formatting. A negative only counts as a denial when it sits right next to the claim it denies, so "With no added headcount, cut defects by 83%" is still a claim of 83%.
 
 No model is involved in any of those verdicts, so there's nothing to persuade. The rule for the AI is the same as for a person: if the check fails, fix the draft, never the check.
 
@@ -112,7 +118,7 @@ This project runs on my real job search, and it has to be public without showing
 python -W ignore::ResourceWarning -m unittest discover -s tools/tests
 ```
 
-Tests that need an optional package skip without it and say which. Building the `.docx`, `.pdf` and paste-ready `.txt` files needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. The experimental Workday autofill also needs `tools/requirements-autofill.txt`. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
+Tests that need an optional package skip without it and say which. CI runs them on Linux, Windows and macOS with Python 3.11 and 3.14, and fails if coverage of the code drops below 80% (84% at this release). It also lints with ruff, type-checks with mypy, and runs the demo with nothing installed (`pip install -r tools/requirements-dev.txt` for the same tools). `pip install -e .` gives you a `pyrite` command in place of `python tools/pyrite.py`. Building the `.docx`, `.pdf` and paste-ready `.txt` files needs `pip install -r tools/requirements.txt`, plus LibreOffice or Word. The experimental Workday autofill also needs `tools/requirements-autofill.txt`. [docs/resume-playbook.md](docs/resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
 
 ## Limits
 

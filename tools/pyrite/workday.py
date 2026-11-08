@@ -143,7 +143,8 @@ def degree_candidates(degree: str) -> list[str]:
 # authorization to work", which also reads as the authorization question.
 INTENTS = (
     # "Require relocation assistance to work there" is a different question, and is left to the word match.
-    (re.compile(r"sponsor|\bvisa\b|immigration|^(?!.*relocat).*(?:require|need)\w*\b.{0,60}\b(?:support|assistance|help)\b.{0,60}\b(?:authori[sz]|work|employment|status)", re.I | re.S),
+    (re.compile(r"sponsor|\bvisa\b|immigration"
+                r"|^(?!.*relocat).*(?:require|need)\w*\b.{0,60}\b(?:support|assistance|help)\b.{0,60}\b(?:authori[sz]|work|employment|status)", re.I | re.S),
      re.compile(r"sponsor", re.I)),
     (re.compile(r"(?:authori[sz]ed|eligible|permitted|entitled|legally able)\b.{0,20}\bto work|right to work|work authori[sz]ation", re.I),
      re.compile(r"authori[sz]ed to work|eligible to work|right to work", re.I)),
@@ -154,8 +155,8 @@ INTENTS = (
 
 def match_question(label: str, questions: dict[str, str]) -> tuple[str, str] | None:
     """The sheet row for a question on the page: a standard question by what it asks, else by the words they share."""
-    for asked, row in INTENTS:
-        if asked.search(label):
+    for intent, row in INTENTS:
+        if intent.search(label):
             found = next(((q, a) for q, a in questions.items() if row.search(q)), None)
             if found:
                 return found
@@ -342,7 +343,7 @@ def _picked_name(option, wanted: list[str]) -> str:
     """Which of the wanted names an option is, by its text; the first wanted name when the text says nothing."""
     try:
         text = option.first.inner_text().strip().lower()
-    except Exception:  # noqa: BLE001  The option went away as it was taken.
+    except Exception:
         text = ""
     return next((w for w in sorted(wanted, key=len, reverse=True) if text.startswith(w.lower())), wanted[0])
 
@@ -669,7 +670,7 @@ def fill_education(page, education: list[dict], report: Report) -> None:
         # The rest of the entry on its own, so one odd field can't stop the next school from going in.
         try:
             _education_details(page, block, entry, report, what)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             report.skipped.append(f"{what}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
             page.keyboard.press("Escape")
 
@@ -803,7 +804,7 @@ def fill_experience(page, data: dict, report: Report, overrides: dict[str, str] 
     for name, fill_section in sections:
         try:
             fill_section()
-        except Exception as err:  # noqa: BLE001  One section's trouble is reported, and the next section still gets filled.
+        except Exception as err:
             report.skipped.append(f"{name}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
             page.keyboard.press("Escape")
 
@@ -813,8 +814,8 @@ def settle(page) -> None:
     try:
         page.locator(NEXT_BUTTON).first.wait_for(state="visible", timeout=PAGE_TURN_MS)
         page.wait_for_load_state("networkidle", timeout=PAGE_TURN_MS)
-    except Exception:  # noqa: BLE001  A page with no footer button, or one still streaming: fill what's there.
-        pass
+    except Exception:
+        pass  # A page that never goes quiet is still filled; the pause below gives it a moment either way.
     page.wait_for_timeout(SETTLE_MS)
 
 
@@ -845,7 +846,8 @@ def answer_radio(page, question_pattern: str, value: str, report: Report, what: 
 SOURCE_TERMS = {
     "company site": (["Company Website", "Company Careers Site", "Careers Site", "Career Site", "Careers Page", "Corporate Website",
                       "Employer Website", "Website", "Careers"],
-                     re.compile(r"(?:company|corporate|employer|careers?)(?:'s)?\s*(?:web\s*site|site|page|portal)|^\s*(?:company\s+)?web\s*site\s*$|^\s*careers?\s*$", re.I),
+                     re.compile(r"(?:company|corporate|employer|careers?)(?:'s)?\s*(?:web\s*site|site|page|portal)"
+                                r"|^\s*(?:company\s+)?web\s*site\s*$|^\s*careers?\s*$", re.I),
                      re.compile(r"company|career|website|online|internet", re.I)),
     "linkedin": (["LinkedIn"], re.compile(r"linked\s*in", re.I), re.compile(r"social|job board|online|internet|website|media", re.I)),
     "indeed": (["Indeed"], re.compile(r"indeed", re.I), re.compile(r"job board|online|internet|website", re.I)),
@@ -887,7 +889,7 @@ def pick_source(page, field, box, source: str, report: Report, company: str = ""
     """
     what = "How did you hear about us"
     terms, accept, categories = SOURCE_TERMS.get(source, ([], None, None))
-    if not terms:
+    if not terms or accept is None or categories is None:
         return False
     if source == "company site" and company:
         first = _literal(company.split()[0])
@@ -973,10 +975,8 @@ def answer_source(page, field, box, sources: list[str], report: Report, company:
             return True
         report.decisions.append(f"{what}: it held {have[0]!r} from before, which isn't what the sheet says, so it was replaced")
         _clear_picked(page, holder)
-    for i, source in enumerate(sources):
-        if pick_source(page, field, box, source, report, company, quiet=i < len(sources) - 1):
-            return True
-    return False
+    # Stops at the first source the form accepts. Every earlier try is quiet, so only the last failure is reported.
+    return any(pick_source(page, field, box, source, report, company, quiet=i < len(sources) - 1) for i, source in enumerate(sources))
 
 
 def _fill_blank(page, selector: str, value: str, report: Report, what: str) -> None:
@@ -1112,7 +1112,7 @@ def _texts(locator) -> list[str]:
     """A locator's texts, or nothing while the page is between navigations, as it is during a sign-in."""
     try:
         return locator.all_inner_texts()
-    except Exception:  # noqa: BLE001  Playwright's "execution context was destroyed" and kin: the page is on its way elsewhere.
+    except Exception:
         return []
 
 
@@ -1141,7 +1141,7 @@ def press_next(page, report: Report, step: str = "") -> bool:
     button = page.locator(NEXT_BUTTON)
     try:
         present = button.count()
-    except Exception:  # noqa: BLE001  The browser was closed under us.
+    except Exception:
         report.stopped_at = "the browser, which was closed"
         return False
     if not present:
@@ -1179,8 +1179,8 @@ def save_cookies(context, profile: Path) -> None:
     try:
         kept = [c for c in context.cookies() if is_workday("https://" + str(c.get("domain", "")).lstrip("."))]
         (profile / COOKIES).write_text(json.dumps(kept), encoding="utf-8")
-    except Exception:  # noqa: BLE001  The browser is already gone; nothing to keep.
-        pass
+    except Exception:
+        pass  # Losing the kept sign-ins only means signing in again next time.
 
 
 def restore_cookies(context, profile: Path, report: Report) -> bool:
@@ -1192,7 +1192,7 @@ def restore_cookies(context, profile: Path, report: Report) -> bool:
         cookies = json.loads(path.read_text(encoding="utf-8"))
         context.add_cookies(cookies)
         return bool(cookies)
-    except Exception as err:  # noqa: BLE001  A stale or odd cookie file only costs a sign-in.
+    except Exception as err:
         report.say(f"Couldn't restore the last sign-ins: {err}")
         return False
 
@@ -1201,11 +1201,11 @@ def asks_to_sign_in(page) -> bool:
     """Whether the page that came up is a sign-in form rather than the application."""
     try:
         page.wait_for_load_state("networkidle", timeout=PAGE_TURN_MS)
-    except Exception:  # noqa: BLE001  Still loading; what's there now will do.
-        pass
+    except Exception:
+        pass  # The check below reads whatever has loaded.
     try:
         return not current_step(page) and page.locator('input[type="password"]:visible').count() > 0
-    except Exception:  # noqa: BLE001  Mid-navigation.
+    except Exception:
         return False
 
 
@@ -1221,7 +1221,7 @@ def hold_open(context, report: Report, wait_ms: int = 2000) -> None:
                 return
             pages[-1].wait_for_timeout(wait_ms)
             strikes = 0
-        except Exception:  # noqa: BLE001  The page or the browser went away mid-wait: look again, and give up if it keeps failing.
+        except Exception:
             strikes += 1
             time.sleep(wait_ms / 2000)
 
@@ -1236,7 +1236,7 @@ def wait_for_turn(page, step: str, context) -> bool:
             return True
         try:
             page.wait_for_timeout(2000)
-        except Exception:  # noqa: BLE001  Mid-navigation; look again.
+        except Exception:
             time.sleep(2)
     return False
 
@@ -1283,7 +1283,7 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
                 break
             try:
                 page.wait_for_timeout(2000)
-            except Exception:  # noqa: BLE001  The tab went away mid-wait; the next pass looks at the newest one.
+            except Exception:
                 time.sleep(2)
         else:
             report.stopped_at = "the sign-in: the form never appeared"
@@ -1317,7 +1317,7 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
                     fill_experience(page, data, report, overrides)
                 elif step == "Application Questions":
                     fill_questions(page, data.get("questions", {}), report)
-            except Exception as err:  # noqa: BLE001  The page stays open for the candidate; the run says what it couldn't do.
+            except Exception as err:
                 report.skipped.append(f"{step}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
             if pause and step != "Autofill with Resume":
                 answer = ask(f"{step} is filled. Look it over in the browser, then press Enter here to save and continue, or type q to stop: ")
@@ -1357,8 +1357,8 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
             hold_open(context, report)
         try:
             context.close()
-        except Exception:  # noqa: BLE001  Already closed by hand.
-            pass
+        except Exception:
+            pass  # The browser may already be gone, closed by you.
     return report
 
 

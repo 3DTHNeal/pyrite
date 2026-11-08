@@ -8,10 +8,7 @@ from datetime import date
 
 from . import score as scoring
 from . import sources
-from .store import (
-    ACTIVE, STATUSES, connect, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing,
-    set_status,
-)
+from .store import ACTIVE, STATUSES, connect, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing, set_status
 
 # How much of a posting's vocabulary must match for an edited repost to count as the same job.
 NEAR_TWIN_OVERLAP = 0.85
@@ -24,7 +21,7 @@ AUTO_GHOSTED = "The posting came down"
 def dedupe_key(company: str, title: str, description: str) -> str:
     """The same posting often appears once per city, with identical text."""
     norm = re.sub(r"\W+", " ", f"{company}|{title}|{description[:600]}").lower()
-    return hashlib.sha1(norm.encode()).hexdigest()
+    return hashlib.sha1(norm.encode(), usedforsecurity=False).hexdigest()
 
 
 def _watchlist(cfg: dict) -> list[tuple]:
@@ -51,13 +48,14 @@ def _probe_workday(spec: dict, open_ids: list, hits: dict, deadline: float) -> t
     This runs with the other network calls, before anything is saved, so a slow board never
     holds the database. A posting it couldn't ask about is in neither list and stays as it was.
     """
-    closed, live = [], []
+    closed: list[str] = []
+    live: list[str] = []
     for path in open_ids:
         if path in hits or time.monotonic() > deadline:
             continue
         try:
             gone = sources.is_workday_closed(spec, path)
-        except Exception:
+        except Exception:  # A probe that fails leaves the job as it was.
             continue
         if gone is not None:
             (closed if gone else live).append(path)
@@ -204,7 +202,7 @@ def settle_gone(conn, cfg: dict) -> list[int]:
     flagged = possible_replies(conn)
     settled = []
     for job in conn.execute("SELECT * FROM jobs WHERE status = 'applied' AND posting_closed_at IS NOT NULL").fetchall():
-        if not waiting_on_gone(job) or job["id"] in flagged or quiet_days_since(job["posting_closed_at"]) < days:
+        if not waiting_on_gone(job) or job["id"] in flagged or (quiet_days_since(job["posting_closed_at"]) or 0) < days:
             continue
         down = date.fromisoformat(job["posting_closed_at"][:10])
         set_status(conn, job["id"], "ghosted",

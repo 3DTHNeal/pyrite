@@ -4,7 +4,7 @@ Everything here is invented so the dashboard can be shown without showing anyone
 search. The fact checker's verdict on the blocked draft is real: it runs on that draft.
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from . import checks
 from .store import REPLY_DETECTED, ROOT, log_event, set_status
@@ -71,7 +71,7 @@ BRIEFING = (
 
 
 def _stamp(days_ago: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat(timespec="seconds")
+    return (datetime.now(UTC) - timedelta(days=days_ago)).isoformat(timespec="seconds")
 
 
 def _clear(conn) -> None:

@@ -5,10 +5,10 @@ import re
 import subprocess
 import sys
 import tomllib
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from . import checks, claude_code, demo, discover, fill, inbox, score, store
+from . import __version__, checks, claude_code, demo, discover, fill, score, store
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
 
 BUILD = CODE_ROOT / "tools" / "build_resume.py"
@@ -19,7 +19,7 @@ NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish",
 
 
 def quiet_hours(iso: str) -> float:
-    return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds() / 3600
+    return (datetime.now(UTC) - datetime.fromisoformat(iso)).total_seconds() / 3600
 
 
 def _slug(text: str, words: int = 6) -> str:
@@ -413,7 +413,7 @@ def cmd_autofill(args):
 
     try:
         report = workday.run(workday.load_sheet(folder / fill.SHEET_JSON), url, ROOT, pause=not args.no_pause, on_filled=filled)
-    except Exception as err:  # noqa: BLE001  Whatever went wrong, the dashboard must stop saying it's running.
+    except Exception as err:
         log_event(conn, args.id, workday.FAILED, str(err)[:500])
         conn.commit()
         raise
@@ -568,6 +568,7 @@ def _saved_posting(folder: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pyrite", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     # A metavar of its own, or the list of choices in the usage line would show the hidden `task` worker too.
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
 
@@ -635,7 +636,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("job", help="a job id, or the path of an application folder")
     p.set_defaults(func=cmd_fill)
 
-    p = sub.add_parser("autofill", help="experimental, off unless [workday] autofill = true: type a job's fill sheet into its Workday form in a browser you sign in to; stops before Submit")
+    p = sub.add_parser("autofill", help="experimental, off unless [workday] autofill = true: type a job's fill sheet into its "
+                                        "Workday form in a browser you sign in to; stops before Submit")
     p.add_argument("id", type=int)
     p.add_argument("--url", default="", help="the apply page, when the job's link isn't it")
     p.add_argument("--no-pause", action="store_true", help="don't wait for a look at each page before it's saved")

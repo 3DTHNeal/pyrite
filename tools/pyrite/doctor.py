@@ -55,7 +55,8 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         todos.append({"what": f"{rel} is still the fictional example's.",
                       "fix": "Replace it with your own. Claude writes from these files, and the assay checks against them."})
     if not (root / "profile" / "facts.md").exists():
-        todos.append({"what": "profile/facts.md is missing.", "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
+        todos.append({"what": "profile/facts.md is missing.",
+                      "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours."})
     example = _example_config()
     if cfg.get("candidate", {}).get("name") == example["candidate"]["name"]:
         todos.append({"what": "[candidate] name in profile/search.toml is still the example's.", "fix": "Set it to your name, as it goes on your documents."})

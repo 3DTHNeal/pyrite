@@ -1,0 +1,113 @@
+# Pyrite runs from a clone: `python tools/pyrite.py ...` needs nothing installed. `pip install -e .` adds a `pyrite`
+# command that runs the same code. It isn't published to PyPI, and the classifier below makes an upload fail.
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrite-jobs"
+# Kept equal to __version__ in tools/pyrite/__init__.py by a test. Not read from there: setuptools would find
+# tools/pyrite.py, the script, before the package beside it.
+version = "0.1.0"
+description = "A job-search system where AI does the reading and drafting, and a deterministic fact checker decides whether a draft is allowed to exist."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Travis Neal" }]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+# The core is the standard library only. These are the optional pieces, kept in step with tools/requirements*.txt.
+dependencies = []
+
+[project.optional-dependencies]
+documents = ["python-docx>=1.2,<2"]
+autofill = ["playwright>=1.64.1,<2"]
+
+[project.scripts]
+pyrite = "pyrite.__main__:run"
+
+[project.urls]
+Homepage = "https://github.com/3DTHNeal/pyrite"
+Issues = "https://github.com/3DTHNeal/pyrite/issues"
+Security = "https://github.com/3DTHNeal/pyrite/security/policy"
+
+[tool.setuptools]
+package-dir = { "" = "tools" }
+packages = ["pyrite"]
+
+[tool.setuptools.package-data]
+pyrite = ["*.md", "imap.env.example", "static/*", "systemd/*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 160
+src = ["tools", "tools/tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import order
+    "B",        # likely bugs
+    "UP",       # syntax the minimum Python allows
+    "SIM",      # simpler equivalents
+    "S",        # security
+    "RUF100",   # stale noqa comments
+]
+ignore = [
+    "E731",     # A named one-line lambda is used on purpose for small key functions.
+    "SIM105",   # try/except/pass reads plainer than contextlib.suppress in the few places it occurs.
+    "SIM108",   # A nested conditional expression is harder to read than the if/else it would replace.
+    "SIM117",   # Nested `with` blocks in tests keep each patch on its own line.
+    "S101",     # assert is fine in tests and type narrowing.
+    "S310",     # urllib opens only https feeds the user configured; sources.py checks the scheme.
+    "S603",     # subprocess calls pass argument lists, never a shell.
+    "S607",     # Partial paths for soffice, claude and pdftotext are found on PATH by design.
+    "S608",     # SQL strings are built from fixed column names; values always go through placeholders.
+    "S110",     # A bare `except: pass` is kept only for best-effort waits and cleanup in a browser that may be gone,
+    "S112",     # and for a board probe whose failure is retried on the next sweep. Each one says so beside it.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures quote whole postings, form labels and mail headers on one line, so they can be compared to what boards send.
+"tools/tests/**" = ["E501", "S105", "S106", "S108", "S311", "S324"]
+# The daily run's instructions are prose, one paragraph to a line, as Claude reads them.
+"tools/pyrite/daily.py" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pyrite", "check_public", "build_resume"]
+split-on-trailing-comma = false
+# The tests' support module points PYRITE_HOME at a throwaway workspace, so it has to load before anything from pyrite.
+section-order = ["future", "standard-library", "third-party", "test-support", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+test-support = ["support"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["tools/pyrite", "tools/check_public.py", "tools/build_resume.py"]
+mypy_path = "tools"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.coverage.run]
+source = ["tools"]
+omit = ["tools/tests/*"]
+
+[tool.coverage.report]
+# A floor with some room, not the figure: the code itself, tests excluded, was 84% covered at 0.1.0. Raise it as that rises.
+fail_under = 80
+skip_covered = true
+show_missing = true

@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import tomllib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 CODE_ROOT = Path(__file__).resolve().parents[2]
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS mail_alerts (
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def today_plus(days: int) -> str:
@@ -303,7 +303,7 @@ def changed_after_sending(job) -> list[str]:
     """Files in the folder that no longer match the sent copy. Empty when nothing was recorded."""
     import hashlib
 
-    recorded = json.loads(job["sent_files"] or "{}") if "sent_files" in job.keys() else {}
+    recorded = json.loads(job["sent_files"] or "{}") if "sent_files" in job.keys() else {}  # noqa: SIM118  sqlite3.Row has no __contains__ for names.
     if not recorded or not job["app_folder"]:
         return []
     folder = ROOT / job["app_folder"]
@@ -425,4 +425,4 @@ def quiet_days_since(iso: str | None) -> int | None:
     if not iso:
         return None
     then = datetime.fromisoformat(iso)
-    return (datetime.now(timezone.utc) - then).days
+    return (datetime.now(UTC) - then).days

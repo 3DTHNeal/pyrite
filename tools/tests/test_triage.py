@@ -1,9 +1,9 @@
 """Deadlines, what to settle before applying, and moving quickly through prospects without losing anything."""
 import json
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
-from test_pyrite import CFG, Base  # Also sets up the throwaway workspace every path points into.
+from support import CFG, Base  # Also sets up the throwaway workspace every path points into.
 
 from pyrite import deadline, discover, server, store
 
@@ -185,7 +185,7 @@ class ReplyNumbers(Base):
 
 
 def days_ago(days: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
 
 
 class PostingGone(Base):

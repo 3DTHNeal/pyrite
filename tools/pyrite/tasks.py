@@ -4,7 +4,7 @@ Each runs in its own process, one of each kind at a time, and reports its progre
 `tasks` table so the dashboard can show it. The Claude run and the tailoring batch both write
 drafts, so only one of those two goes at a time.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import claude_code, discover, doctor, mail
 from .claude_code import find_claude, sign_in_help
@@ -19,7 +19,7 @@ DIED = "The run stopped without finishing."
 
 
 def _minutes_since(iso: str) -> float:
-    return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds() / 60
+    return (datetime.now(UTC) - datetime.fromisoformat(iso)).total_seconds() / 60
 
 
 def latest(conn) -> dict[str, dict]:
