@@ -923,4 +923,15 @@ def main(argv=None):
             f"No workspace is set, so `pyrite {args.command}` would write into the fictional example inside this repository.\n"
             f"`{INIT_EXAMPLE}` makes your own workspace outside it and points Pyrite there. `pyrite demo` looks around without one."
         )
-    args.func(args)
+    try:
+        args.func(args)
+    except store.JobNotFound as err:
+        # Only a number the user typed gets the one-line answer. A JobNotFound from a command
+        # they gave no number to is a bug, and its traceback explains it.
+        typed = getattr(args, "id", None)
+        if typed is None:
+            job = getattr(args, "job", None)
+            typed = int(job) if isinstance(job, str) and job.isdigit() else job
+        if err.job_id != typed:
+            raise
+        sys.exit(f"{str(err).capitalize()}. The dashboard lists every job; `pyrite queue` shows the ones waiting on a run.")
