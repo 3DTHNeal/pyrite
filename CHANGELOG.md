@@ -36,6 +36,11 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - Help and the messages that point to `pyrite init` show a real folder, `../my-job-search`, instead of `<folder>`, which a shell reads as redirection when it's copied as it is. The help says to type `python tools/pyrite.py` until `pip install -e .` adds the `pyrite` command.
 - `pyrite init` refuses a placeholder name such as "Your Name" or a placeholder folder, and for a folder inside the repository, says how to put it beside it instead. `doctor` and Finish setup flag a placeholder name left in `search.toml`.
 - `pyrite doctor` lists the profile files still the example's as one finding instead of five, and ends with how many things are left.
+- A profile file edited only here and there still counts as the example's while it keeps three or more of the example's sentences. Before, removing the note at the top of `facts.md` that says it's fictional made `doctor` and Finish setup call it yours and let the Claude runs start, with every fictional employer and number still in it. `doctor` quotes one of the lines left.
+- `pyrite init` needs `--name`, and puts the name on the `# Name` lines of the master resume and letter as well as in `search.toml`. The top of the new `search.toml` no longer says it's the fictional candidate's.
+- Run Claude now and Tailor these now are disabled, with the reason as their tooltip, while `facts.md` is still the example's, rather than asking to use your Claude plan and then refusing. The Finish setup item for the fact bank opens the Facts tab.
+- The assay names an unfilled placeholder such as `[X]` once, not again as a term missing from your approved sources.
+- CONTRIBUTING's commands use the venv, and say how to turn on the pre-push privacy check.
 - The dashboard says to keep its window open and that Ctrl+C stops it, and Ctrl+C stops it without a traceback.
 
 - `pyrite seed` refuses a `seed.toml` that's still the example's. An application it imports with no `applied_on` goes under Being tailored, where `pyrite finish` checks it, instead of Ready to send, so ready still means the assay passed it.

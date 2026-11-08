@@ -11,6 +11,9 @@ CODE_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_ROOT = (CODE_ROOT / "example").resolve()
 # A one-line, git-ignored file holding the path to your private workspace.
 HOME_POINTER = CODE_ROOT / ".pyrite-home"
+# Set by the entry point for `init` and help, which a workspace that's named but not made yet mustn't stop: `init` is
+# how it gets made. They then see the example, and nothing else is allowed to.
+MAY_BE_MISSING = "PYRITE_WORKSPACE_MAY_BE_MISSING"
 
 
 def _read_pointer(path: Path) -> str:
@@ -37,7 +40,10 @@ def find_workspace() -> Path:
         return EXAMPLE_ROOT
     workspace = Path(_windows_path(chosen)).expanduser().resolve()
     if not workspace.is_dir():
-        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}\nThat path comes from {origin}. Make the folder, or fix the path.")
+        if os.environ.get(MAY_BE_MISSING):
+            return EXAMPLE_ROOT
+        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}\nThat path comes from {origin}. Fix the path, or make a "
+                         f"workspace there with `pyrite init {workspace} --name \"Your Name\"`, with your own name.")
     return workspace
 
 

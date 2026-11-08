@@ -332,7 +332,7 @@ def _setup_orders(cfg: dict) -> list[dict]:
     """What a new workspace still has to change, first on the to-do list. The demo is the example on purpose, so it has none."""
     if IS_EXAMPLE:
         return []
-    return [{"rank": 0, "kind": "Finish setup", "job_id": None, "text": todo["what"], "detail": todo["fix"]}
+    return [{"rank": 0, "kind": "Finish setup", "job_id": None, "text": todo["what"], "detail": todo["fix"], "tab": todo.get("tab")}
             for todo in doctor.workspace_todos(ROOT, cfg)]
 
 
@@ -419,6 +419,8 @@ def build_state(conn, cfg) -> dict:
         "before_send": cfg.get("dashboard", {}).get("before_send", []),
         "usage": claude_code.usage(conn),
         "tasks": tasks.latest(conn),
+        # Runs this workspace can't start at all yet, with why, so their buttons say so instead of being pressed.
+        "not_ready": {kind: why for kind in tasks.LABELS if (why := tasks.not_ready(kind))},
         "demo": IS_EXAMPLE,
     }
 

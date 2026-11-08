@@ -429,7 +429,9 @@ def check_text(
     # Specialist terms need a source. A resume can't name a skill you've never claimed, and a title
     # from a job board is no source: on a resume only the exact title was set aside above. A letter
     # names the role in its own words, and its terms only ever warn.
-    plain = "\n".join(_clean_markup(row.strip()) for row in body.splitlines())
+    # A placeholder is reported above, so "[X]" isn't named again as a term. One line at a time, as above, so a
+    # bracket left open on one line and closed on a later one can't hide the words between from this check.
+    plain = "\n".join(_clean_markup(PLACEHOLDER.sub(" ", row).strip()) for row in body.splitlines())
     allowed = _vocabulary(company if kind == "resume" else f"{company} {title}")
     allowed |= {w.lower() for w in guard.get("ordinary_words", [])}
     fix = ". Remove them, or add them to profile/approved-terms.txt if they're true."
