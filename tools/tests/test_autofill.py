@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import unittest
 import unittest.mock as mock
 from datetime import date
@@ -565,6 +566,82 @@ class Autofill(ClaudeRun):
         self.assertIn("education 1 field of study: no entry called 'Coastal Welding Technology'. "
                       "Workday offers: Coastal and Ocean Engineering Technology", report.skipped)
         self.assertEqual(still_open, 0, "a late answer opened the list again")
+
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_what_is_typed_or_ticked_is_checked_on_the_page(self):
+        # Boxes that take a value only from keys, as a masked box or a date part that is a spin button does; one that takes
+        # nothing at all; tick boxes hidden behind a label or not drawn at all; and a job block without a location field.
+        report = workday.Report()
+        with sync_playwright() as pw, mock.patch.object(workday, "TICK_MS", 300):
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            page.evaluate("""() => {
+                document.body.insertAdjacentHTML('beforeend', `
+                    <input id="masked" type="text"><input id="spin" role="spinbutton" type="text"><input id="stubborn" type="text">
+                    <label for="hidden">I currently work here</label><input id="hidden" type="checkbox" style="width:0;height:0;margin:0;border:0">
+                    <input id="undrawn" type="checkbox" style="display:none">`);
+                window.spinKeys = 0;
+                const masked = document.getElementById('masked');
+                let keyed = false;
+                masked.addEventListener('keydown', () => { keyed = true; });
+                masked.addEventListener('input', () => { if (!keyed) masked.value = ''; keyed = false; });
+                document.getElementById('spin').addEventListener('keydown', () => window.spinKeys++);
+                document.getElementById('stubborn').addEventListener('input', e => { e.target.value = ''; });
+                document.getElementById('workExperience-1--location').remove();
+            }""")
+            self.assertTrue(workday._put(page.locator("#masked"), "06", report, "masked"))
+            self.assertTrue(workday._put(page.locator("#spin"), "2017", report, "spin"))
+            self.assertFalse(workday._put(page.locator("#stubborn"), "Madison", report, "stubborn"))
+            self.assertTrue(workday._tick(page.locator("#hidden")))
+            self.assertTrue(workday._tick(page.locator("#undrawn")))
+            workday.fill_roles(page, [{"title": "Firmware Lead", "company": "Northbridge Robotics", "location": "Madison, WI",
+                                       "current": True, "from": "06/2017", "to": "", "description": "• Led it."}], report)
+            state = page.evaluate("""() => ({
+                masked: document.getElementById('masked').value, spin: document.getElementById('spin').value, spinKeys: window.spinKeys,
+                title: document.getElementById('workExperience-1--jobTitle').value,
+                current: document.getElementById('workExperience-1--currentlyWorkHere').checked,
+                description: document.getElementById('workExperience-1--roleDescription').value })""")
+            browser.close()
+        # The spin button got keys, never a value set from outside.
+        self.assertGreaterEqual(state.pop("spinKeys"), 4)
+        self.assertEqual(state, {"masked": "06", "spin": "2017", "title": "Firmware Lead", "current": True, "description": "• Led it."})
+        # The box that wouldn't take its value is reported with what it shows; a tenant that asks no location isn't.
+        self.assertIn("stubborn: typed 'Madison', but the box shows '', so check it", report.skipped)
+        self.assertEqual(len(report.skipped), 1, report.skipped)
+        self.assertIn("job 1 (Firmware Lead)", report.filled)
+
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_an_upload_counts_once_workday_shows_it_and_the_waits_watch_the_page(self):
+        resume = self.folder / "Alex_Rivera_Resume_Acme.docx"
+        resume.write_bytes(b"PK")
+        with sync_playwright() as pw, mock.patch.object(workday, "UPLOAD_MS", 1500), mock.patch.object(workday, "PAGE_TURN_MS", 3000):
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FIXTURE)
+            # An upload that Workday never confirms is reported, not counted.
+            page.evaluate("window.uploadFails = true")
+            stalled = workday.Report()
+            workday.upload_resume(page, {"resume": str(resume)}, stalled)
+            self.assertEqual(stalled.filled, [])
+            self.assertIn("never showed it as uploaded", stalled.skipped[0])
+            page.goto(FIXTURE)
+            done = workday.Report()
+            workday.upload_resume(page, {"resume": str(resume)}, done)
+            self.assertEqual(done.filled, ["resume: Alex_Rivera_Resume_Acme.docx"])
+            # A page still drawing its fields is waited for until it stops, not for a set time or for the network.
+            page.evaluate("""() => { let n = 0; const t = setInterval(() => {
+                document.body.append(Object.assign(document.createElement('p'), {className: 'late'})); if (++n === 6) clearInterval(t); }, 150); }""")
+            with mock.patch.object(workday, "SETTLE_MS", 500):
+                workday.settle(page)
+            self.assertEqual(page.locator("p.late").count(), 6)
+            # The form is the form, and a page asking for a password is a sign-in, each known as soon as it shows.
+            started = time.monotonic()
+            self.assertFalse(workday.asks_to_sign_in(page))
+            page.set_content("<h2>Sign In</h2><label>Password <input type='password'></label>")
+            self.assertTrue(workday.asks_to_sign_in(page))
+            self.assertLess(time.monotonic() - started, 2.5)
+            browser.close()
 
     def test_a_miss_names_the_closest_entries_first(self):
         listed = ["Accounting or Taxation", "Acoustics", "Business Administration, Management", "Electrical Engineering"]

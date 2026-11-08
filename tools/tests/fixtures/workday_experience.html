@@ -212,6 +212,12 @@ searchPicker(document.getElementById("skills--skills"), CATALOG.skills, false);
 searchPicker(document.getElementById("source--source"), ["Career Fair", "Company Event", "Company Careers Site", "Social Media - LinkedIn", "Employee Referral"], true);
 dropdown(document.getElementById("address--countryRegion"), ["Ohio", "Nevada", "Wisconsin"]);
 dropdown(document.getElementById("phoneNumber--phoneType"), ["Home", "Mobile", "Work"]);
+// As Workday does: a file handed to the box is uploaded, and a round trip later shown as uploaded with a Delete button.
+// window.uploadFails makes the upload go nowhere, as one that the tenant rejected or that stalled.
+document.querySelector('[data-automation-id="file-upload-input-ref"]').addEventListener("change", e => setTimeout(() => {
+  if (window.uploadFails) return;
+  e.target.insertAdjacentHTML("afterend", `<div>Successfully Uploaded! <button type="button" data-automation-id="delete-file">Delete</button></div>`);
+}, ROUND_TRIP_MS));
 addWork();
 </script>
 </body>
