@@ -6,7 +6,7 @@ drafts, so only one of those two goes at a time.
 """
 from datetime import datetime, timezone
 
-from . import claude_code, discover, mail
+from . import claude_code, discover, doctor, mail
 from .claude_code import find_claude, sign_in_help
 from .store import IS_EXAMPLE, ROOT, now
 
@@ -42,6 +42,11 @@ def _scheduled_sweep_running(conn) -> bool:
     return bool(row and not row["finished_at"] and _minutes_since(row["started_at"]) < STALE_MINUTES[SWEEP])
 
 
+def _facts_still_example() -> bool:
+    """A workspace copied from the example and not yet made yours. A Claude run there spends usage on a fictional candidate."""
+    return "profile/facts.md" in doctor.still_example(ROOT)
+
+
 def refusal(conn, kind: str) -> str | None:
     """Why this run can't start right now, if there's a reason."""
     if kind not in LABELS:
@@ -52,6 +57,9 @@ def refusal(conn, kind: str) -> str | None:
         if kind == TAILOR:
             return "The demo doesn't run Claude. In your own workspace, this writes every draft waiting under Being tailored."
         return "The demo doesn't run Claude. In your own workspace, this judges new postings and tailors resumes."
+    if kind in WRITERS and _facts_still_example():
+        return ("profile/facts.md is still the fictional example's, so Claude would judge and write for someone else. "
+                "Make it yours first: `pyrite doctor` lists what else is left.")
     running = {name for name, run in latest(conn).items() if run["state"] == "running"}
     if kind in running or (kind == SWEEP and _scheduled_sweep_running(conn)):
         return f"A {LABELS[kind]} is already going."

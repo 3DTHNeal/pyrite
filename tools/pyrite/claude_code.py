@@ -271,7 +271,8 @@ def _totals(row) -> dict:
 
 
 def usage(conn) -> dict:
-    """What the Claude runs started from here have used. The daily run starts on its own, so it isn't counted."""
+    """What the Claude runs Pyrite started have used: the daily run, Refresh resume, Interview prep and checking mail.
+    A Claude Code session of your own, such as one following daily_run.md, isn't one of them, so it isn't counted."""
     sums = """COUNT(*) AS runs, SUM(ok = 0) AS failed, SUM(seconds) AS seconds, SUM(input_tokens) AS input_tokens,
               SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd"""
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")

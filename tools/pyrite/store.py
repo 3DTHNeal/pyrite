@@ -1,6 +1,7 @@
 """SQLite storage and the application state machine."""
 import json
 import os
+import re
 import sqlite3
 import tomllib
 from datetime import datetime, timedelta, timezone
@@ -29,15 +30,21 @@ def find_workspace() -> Path:
     committed from this repository. A workspace that was named but can't be found
     stops here, because an empty database would look exactly like a lost one.
     """
-    chosen = os.environ.get("PYRITE_HOME", "").strip()
+    chosen, origin = os.environ.get("PYRITE_HOME", "").strip(), "PYRITE_HOME"
     if not chosen and HOME_POINTER.exists():
-        chosen = _read_pointer(HOME_POINTER)
+        chosen, origin = _read_pointer(HOME_POINTER), str(HOME_POINTER)
     if not chosen:
         return EXAMPLE_ROOT
-    workspace = Path(chosen).expanduser().resolve()
+    workspace = Path(_windows_path(chosen)).expanduser().resolve()
     if not workspace.is_dir():
-        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}")
+        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}\nThat path comes from {origin}. Make the folder, or fix the path.")
     return workspace
+
+
+def _windows_path(chosen: str) -> str:
+    """A path as Git Bash writes it, such as /d/jobs, in the form Windows reads, D:/jobs. Elsewhere, unchanged."""
+    match = re.fullmatch(r"/([A-Za-z])(/.*)?", chosen) if os.name == "nt" else None
+    return f"{match[1].upper()}:{match[2] or '/'}" if match else chosen
 
 
 ROOT = find_workspace()
@@ -199,6 +206,8 @@ def today_plus(days: int) -> str:
 
 
 def load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/ into your workspace to start, then run `pyrite doctor`.")
     with CONFIG_PATH.open("rb") as handle:
         return tomllib.load(handle)
 

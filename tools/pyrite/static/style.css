@@ -82,7 +82,7 @@ main > * { min-width: 0; }
 .order .kind { font: 600 12px/1.6 var(--mono); }
 .order .what { display: block; font-weight: 600; overflow-wrap: anywhere; }
 .order .why { display: block; color: var(--ink-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.kind-act-now, .kind-blocked, .kind-possible-scam { color: var(--bad); }
+.kind-act-now, .kind-blocked, .kind-possible-scam, .kind-finish-setup { color: var(--bad); }
 .order-list li { display: flex; align-items: flex-start; gap: 8px; }
 .order-list .order { flex: 1; }
 .order-list .dismiss { flex: none; font-size: 12px; padding: 4px 8px; margin-top: 6px; }

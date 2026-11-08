@@ -4,15 +4,19 @@ Commands use the Windows path `.venv/Scripts/python.exe`. Elsewhere, it's `.venv
 
 ## Setup
 
+Make the venv with Python 3.11 or newer. On Windows, `py -3` picks the newest one installed, which matters where `python` is an older one:
+
 ```bash
-python -m venv .venv
+py -3 -m venv .venv
 ```
+
+Elsewhere, `python3 -m venv .venv`. Then:
 
 ```bash
 .venv/Scripts/python.exe -m pip install -r tools/requirements.txt
 ```
 
-PDFs come from LibreOffice if `soffice` is on `PATH`, and otherwise from Word. Page counts come from poppler's `pdfinfo` if it's on `PATH`, and otherwise from reading the PDF directly.
+PDFs come from LibreOffice if `soffice` is on `PATH`, and otherwise from Word. Page counts come from poppler's `pdfinfo` if it's on `PATH`, and otherwise from reading the PDF directly. `pyrite doctor`, below, says which of these it found.
 
 ## Your workspace
 
@@ -24,19 +28,34 @@ my-job-search/
   profile/approved-terms.txt  specialist terms that are true of you
   profile/search.toml         what to look for, which companies to watch, what to block
   profile/run-notes.md        personal guidance for the daily run
+  profile/resume.md           your master resume: every draft's employers, titles and dates must match it
+  profile/cover-letter.md     your master letter, another source of what's true
   profile/seed.toml           optional: applications you made before using this
   profile/workday-paste.md    optional: every Workday field typed out once, which `pyrite fill` merges per job
   applications/               one folder per job
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
 
-Copy `example/profile/` to start, and replace everything in it. The `[candidate]` and `[guard]` sections of `search.toml` matter most. The example's `[guard]` points `heading_source` and `approved_sources` at one of its own applications, which a new workspace doesn't have: point them at your master resume and letter, or the assay blocks every draft and says why. Also clear the example's `allowed_hosts` under `[dashboard]`, since those are names the dashboard would answer to.
+Copy `example/profile/` to start, and replace everything in it:
 
-Then point the code at your workspace. Either set `PYRITE_HOME`, or put the path on one line in a file called `.pyrite-home` in this folder, which git ignores. Check it with:
+- `facts.md`, `approved-terms.txt` and `run-notes.md` with your own.
+- `resume.md` and `cover-letter.md` with your master resume and letter. The `[guard]` section of `search.toml` names them as the sources every draft is checked against, and `resume.md` as the one whose employers, titles and dates a draft must match.
+- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks and the companies to watch. Clear the example's `allowed_hosts` under `[dashboard]`, since those are names the dashboard would answer to.
+- `seed.toml` with the applications you made before Pyrite, or delete it.
+
+Then point the code at your workspace. Either set `PYRITE_HOME`, or put the path on one line in a file called `.pyrite-home` in this folder, which git ignores. A Git Bash path such as `/c/Users/you/my-job-search` works too. Check it with:
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py where
 ```
+
+Then ask what's left:
+
+```bash
+.venv/Scripts/python.exe tools/pyrite.py doctor
+```
+
+It lists every profile file that's still the example's, each source under `[guard]` that isn't in your workspace, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
 
 With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder`, `finish` and `serve`, then refuse to run, so nothing real ends up inside this repository. `pyrite demo` is the way to look around without a workspace.
 
@@ -249,10 +268,10 @@ If it still fails, no new brief is kept and an earlier one goes back. Like the r
 
 ## Claude usage
 
-The **Sources** tab shows what the Claude runs started from the dashboard or the command line have used: runs, time, tokens and cost, for the last 7 days and all time. `pyrite usage` prints the same numbers.
+The **Sources** tab shows what the Claude runs Pyrite started have used: runs, time, tokens and cost, for the last 7 days and all time. `pyrite usage` prints the same numbers.
 
-- **Counted:** Refresh resume and Interview prep, including runs that failed.
-- **Not counted:** the daily run, which is a scheduled Claude Code task that starts on its own.
+- **Counted:** every Claude run Pyrite starts, including runs that failed: the daily run's judging and tailoring (`pyrite run`, **Run Claude now** and **Tailor these now**), Refresh resume, Interview prep, and checking mail through the Gmail connector.
+- **Not counted:** a Claude Code session of your own, such as the older way of running the daily run from `tools/pyrite/daily_run.md`, since Pyrite doesn't start it.
 - **Cost** is Claude Code's own estimate at API prices. On a Claude plan it isn't a bill.
 
 ## Reply detection

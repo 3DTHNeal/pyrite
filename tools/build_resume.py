@@ -39,6 +39,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+if sys.version_info < (3, 11):
+    sys.exit("The builder needs Python 3.11 or newer, and this is {}.{}. Run it with the venv's Python: "
+             "see docs/operating.md.".format(*sys.version_info[:2]))
+try:
+    import docx  # noqa: F401  Only to say what to install when it's missing.
+except ImportError:
+    sys.exit(f"The builder needs python-docx, which {sys.executable} doesn't have. Install it with:\n"
+             f"  {sys.executable} -m pip install -r tools/requirements.txt")
+
 from docx import Document
 from docx.enum.text import WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement

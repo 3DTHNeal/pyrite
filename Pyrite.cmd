@@ -4,6 +4,9 @@ rem The workspace comes from PYRITE_HOME or .pyrite-home. See docs/operating.md.
 cd /d "%~dp0"
 set "URL=http://127.0.0.1:8787/"
 
+rem A fresh clone has no venv yet, and starting without one would only show a "Windows cannot find" box.
+if not exist ".venv\Scripts\pythonw.exe" goto novenv
+
 rem Anything can answer on a port, so check that what answers is Pyrite's own page.
 curl.exe -s --max-time 3 %URL% 2>nul | findstr /c:"<title>Pyrite</title>" >nul && goto open
 
@@ -31,6 +34,14 @@ exit /b 1
 echo Port 8787 is in use by another program, so Pyrite wasn't started and nothing was closed.
 echo Close that program, or run Pyrite on another port:
 echo     .venv\Scripts\python.exe tools\pyrite.py serve --port 8790
+pause
+exit /b 1
+
+:novenv
+echo Pyrite isn't set up in this folder yet: there's no .venv here. From this folder, run:
+echo     py -3 -m venv .venv
+echo     .venv\Scripts\python.exe -m pip install -r tools\requirements.txt
+echo Then point it at your workspace and run .venv\Scripts\python.exe tools\pyrite.py doctor. See docs\operating.md.
 pause
 exit /b 1
 
