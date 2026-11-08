@@ -79,12 +79,31 @@ def safe_url(url: str) -> str:
     return url if urlparse(url).scheme in ("http", "https") else ""
 
 
+def _same_posting(url: str) -> str:
+    """A link in the form two copies of it share: no fragment, no trailing slash, and the host in lower case."""
+    parts = urlparse(url.strip())
+    return f"{parts.netloc.lower()}{parts.path.rstrip('/')}?{parts.query}" if parts.netloc else ""
+
+
+def tracked_by_url(conn, url: str):
+    """The job already tracked at this link, whoever found it, or None. Two postings can share a title, but not a link."""
+    wanted = _same_posting(safe_url(url))
+    if not wanted:
+        return None
+    rows = conn.execute("SELECT id, company, title, status, url FROM jobs WHERE url != '' ORDER BY id").fetchall()
+    return next((row for row in rows if _same_posting(row["url"]) == wanted), None)
+
+
 def add_manual_job(conn, cfg, company, title, url="", location="", description="") -> int:
-    """A posting you found yourself always goes in, whatever the filters think, at the front of the line."""
+    """A posting you found yourself always goes in, whatever the filters think, at the front of the line. One already
+    tracked at the same link isn't added twice: that job's number comes back instead."""
     company, title = company.strip(), title.strip()
     if not company or not title:
         raise ValueError("Company and title are required.")
     url = safe_url(url)
+    known = tracked_by_url(conn, url)
+    if known:
+        return known["id"]
     source_id = hashlib.sha1(f"{company}|{title}|{url}".encode(), usedforsecurity=False).hexdigest()[:16]
     existing = conn.execute(
         "SELECT id FROM jobs WHERE source_key = 'manual' AND source_id = ?", (source_id,)
@@ -687,11 +706,14 @@ class Handler(BaseHTTPRequestHandler):
         cfg = load_config()
         try:
             if path == "/api/jobs":
+                known = tracked_by_url(conn, str(body.get("url", "")))
                 job_id = add_manual_job(
                     conn, cfg, str(body.get("company", "")), str(body.get("title", "")),
                     str(body.get("url", "")), str(body.get("location", "")), str(body.get("description", "")),
                 )
                 conn.commit()
+                if known:
+                    return self._json({"id": job_id, "existing": True, "status": known["status"]}, 200)
                 return self._json({"id": job_id}, 201)
             if path == "/api/run":
                 tasks.start(conn, str(body.get("kind") or ""))

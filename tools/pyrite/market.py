@@ -329,7 +329,7 @@ def history(jobs: list[dict], industry: dict, mentions_needed: int, today: date)
         "remote": kinds.get("remote", 0),
         "employers": Counter(job["company"] for job in recent).most_common(6),
         "applied": len(applied),
-        "replied": sum(1 for job in applied if job.get("response_at") or job.get("interview_at") or job.get("offer_at")),
+        "replied": sum(1 for job in applied if job.get("replied")),
         "interviews": sum(1 for job in applied if job.get("interview_at") or job.get("offer_at")),
         "offers": sum(1 for job in applied if job.get("offer_at")),
     }
@@ -337,6 +337,10 @@ def history(jobs: list[dict], industry: dict, mentions_needed: int, today: date)
 
 SEEN_COLUMNS = ("company", "title", "description", "location_kind", "first_seen", "posting_closed_at",
                 "applied_at", "response_at", "interview_at", "offer_at")
+# Replied the way the dashboard's Reply rate counts it: heard back, and that answer was a reply, an interview or an
+# offer. A rejection is hearing back too, but it isn't a reply.
+REPLIED = """(response_at IS NOT NULL AND (interview_at IS NOT NULL OR offer_at IS NOT NULL OR id IN
+              (SELECT job_id FROM events WHERE kind IN ('responded', 'interviewing', 'offer')))) AS replied"""
 
 
 def view(conn, cfg: dict, today: date | None = None) -> dict:
@@ -344,7 +348,7 @@ def view(conn, cfg: dict, today: date | None = None) -> dict:
     today = today or datetime.now().date()
     promote = cfg.get("promote") or {}
     industries = promote.get("industry", [])
-    jobs = [dict(row) for row in conn.execute(f"SELECT {', '.join(SEEN_COLUMNS)} FROM jobs")]
+    jobs = [dict(row) for row in conn.execute(f"SELECT {', '.join(SEEN_COLUMNS)}, {REPLIED} FROM jobs")]
     first = min((job["first_seen"] for job in jobs), default=None)
     needed = promote.get("mentions_needed", 3)
 

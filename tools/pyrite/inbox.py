@@ -62,6 +62,21 @@ HIRING_SUBJECT = re.compile(
     r"\b(appl(y|ied|ying|ications?)|interview\w*|candidate\w*|position|role|recruit\w*|hiring|careers?|jobs?|next steps?)\b",
     re.I,
 )
+# Automatic mail that every application sets off: the receipt, and the candidate account's password and codes.
+# None of it is the company answering. "Thank you for your interest" isn't here, since rejections often say that.
+RECEIPT_SUBJECT = re.compile(
+    r"\b(successfully (applied|submitted)|thanks? (you )?for applying|thanks? (you )?for (submitting )?your application"
+    r"|application (was )?(received|submitted|complete|confirmation)|received your application|got your application"
+    r"|reset (your )?password|password reset|verify your (email|account)|verification code|one[- ]time (pass)?code"
+    r"|(sign[- ]in|security|access) code)\b",
+    re.I,
+)
+# Words that make a receipt-like subject a real answer after all, when the message's own text is at hand.
+ANSWER_TEXT = re.compile(
+    r"\b(unfortunately|regret|not (to )?(move|moving) forward|other candidates|decided to|interview\w*|schedule|"
+    r"next steps?|offer)\b",
+    re.I,
+)
 UNSAFE_WHITESPACE = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
 DOMAIN_SHAPE = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
 
@@ -328,22 +343,44 @@ def _read_mailbox(creds: Credentials, jobs: list, cfg: dict, client_factory) -> 
             pass
 
 
+def is_receipt(message: Message) -> bool:
+    """Automatic mail an application sets off, which isn't the company answering. When the message's own text is at
+    hand, as it is through Gmail, a receipt-like subject over a rejection or an interview invitation still counts."""
+    if not RECEIPT_SUBJECT.search(message.subject):
+        return False
+    return not ANSWER_TEXT.search(getattr(message, "text", "") or "")
+
+
+def _words(text: str) -> str:
+    return " " + " ".join(re.findall(r"[a-z0-9]+", (text or "").lower())) + " "
+
+
+def _names_title(subject: str, title: str) -> bool:
+    words = _words(title)
+    return words.strip() != "" and words in _words(subject)
+
+
 def record_matches(conn, jobs: list, messages: Sequence[Message], cfg: dict) -> list[dict]:
-    """Add each new match to its job's timeline. This never touches a job's status."""
+    """Add each new match to its job's timeline. This never touches a job's status.
+
+    Receipts are left out. When a message matches several applications at one company and its subject names some of
+    their titles, only those get it; otherwise there's no telling which it's about, so they all do."""
     found = []
-    for job in jobs:
-        domains = employer_domains(job, cfg)
-        cutoff = _cutoff(job)
-        seen = {row["detail"] for row in conn.execute(
-            "SELECT detail FROM events WHERE job_id = ? AND kind = ?", (job["id"], REPLY_DETECTED),
-        )}
-        for message in messages:
-            if message.date < cutoff or not is_match(job, message, domains):
+    domains = {job["id"]: employer_domains(job, cfg) for job in jobs}
+    cutoffs = {job["id"]: _cutoff(job) for job in jobs}
+    seen = {job["id"]: {row["detail"] for row in conn.execute(
+        "SELECT detail FROM events WHERE job_id = ? AND kind = ?", (job["id"], REPLY_DETECTED),
+    )} for job in jobs}
+    for message in messages:
+        if is_receipt(message):
+            continue
+        matched = [job for job in jobs if message.date >= cutoffs[job["id"]] and is_match(job, message, domains[job["id"]])]
+        named = [job for job in matched if _names_title(message.subject, job["title"])]
+        detail = message.detail()
+        for job in named or matched:
+            if detail in seen[job["id"]]:
                 continue
-            detail = message.detail()
-            if detail in seen:
-                continue
-            seen.add(detail)
+            seen[job["id"]].add(detail)
             log_event(conn, job["id"], REPLY_DETECTED, detail)
             found.append({"job_id": job["id"], "company": job["company"], "sender": message.address})
     return found

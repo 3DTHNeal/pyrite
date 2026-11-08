@@ -140,10 +140,10 @@ class ReplyMatching(InboxBase):
     def test_ats_mail_matches_only_when_the_company_is_named(self):
         job = self.applied()
         other = self.applied("Initech")
-        self.scan(mail("no-reply@us.greenhouse-mail.io", "Thank you for applying to Contoso"),
+        self.scan(mail("no-reply@us.greenhouse-mail.io", "Your application to Contoso"),
                   mail("Initech Talent <no-reply@hire.lever.co>", "Update"))
         self.assertEqual(len(self.replies(job)), 1)
-        self.assertIn("Thank you for applying to Contoso", self.replies(job)[0])
+        self.assertIn("Your application to Contoso", self.replies(job)[0])
         self.assertEqual(len(self.replies(other)), 1)
         self.assertIn("Initech Talent", self.replies(other)[0])
 
@@ -230,6 +230,27 @@ class ReplyMatching(InboxBase):
         self.scan(mail("sam@contoso.com", "Hello"))
         self.assertEqual(len(self.replies(first)), 1)
         self.assertEqual(len(self.replies(second)), 1)
+
+    def test_a_subject_naming_one_role_goes_to_that_role_only(self):
+        first = self.applied(title="Staff Firmware Engineer")
+        second = self.applied(title="Engineering Manager, Platform")
+        self.scan(mail("sam@contoso.com", "Your interview for Engineering Manager - Platform"))
+        self.assertEqual(self.replies(first), [])
+        self.assertEqual(len(self.replies(second)), 1)
+
+    def test_receipts_and_account_mail_are_not_replies(self):
+        job = self.applied()
+        self.scan(
+            mail("Contoso <contoso@myworkday.com>", "You have successfully applied to Contoso!"),
+            mail("no-reply@us.greenhouse-mail.io", "Thank you for applying to Contoso"),
+            mail("Contoso <contoso@otp.workday.com>", "Reset your password for your candidate account"),
+            mail("sam@contoso.com", "We received your application"),
+            mail("sam@contoso.com", "Your verification code"),
+        )
+        self.assertEqual(self.replies(job), [])
+        # A rejection's usual wording is still flagged.
+        self.scan(mail("Contoso <contoso@myworkday.com>", "Thank you for your interest in Contoso"))
+        self.assertEqual(len(self.replies(job)), 1)
 
 
 class ReplyMailboxAccess(InboxBase):
@@ -566,6 +587,14 @@ class MailScan(MailBase):
         self.assertEqual(self.replies(job), ["From Sam Lee <sam@contoso.com> | Subject: Your application | Date: 2026-11-06 16:30 UTC"])
         self.assertEqual(result["alerts"], [])
 
+    def test_a_receipt_is_skipped_unless_its_text_is_an_answer(self):
+        job = self.applied()
+        receipt = self.scan(exported(subject="Thank you for applying to Contoso", snippet="We have received your application."))
+        self.assertEqual(receipt["found"], [])
+        answer = self.scan(exported(subject="Thank you for applying to Contoso", id="m2",
+                                    snippet="Unfortunately we have decided to move forward with other candidates."))
+        self.assertEqual([hit["job_id"] for hit in answer["found"]], [job])
+
     def test_a_scam_is_kept_once_with_reasons_and_tied_to_the_job_it_names(self):
         job = self.applied()
         scam = exported("contoso.hr@gmx.com", "Contoso interview", from_name="Contoso HR",
@@ -667,6 +696,47 @@ class MailScan(MailBase):
             result = mailcheck.run(self.conn, GMAIL_CFG, claude="claude")
         self.assertEqual(result["state"], "ok")
         self.assertEqual([kind["label"] for kind in claude_code.usage(self.conn)["kinds"]], ["Checking mail"])
+
+    def run_with_answers(self, *answers):
+        """Claude Code finishing cleanly each time, with these closing messages in turn."""
+        replies = iter(answers)
+        outputs = lambda *a, **kw: mock.Mock(stdout=json.dumps({"type": "result", "result": next(replies), "num_turns": 1}),
+                                             stderr="", returncode=0)
+        with mock.patch.object(claude_code, "signed_in", return_value=True), \
+                mock.patch.object(subprocess, "run", side_effect=outputs) as run:
+            result = mailcheck.run(self.conn, GMAIL_CFG, claude="claude")
+        runs = [row["ok"] for row in self.conn.execute("SELECT ok FROM claude_runs WHERE kind = 'mail' ORDER BY id")]
+        return result, run, runs
+
+    def test_a_tool_call_written_out_as_text_gets_one_more_try_and_counts_as_failed(self):
+        job = self.applied()
+        written = '<invoke name="ToolSearch"> <parameter name="query">select:x</parameter></invoke>'
+        result, run, runs = self.run_with_answers(written, json.dumps([exported()]))
+        self.assertEqual(result["state"], "ok")
+        self.assertEqual([hit["job_id"] for hit in result["found"]], [job])
+        self.assertEqual(runs, [0, 1])
+        self.assertIn("wrote a tool call out as text", run.call_args_list[1].kwargs["input"])
+        # Twice in a row is reported, and neither run counts as a good one.
+        result, run, runs = self.run_with_answers(written, written)
+        self.assertEqual(result["state"], "error")
+        self.assertIn("tried twice", result["message"])
+        self.assertEqual(runs[-2:], [0, 0])
+
+    def test_other_unusable_answers_are_not_retried(self):
+        result, run, runs = self.run_with_answers("I couldn't reach Gmail.")
+        self.assertEqual(result["state"], "error")
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(runs, [0])
+
+    def test_doctor_reports_a_failed_last_check(self):
+        from pyrite import doctor
+        self.run_with_answers("I couldn't reach Gmail.")
+        with mock.patch.object(doctor, "DB_PATH", Path(self.tmp.name) / "t.db"):
+            self.assertIn("couldn't reach Gmail", doctor.last_mail_error("gmail"))
+            self.assertEqual(doctor.last_mail_error("imap"), "")
+            checks = doctor.tool_checks(GMAIL_CFG)
+        self.assertIn({"ok": False, "what": "Reply detection's last check failed"},
+                      [{"ok": c["ok"], "what": c["what"]} for c in checks])
 
     def test_an_export_made_by_hand_can_be_judged_from_the_command_line(self):
         job = self.applied()
