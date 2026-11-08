@@ -375,5 +375,5 @@ def summary(result: dict) -> str:
         said = f"Mail checked: {replies} possible repl{'y' if replies == 1 else 'ies'}"
         return said + (f", {alerts} possible scam{'' if alerts == 1 else 's'}." if alerts else ".")
     if result["state"] == "error":
-        return "Mail couldn't be checked: see the Veins tab."
+        return "Mail couldn't be checked: see the Sources tab."
     return "Reply detection isn't set up, so no mail was checked."

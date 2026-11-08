@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r tools/requirements.txt
+      - run: python -m pip install -r tools/requirements.txt -r tools/requirements-autofill.txt
       # Lets the privacy check's tests read a real PDF. Windows runners get pdftotext with Git.
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y poppler-utils

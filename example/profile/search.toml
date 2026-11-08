@@ -163,6 +163,7 @@ unsupported = [
 ]
 disclaimers = ['\bnot\b', '\bnever\b', '\bno\b', "n't\b", '\bwithout\b', '\byet to\b']
 # Sources of truth. Numbers, job headings and specialist terms must appear in these.
+# In your own workspace, point these and heading_source at your own master resume and letter.
 approved_sources = [
   'profile/facts.md',
   'profile/approved-terms.txt',
@@ -209,7 +210,7 @@ lookback_days = 14
 [inbox.domains]
 "Hooli Autonomy" = ["hooli-mail.example"]
 
-# Employers worth watching with no public feed. The dashboard's Veins tab lists these as a reminder.
+# Employers worth watching with no public feed. The dashboard's Sources tab lists these as a reminder.
 [[manual_check]]
 name = "LinkedIn"
 url = "https://www.linkedin.com/jobs/"
