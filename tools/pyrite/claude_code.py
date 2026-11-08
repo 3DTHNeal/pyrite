@@ -237,6 +237,12 @@ def record(conn, job_id: int | None, kind: str, result: dict, seconds: float, ok
     conn.commit()
 
 
+def mark_last_failed(conn, kind: str) -> None:
+    """Count the latest run of this kind as failed. For a run Claude Code finished cleanly whose answer was no use."""
+    conn.execute("UPDATE claude_runs SET ok = 0 WHERE id = (SELECT MAX(id) FROM claude_runs WHERE kind = ?)", (kind,))
+    conn.commit()
+
+
 def ask(conn, job_id: int, kind: str, cmd: list[str], text: str, cwd: Path, seconds: float, limit_minutes: int) -> str:
     """One Claude run. Returns its closing message, and records what the run used."""
     began = time.monotonic()

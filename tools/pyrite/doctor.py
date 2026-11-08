@@ -7,14 +7,16 @@ Claude Code, the mail login) take longer to look for, so only `pyrite doctor` ch
 import importlib.util
 import re
 import shutil
+import sqlite3
 import sys
 import tomllib
+from contextlib import closing
 from pathlib import Path
 
 from . import inbox
 from .checks import do_not_use
 from .claude_code import find_claude, signed_in
-from .store import EXAMPLE_ROOT
+from .store import DB_PATH, EXAMPLE_ROOT
 
 # The profile files a new workspace copies from the example and must then make its own.
 OWN_FILES = ("profile/facts.md", "profile/approved-terms.txt", "profile/run-notes.md", "profile/resume.md", "profile/cover-letter.md")
@@ -43,6 +45,10 @@ EXAMPLE_SETTINGS = (
     (("inbox", "domains"), "[inbox.domains]", None),
 )
 CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
+# Asides in parentheses and quoted wording explain a rule or suggest what to say instead. They name nothing secret.
+ASIDE = re.compile(r"\([^)]*\)|\"[^\"]*\"|“[^”]*”")
+# A sentence: everything up to a full stop, question mark or semicolon that ends a clause, so "2.5" stays whole.
+SENTENCE = re.compile(r"(?:[^.!?;]|[.!?;](?=\S))+")
 
 
 def _and(items: list[str]) -> str:
@@ -177,18 +183,25 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     return todos
 
 
-def unguarded_terms(facts: str, forbidden: list[str]) -> list[str]:
+def unguarded_terms(facts: str, forbidden: list[str], own_name: str = "") -> list[str]:
     """Capitalized terms under "Do not use" in facts.md that no pattern in [guard] forbidden matches. The assay reads
-    nothing from that section, so a term listed only there isn't blocked by name. The first word of each line is
-    skipped, since it's usually a label such as "Internal names:" or "Customer names"."""
+    nothing from that section, so a term listed only there isn't blocked by name.
+
+    Only words that could be a secret name count. The first word of each sentence is skipped, since it's usually a
+    label such as "Internal names:" or an instruction such as "Say". Asides in parentheses and quoted wording are
+    skipped, since they explain the rule rather than name something. The words of your own name are skipped too:
+    forbidding them would fail every draft."""
+    mine = {word.lower() for word in re.findall(r"\w+", own_name)}
     found: list[str] = []
     for row in do_not_use(facts).splitlines():
         line = row.strip().lstrip("-*").strip()
         spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
-        for term in list(CAPITALIZED.finditer(line))[1:]:
-            covered = any(start < term.end() and term.start() < end for start, end in spans)
-            if not covered and term.group(0) not in found:
-                found.append(term.group(0))
+        masked = ASIDE.sub(lambda aside: " " * len(aside.group(0)), line)
+        for sentence in SENTENCE.finditer(masked):
+            for term in list(CAPITALIZED.finditer(masked, sentence.start(), sentence.end()))[1:]:
+                covered = any(start < term.end() and term.start() < end for start, end in spans)
+                if not covered and term.group(0).lower() not in mine and term.group(0) not in found:
+                    found.append(term.group(0))
     return found
 
 
@@ -196,12 +209,14 @@ def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
     facts = _text(root / "profile" / "facts.md")
     if facts is None or facts == _text(EXAMPLE_ROOT / "profile" / "facts.md"):
         return []
-    terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []))
+    own_name = cfg.get("candidate", {}).get("name", "")
+    terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []), own_name)
     if not terms:
         return []
     return [{"what": f"profile/facts.md lists {_and(terms)} under \"Do not use\", but forbidden under [guard] in "
                      f"profile/search.toml doesn't block {'it' if len(terms) == 1 else 'them'}.",
-             "fix": f"The assay blocks only what forbidden names, so add a pattern for each, such as '\\b{terms[0]}\\b'."}]
+             "fix": f"The assay blocks only the terms that forbidden lists, so add a pattern for each, such as "
+                    f"'\\b{terms[0]}\\b'. If one is only part of an explanation, put it in parentheses."}]
 
 
 def seed_still_example(root: Path) -> bool:
@@ -251,6 +266,19 @@ def install_fix(in_venv: bool | None = None) -> str:
             f"Then run {venv_python} -m pip install -r tools/requirements.txt, and use {venv_python} for Pyrite from then on.")
 
 
+def last_mail_error(source: str) -> str:
+    """Why the last mail check failed, from the Sources tab's record, or "" if it worked or never ran. Read-only."""
+    if not DB_PATH.exists():
+        return ""
+    key = "inbox:gmail" if source == "gmail" else inbox.SOURCE_KEY
+    try:
+        with closing(sqlite3.connect(f"{DB_PATH.as_uri()}?mode=ro", uri=True)) as conn:
+            row = conn.execute("SELECT last_error FROM source_status WHERE source_key = ?", (key,)).fetchone()
+    except sqlite3.Error:
+        return ""
+    return (row[0] or "").strip() if row else ""
+
+
 def tool_checks(cfg: dict | None) -> list[dict]:
     """The programs Pyrite uses, each as {"ok": True | False | None, "what", "fix"}. None means optional and missing."""
     found = []
@@ -274,7 +302,10 @@ def tool_checks(cfg: dict | None) -> list[dict]:
     else:
         found.append({"ok": True, "what": f"Claude Code, signed in, at {claude}", "fix": ""})
     source = (cfg or {}).get("inbox", {}).get("source", "imap")
-    if source == "gmail":
+    trouble = last_mail_error(source)
+    if trouble:
+        found.append({"ok": False, "what": "Reply detection's last check failed", "fix": f"{trouble}\nTry again with `pyrite inbox`."})
+    elif source == "gmail":
         found.append({"ok": True, "what": "Reply detection reads Gmail through Claude Code", "fix": "Test it with `pyrite inbox`."})
     elif inbox.CREDENTIALS_PATH.exists():
         found.append({"ok": True, "what": f"Reply detection reads mail with the login in {inbox.CREDENTIALS_PATH}", "fix": "Test it with `pyrite inbox`."})

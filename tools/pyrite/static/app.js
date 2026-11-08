@@ -1732,13 +1732,15 @@ $("add-form").addEventListener("submit", async (e) => {
   save.disabled = true;
   $("add-error").textContent = "";
   try {
-    const { id } = await api("/api/jobs", {
+    const { id, existing, status } = await api("/api/jobs", {
       company: field("company"), title: field("title"), url: field("url"), location: field("location"), description: field("description"),
     });
     $("add-form").reset();
     $("add-dialog").close();
     await refresh();
     await openJob(id);
+    // A link already tracked opens that job rather than adding it again, which would tailor it a second time.
+    if (existing) toast(`Already tracked at that link (${status}), so it wasn't added again. Here it is.`);
   } catch (err) {
     $("add-error").textContent = err.message;
   } finally {
