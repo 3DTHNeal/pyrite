@@ -10,7 +10,7 @@ Pyrite is a personal project. I run it on my own job search and share it so othe
 
   ```bash
   python -m pip install -r tools/requirements-dev.txt
-  python -W ignore::ResourceWarning -m unittest discover -s tools/tests
+  python -m unittest discover -s tools/tests
   python -m ruff check tools
   python -m mypy
   python tools/check_public.py

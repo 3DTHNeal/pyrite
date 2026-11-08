@@ -5,10 +5,11 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+from typing import cast
 
 from . import score as scoring
 from . import sources
-from .store import ACTIVE, STATUSES, connect, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing, set_status
+from .store import ACTIVE, STATUSES, get_job, load_config, log_event, now, possible_replies, quiet_days_since, record_listing, set_status
 
 # How much of a posting's vocabulary must match for an edited repost to count as the same job.
 NEAR_TWIN_OVERLAP = 0.85
@@ -116,9 +117,8 @@ def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: floa
     return result
 
 
-def run(only: str | None = None, fresh: bool = False, conn=None, cfg=None, max_minutes: float = 45) -> dict:
+def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minutes: float = 45) -> dict:
     cfg = cfg or load_config()
-    conn = conn or connect()
     started = now()
     run_id = conn.execute("INSERT INTO runs (started_at) VALUES (?)", (started,)).lastrowid
     if fresh:
@@ -437,10 +437,9 @@ def last_full_sweep(conn):
     return None
 
 
-def rescore(conn=None, cfg=None) -> dict:
+def rescore(conn, cfg=None) -> dict:
     """Re-apply the current filters to postings you haven't acted on."""
     cfg = cfg or load_config()
-    conn = conn or connect()
     kept = dropped = 0
     _fill_in_existing(conn, cfg)
     rows = conn.execute(
@@ -550,7 +549,8 @@ def check_sources(cfg=None) -> list[dict]:
         try:
             if kind == "workday":
                 api, _ = sources.workday_base({**spec, "tenant": ident})
-                count = sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0).get("total", 0)
+                page = cast(dict, sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0))
+                count = page.get("total", 0)
             else:
                 count = len(sources.FEEDS[kind](ident, name))
             return {"source": f"{kind}:{ident}", "company": name, "ok": True, "count": count}

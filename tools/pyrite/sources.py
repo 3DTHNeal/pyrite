@@ -136,6 +136,7 @@ def _request(url: str, payload: dict | None = None, retries: int = 3) -> dict | 
         except urllib.error.HTTPError as err:
             if err.code not in (429, 500, 502, 503, 504) or attempt == retries:
                 raise
+            err.close()  # It holds the response open, and the retry won't read it.
         except (OSError, http.client.HTTPException):
             # A refused, reset or half-finished connection, not only a failed lookup.
             if attempt == retries:
@@ -283,7 +284,8 @@ def is_workday_closed(spec: dict, path: str) -> bool | None:
     try:
         info = _request(f"{api}{path}", retries=1)
     except urllib.error.HTTPError as err:
-        return True if err.code in (404, 410) else None
+        with err:
+            return True if err.code in (404, 410) else None
     except (OSError, http.client.HTTPException, ValueError):
         return None
     return "jobPostingInfo" not in info

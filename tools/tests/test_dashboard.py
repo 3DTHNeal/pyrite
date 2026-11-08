@@ -84,7 +84,8 @@ class Security(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as resp:
                 return resp.status, resp.read(), dict(resp.headers)
         except urllib.error.HTTPError as err:
-            return err.code, err.read(), dict(err.headers)
+            with err:
+                return err.code, err.read(), dict(err.headers)
 
     def test_foreign_host_refused(self):
         self.assertEqual(self.call("/api/state", headers={"Host": "evil.test"})[0], 403)
