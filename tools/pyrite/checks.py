@@ -9,10 +9,11 @@ import json
 import re
 import subprocess
 import unicodedata
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from .store import ROOT
+from .store import ROOT, SENT_FOLDER, sent_copies
 
 # A date alone on its line is a letter's date, which may be any day. A date inside a sentence is a claim like any other.
 DATE_LINE = re.compile(
@@ -47,6 +48,14 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+|\n")
 # Sections of a fact bank that list what must not be claimed, at any heading level. Their words and numbers approve
 # nothing, and neither do their subsections.
 HEADING = re.compile(r"^[ \t]*(#{1,6})[ \t]+(.*)$")
+COMMENT = re.compile(r"<!--.*?-->", re.S)
+# Under "Do not use", a capitalized word could be a secret name. Asides in parentheses and quoted wording explain a rule
+# or suggest what to say instead, so they name nothing secret.
+CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
+ASIDE = re.compile(r"\([^)]*\)|\"[^\"]*\"|“[^”]*”")
+# A sentence of a "Do not use" line: everything up to a full stop, question mark or semicolon that ends a clause, so
+# "2.5" stays whole.
+LISTED_SENTENCE = re.compile(r"(?:[^.!?;]|[.!?;](?=\S))+")
 EXCLUDED_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use|unsupported)\b", re.I)
 DO_NOT_USE_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use)\b", re.I)
 # A negative only disclaims what follows it in the same clause. "Not only" is no negative at all.
@@ -138,14 +147,109 @@ def _split_sections(text: str, title: re.Pattern) -> tuple[str, str]:
     return "".join(outside), "".join(inside)
 
 
+def uncommented(text: str) -> str:
+    """Text without its <!-- comments -->, which say what goes in a file rather than anything true of you."""
+    return COMMENT.sub("", text)
+
+
 def claimable(text: str) -> str:
-    """A source without the sections that list what must not be claimed."""
-    return _split_sections(text, EXCLUDED_SECTION)[0]
+    """A source without the sections that list what must not be claimed, or its comments."""
+    return _split_sections(uncommented(text), EXCLUDED_SECTION)[0]
 
 
 def do_not_use(text: str) -> str:
-    """What a fact bank lists under "Do not use", subsections included."""
-    return _split_sections(text, DO_NOT_USE_SECTION)[1]
+    """What a fact bank lists under "Do not use", subsections included, without its comments."""
+    return _split_sections(uncommented(text), DO_NOT_USE_SECTION)[1]
+
+
+def term_pattern(term: str) -> str:
+    """A pattern that blocks a term as people write it: any case, a hyphen or space or nothing between its words, and
+    a plural. "SkyLift 900" blocks SkyLift-900 and skylift 900s."""
+    words = [w for w in re.split(r"[\s-]+", re.sub(r"^the\s+", "", term.strip(), flags=re.I)) if w]
+    if not words:
+        raise ValueError("Type the name or claim to block.")
+    body = r"[\s-]?".join(re.escape(w) for w in words)
+    last = words[-1][-1]
+    if last.isalpha() and last.lower() != "s":
+        body += "s?"
+    start = r"\b" if re.match(r"\w", words[0]) else r"(?<!\w)"
+    end = r"\b" if re.match(r"\w", last) else r"(?!\w)"
+    return start + body + end
+
+
+def unguarded_terms(facts: str, forbidden: list[str], own_name: str = "") -> list[str]:
+    """Capitalized terms under "Do not use" in a fact bank that no pattern in [guard] forbidden matches.
+
+    Only words that could be a secret name count. The first word of each sentence is skipped, since it's usually a
+    label such as "Internal names:" or an instruction such as "Say". Asides in parentheses and quoted wording are
+    skipped, since they explain the rule rather than name something. The words of your own name are skipped too:
+    forbidding them would fail every draft."""
+    mine = {word.lower() for word in re.findall(r"\w+", own_name)}
+    found: list[str] = []
+    for row in do_not_use(facts).splitlines():
+        line = row.strip().lstrip("-*").strip()
+        spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
+        masked = ASIDE.sub(lambda aside: " " * len(aside.group(0)), line)
+        for sentence in LISTED_SENTENCE.finditer(masked):
+            for term in list(CAPITALIZED.finditer(masked, sentence.start(), sentence.end()))[1:]:
+                covered = any(start < term.end() and term.start() < end for start, end in spans)
+                if not covered and term.group(0).lower() not in mine and term.group(0) not in found:
+                    found.append(term.group(0))
+    return found
+
+
+def _source_text(rel: str) -> str:
+    path = ROOT / rel
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    except (OSError, UnicodeError):
+        return ""
+
+
+def listed_terms(cfg: dict, read: Callable[[str], str] | None = None) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
+    """The names your approved sources list under "Do not use" that no pattern under [guard] forbidden blocks.
+
+    The assay blocks each of these by name, as if forbidden had a pattern for it, so a name is written once, in the
+    fact bank. The first list holds those, as (term, pattern, the file that lists it). The second holds the ones it
+    can't block that way, as (term, file): names your sources also use as fact, such as an employer named in a line
+    about its customers, which blocking would fail every draft over. `read` gives a source's text, for a draft of one
+    that isn't saved yet."""
+    guard = cfg.get("guard", {})
+    forbidden = list(guard.get("forbidden", []))
+    own_name = str(cfg.get("candidate", {}).get("name", ""))
+    texts = {rel: (read or _source_text)(rel) for rel in dict.fromkeys(guard.get("approved_sources", []))}
+    stated = "\n".join(claimable(text) for text in texts.values())
+    blocked: list[tuple[str, str, str]] = []
+    shared: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for rel, text in texts.items():
+        for term in unguarded_terms(text, forbidden, own_name):
+            if term.lower() in seen:
+                continue
+            seen.add(term.lower())
+            pattern = term_pattern(term)
+            if re.search(pattern, stated, re.I):
+                shared.append((term, rel))
+            else:
+                blocked.append((term, pattern, rel))
+    return blocked, shared
+
+
+def blocked_patterns(cfg: dict, read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
+    """Every pattern a draft must not match, each with where it comes from: "" for forbidden under [guard], or the
+    file whose "Do not use" section names it."""
+    return ([(pattern, "") for pattern in cfg.get("guard", {}).get("forbidden", [])]
+            + [(pattern, rel) for _term, pattern, rel in listed_terms(cfg, read)[0]])
+
+
+def with_listed(guard: dict, cfg: dict, read: Callable[[str], str] | None = None) -> dict:
+    """[guard] with a pattern added to forbidden for each name listed under "Do not use", as the assay reads it."""
+    return {**guard, "forbidden": [pattern for pattern, _where in blocked_patterns({**cfg, "guard": guard}, read)]}
+
+
+def _confidential(label: str, match: re.Match, where: str) -> str:
+    listed = f", which {where} lists under \"Do not use\"" if where else ""
+    return f"{label} uses a confidential term: {match.group(0)!r}{listed}"
 
 
 def missing_sources(cfg: dict) -> list[str]:
@@ -397,11 +501,13 @@ def explain(sentence: str, guard: dict) -> dict:
 
 def check_text(
     text: str, kind: str, cfg: dict, sources: str, company: str = "", title: str = "", contact_line: str | None = None,
-    posting: str = "",
+    posting: str = "", blocked: list[tuple[str, str]] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Check one document's Markdown. kind is 'resume' or 'letter'. posting is the job's text, when there is one."""
+    """Check one document's Markdown. kind is 'resume' or 'letter'. posting is the job's text, when there is one.
+    blocked is what blocked_patterns() gives, for sources that aren't saved yet; by default it's read from the files."""
     errors, warnings = [], []
     guard = cfg["guard"]
+    blocked = blocked_patterns(cfg) if blocked is None else blocked
     label = "Resume" if kind == "resume" else "Cover letter"
     errors += _disguises(text, label)
     # The draft and everything it's compared with are read the same way.
@@ -409,10 +515,10 @@ def check_text(
     lines = [line.strip() for line in text.splitlines() if line.strip()]
 
     # Nothing from the do-not-use list, anywhere.
-    for pattern in guard["forbidden"]:
+    for pattern, where in blocked:
         match = re.search(pattern, text, re.I)
         if match:
-            errors.append(f"{label} uses a confidential term: {match.group(0)!r}")
+            errors.append(_confidential(label, match, where))
 
     # Unsupported claims, unless the sentence disclaims them before naming them.
     unsupported, disclaimed = _unsupported(text, guard, label)
@@ -433,7 +539,7 @@ def check_text(
     body = _set_aside(_set_aside(body, company), title)
     body = DATE_LINE.sub(" ", body)
     # A confidential term or a disclaimed claim has been dealt with above, so its own words aren't judged again.
-    for pattern in guard["forbidden"]:
+    for pattern, _where in blocked:
         body = re.sub(pattern, " ", body, flags=re.I)
     for span in disclaimed:
         body = body.replace(span, " ")
@@ -506,10 +612,10 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
     errors += _disguises(text, "Brief")
     text, sources, company, title, posting = (_matchable(part) for part in (text, sources, company, title, posting))
 
-    for pattern in guard["forbidden"]:
+    for pattern, where in blocked_patterns(cfg):
         match = re.search(pattern, text, re.I)
         if match:
-            errors.append(f"Brief uses a confidential term: {match.group(0)!r}")
+            errors.append(_confidential("Brief", match, where))
 
     unsupported, disclaimed = _unsupported(text, guard, "Brief")
     errors += unsupported
@@ -704,12 +810,19 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
             errors.append(f"{pdf.name} is {pages} pages; the limit is {limit}.")
 
     drafter = drafter_versions(folder)
-    for name, version in drafter.items():
-        if version != DRAFTER_VERSION:
-            warnings.append(f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format.")
+    sent = sent_copies(folder)
+    if not sent:
+        for name, version in drafter.items():
+            if version != DRAFTER_VERSION:
+                warnings.append(f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format.")
 
     overlap = keyword_overlap(resume, description, cfg) if description else None
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
+    report = {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
+    if sent:
+        # What was sent is the record, so an older drafter is only a fact about it. Rebuilding would make the folder
+        # differ from what the company has, which the dashboard then flags as changed after sending.
+        report["sent_drafter"] = drafter_versions(folder / SENT_FOLDER)
+    return report
 
 
 # Above this share of the posting's skill terms a resume reads as copied from it, which screeners mark down. The

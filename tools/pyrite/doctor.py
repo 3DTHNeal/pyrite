@@ -14,7 +14,7 @@ from contextlib import closing
 from pathlib import Path
 
 from . import inbox
-from .checks import do_not_use
+from .checks import listed_terms, uncommented
 from .claude_code import find_claude, signed_in
 from .store import DB_PATH, EXAMPLE_ROOT
 
@@ -44,15 +44,16 @@ EXAMPLE_SETTINGS = (
     (("guard", "expected_on_resume"), "[guard]", "expected_on_resume"),
     (("inbox", "domains"), "[inbox.domains]", None),
 )
-CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
 # A line of the example this long is the fictional candidate's own writing, and this many of them left in a file means
 # it's still the example's, edited here and there. Shorter lines, such as a term in approved-terms.txt, could be anyone's.
 EXAMPLE_LINE_WORDS = 5
 EXAMPLE_LINES_LEFT = 3
-# Asides in parentheses and quoted wording explain a rule or suggest what to say instead. They name nothing secret.
-ASIDE = re.compile(r"\([^)]*\)|\"[^\"]*\"|“[^”]*”")
-# A sentence: everything up to a full stop, question mark or semicolon that ends a clause, so "2.5" stays whole.
-SENTENCE = re.compile(r"(?:[^.!?;]|[.!?;](?=\S))+")
+# The files `pyrite init --blank` writes with headings and comments only, for the person to fill in, with the Profile
+# section that starts each. approved-terms.txt may rightly stay empty, so it isn't named.
+BLANK_FILES = {"profile/facts.md": "basics", "profile/run-notes.md": None, "profile/resume.md": "masters",
+               "profile/cover-letter.md": "masters"}
+# A line that holds nothing yet: a bullet that's only its bold label, such as "- **Who:**", or a bare = or @ marker.
+EMPTY_LINE = re.compile(r"[-*][ \t]+\*\*[^*]+\*\*:?|[=@]")
 
 
 def _and(items: list[str]) -> str:
@@ -124,6 +125,20 @@ def still_example(root: Path) -> list[str]:
     return same
 
 
+def still_blank(root: Path) -> list[str]:
+    """The profile files with nothing of yours in them yet: only headings, comments, and labels with nothing after
+    them, as `pyrite init --blank` writes them."""
+    blank = []
+    for rel in BLANK_FILES:
+        text = _text(root / rel)
+        if text is None:
+            continue
+        lines = (row.strip() for row in uncommented(text).splitlines())
+        if not any(row and not row.startswith("#") and not EMPTY_LINE.fullmatch(row) for row in lines):
+            blank.append(rel)
+    return blank
+
+
 def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up.
 
@@ -150,6 +165,14 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.", "fix": fix,
                       "step": "achievements",
                       **({"tab": "facts"} if {"profile/facts.md", "profile/approved-terms.txt"} & set(same) else {})})
+    blank = still_blank(root)
+    if blank:
+        names = [blank[0], *(Path(rel).name for rel in blank[1:])]
+        step = BLANK_FILES[blank[0]]
+        todos.append({"what": f"{_and(names)} {'is' if len(blank) == 1 else 'are'} still blank.",
+                      "fix": "Fill in each, starting with facts.md, whose comments say what goes where. Claude writes from these "
+                             f"files, and the assay checks against them. For the resume and letter, {FORMAT_DOCS[0].lower()}{FORMAT_DOCS[1:]}",
+                      **({"step": step} if step else {}), **({"tab": "facts"} if "profile/facts.md" in blank else {})})
     for rel, fix in OPTIONAL_FILES.items():
         mine = _text(root / rel)
         if mine is not None and mine == _text(EXAMPLE_ROOT / rel):
@@ -188,6 +211,15 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
                       "fix": "They describe the fictional candidate: where they live, the roles and industries they want, their "
                              "confidential terms, and what their resume names. Set them for your own search, or empty them.",
                       "step": "roles"})
+    # What a blank search.toml leaves empty, and what each stops. An example's copy has both, so it's named above instead.
+    if not cfg.get("track"):
+        todos.append({"what": "profile/search.toml lists no roles under [[track]], so a pan keeps no postings.",
+                      "fix": "Add a [[track]] for each kind of role you want, with the title words that name it. A blank "
+                             "search.toml shows the form in a comment where they go.", "step": "roles"})
+    if not any(isinstance(board, dict) and board for board in cfg.get("watch", {}).values()):
+        todos.append({"what": "profile/search.toml watches no companies, so a pan reads no job boards.",
+                      "fix": 'Add each company under [watch.greenhouse], [watch.lever], [watch.ashby] or [watch.workday]. See '
+                             '"Adding companies" in docs/operating.md.', "step": "companies"})
     todos += _master_todos(root, cfg)
     todos += _unguarded_todos(root, cfg)
     todos += _seed_todos(root)
@@ -203,11 +235,11 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     contact = next((row.strip() for rel in guard.get("approved_sources", [])
                     for row in (_text(root / rel) or "").splitlines() if row.startswith("@ ")), None)
     todos = []
-    same = still_example(root)
+    same = still_example(root) + still_blank(root)
     for rel, kind in ((guard.get("heading_source", ""), "resume"), ("profile/cover-letter.md", "letter")):
         text = _text(root / rel) if rel else None
         if text is None or text == _text(EXAMPLE_ROOT / rel) or rel in same:
-            continue  # Missing or still the example's, and either is named already.
+            continue  # Missing, still the example's or still blank, and each is named already.
         lines = [row.strip() for row in text.splitlines()]
         problems = []
         if name and f"# {name}" not in lines:
@@ -227,40 +259,21 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     return todos
 
 
-def unguarded_terms(facts: str, forbidden: list[str], own_name: str = "") -> list[str]:
-    """Capitalized terms under "Do not use" in facts.md that no pattern in [guard] forbidden matches. The assay reads
-    nothing from that section, so a term listed only there isn't blocked by name.
-
-    Only words that could be a secret name count. The first word of each sentence is skipped, since it's usually a
-    label such as "Internal names:" or an instruction such as "Say". Asides in parentheses and quoted wording are
-    skipped, since they explain the rule rather than name something. The words of your own name are skipped too:
-    forbidding them would fail every draft."""
-    mine = {word.lower() for word in re.findall(r"\w+", own_name)}
-    found: list[str] = []
-    for row in do_not_use(facts).splitlines():
-        line = row.strip().lstrip("-*").strip()
-        spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
-        masked = ASIDE.sub(lambda aside: " " * len(aside.group(0)), line)
-        for sentence in SENTENCE.finditer(masked):
-            for term in list(CAPITALIZED.finditer(masked, sentence.start(), sentence.end()))[1:]:
-                covered = any(start < term.end() and term.start() < end for start, end in spans)
-                if not covered and term.group(0).lower() not in mine and term.group(0) not in found:
-                    found.append(term.group(0))
-    return found
-
-
 def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
-    facts = _text(root / "profile" / "facts.md")
-    if facts is None or "profile/facts.md" in still_example(root):
+    """Names under "Do not use" that the assay can't block by name, because your sources also state them as fact.
+    Every other name listed there is blocked as it is, with no pattern of its own."""
+    if "profile/facts.md" in still_example(root):
         return []
-    own_name = cfg.get("candidate", {}).get("name", "")
-    terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []), own_name)
-    if not terms:
+    shared = listed_terms(cfg, lambda rel: _text(root / rel) or "")[1]
+    if not shared:
         return []
-    return [{"what": f"profile/facts.md lists {_and(terms)} under \"Do not use\", but forbidden under [guard] in "
-                     f"profile/search.toml doesn't block {'it' if len(terms) == 1 else 'them'}.",
-             "fix": f"The assay blocks only the terms that forbidden lists, so add a pattern for each, such as "
-                    f"'\\b{terms[0]}\\b'. If one is only part of an explanation, put it in parentheses.",
+    terms = [term for term, _rel in shared]
+    it = "it" if len(terms) == 1 else "them"
+    return [{"what": f"{shared[0][1]} lists {_and(terms)} under \"Do not use\", but your approved sources also state {it} "
+                     f"as fact, so the assay can't block {it} by name.",
+             "fix": f"If {it} {'is' if len(terms) == 1 else 'are'} confidential, take {it} out of the rest of your sources, or add a "
+                    f"pattern to forbidden under [guard] in profile/search.toml, such as '\\b{terms[0]}\\b'. If one is only part "
+                    "of an explanation, put it in parentheses.",
              "step": "offlimits", "severity": "bad"}]
 
 
