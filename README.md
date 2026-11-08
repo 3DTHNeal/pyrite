@@ -128,4 +128,4 @@ I built this with [Claude Code](https://claude.com/claude-code), which also does
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Running Pyrite also means agreeing to the [end-user license agreement](EULA.md). It takes none of the MIT rights away, and says what you're responsible for: the truth of what you send, and following the terms of the job boards and services Pyrite connects to. [PRIVACY.md](PRIVACY.md) lists what data goes to which service, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists the separately licensed software Pyrite uses.
