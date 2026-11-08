@@ -294,6 +294,16 @@ The **Profile** tab brings together everything Pyrite knows about you and your s
 - **History** lists every save made on the Profile tab, newest first. Pick a file to see what putting back its earlier copy would change, then **Put back**. Putting back is a save like any other: the file as it is now is kept too, and a copy that would let drafts say more asks for a code. The latest 50 copies of each file are kept in `data/history/`.
 - A section with edits you haven't saved shows how many, with **Discard** and **Save changes**. Leaving it asks first. If a file changed on disk after the tab loaded it, the save is refused and nothing is written.
 - The address names the section, as `#profile/achievements`, so a bookmark or reload comes back to it.
+- In a section with an editor, every change is worked out by the code a save uses, before you save. **What changes in your files** shows each file's lines as they'd change, **Before you save** says anything worth knowing first, and a change that needs a code says so and why.
+
+The sections under **About you** that have editors so far:
+
+- **Name and contact** sets your name, each part of the contact line and the paper size. A change goes everywhere the name or contact line appears: `[candidate]` and `[documents]` in `search.toml`, Contact in `facts.md`, and the `# Name` and `@` lines of `profile/resume.md` and `profile/cover-letter.md`. If the assay reads the contact line from a file outside `profile/`, the section names it, since you change that one yourself.
+- **Work history** edits employers, roles, titles, places and dates, and lines such as Education. Each change is made to its own line of the Timeline in `facts.md`, so notes after the dates and the way you wrote things stay. The same change is made to the matching `###` and `####` headings in `profile/resume.md`, and an employer's dates follow its roles when they matched them before. A role is refused if `facts.md` wouldn't read it back as typed, such as a title with a comma that isn't in your master resume. **On every resume** sets `expected_on_resume`.
+- **Off limits** lists what drafts must never mention and what you haven't done. **Block it** adds a line to "Do not use" or "Unsupported" in `facts.md` and a pattern to `forbidden` or `unsupported` under `[guard]`, written to catch plurals, hyphens and spacing. A term listed in `facts.md` that no pattern blocks is named, with a button to block it. **Test a sentence** shows how the assay reads any sentence, including when a denial makes a claim acceptable. **Advanced** shows and edits the patterns themselves. Taking anything off asks for a code.
+- **Skills and terms** shows `approved-terms.txt` a term at a time, under the comments that group them. Taking a term off saves straight away; approving one asks for a code.
+
+Lists in `search.toml` are changed an item at a time, so the other items, their lines and any comments among them stay as they were.
 
 ## Your facts
 

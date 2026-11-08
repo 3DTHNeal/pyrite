@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import checks, claude_code, confirm, deadline, doctor, facts, fill, mail, market, outlook, prep, profile, refresh, settings, store, tasks, workday
+from . import checks, claude_code, confirm, deadline, doctor, facts, fill, mail, market, outlook, prep, profile, refresh, settings, steps, store, tasks, workday
 from . import score as scoring
 from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
@@ -645,7 +645,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/facts":
                 return self._json(facts.view())
             if path == "/api/profile":
-                return self._json({**profile.view(), "history": profile.history()})
+                return self._json(_profile_page())
             if path == "/api/profile/kept":
                 query = parse_qs(urlparse(self.path).query)
                 try:
@@ -791,7 +791,17 @@ def _write_profile(changes, based_on, body: dict, reason: str, step) -> dict:
     profile.refuse_stale(current, based_on)
     confirm.require(changes, current, based_on, body.get("request_id"), body.get("code"))
     profile.write(changes, based_on, reason, step if isinstance(step, str) else None)
-    return {**profile.view(), "history": profile.history()}
+    return _profile_page()
+
+
+def _profile_page() -> dict:
+    """Everything the Profile tab shows: the files as the sections read them, and History."""
+    return {**profile.view(), **steps.view(), "history": profile.history()}
+
+
+def _draft_profile(body: dict) -> dict:
+    """What a section's form would write, worked out by the same code a save uses. Nothing is written."""
+    return steps.draft(str(body.get("step") or ""), body.get("edits"), body.get("based_on"))
 
 
 def _profile_code(body: dict) -> dict:
@@ -804,8 +814,10 @@ def _profile_code(body: dict) -> dict:
     raise ValueError("Ask to resend or cancel a code.")
 
 
-# Saves that change the profile. Each refuses a stale form, and any that loosens a check asks for a code first.
+# Saves that change the profile, and the drafts that show what one would do. Each refuses a stale form, and any save
+# that loosens a check asks for a code first.
 PROFILE_WRITES = {
+    "/api/profile/draft": _draft_profile,
     "/api/settings": settings.save,
     "/api/facts": _save_facts,
     "/api/profile": _save_profile,

@@ -274,19 +274,61 @@ class Doc:
     def set_role(self, role: Role, title: str | None = None, place: str | None = None,
                  start: str | None = None, end: str | None = None) -> None:
         """Change a role's title, place or dates. Dates are written as the line already writes them, such as Jan 2023."""
-        line = role.text
-        changes = []
-        if title is not None or place is not None:
-            head = ", ".join(part for part in ((title if title is not None else role.title).strip(),
-                                                (place if place is not None else role.place).strip()) if part)
-            changes.append((role.head, head))
+        self.set_line(role.line, role_text(role, title, place, start, end))
+
+
+def role_text(role: Role, title: str | None = None, place: str | None = None,
+              start: str | None = None, end: str | None = None) -> str:
+    """The role's line with its title, place or dates changed, and everything else, such as a note, as it was."""
+    line = role.text
+    changes = []
+    if title is not None or place is not None:
+        head = ", ".join(part for part in ((title if title is not None else role.title).strip(),
+                                            (place if place is not None else role.place).strip()) if part)
+        changes.append((role.head, head))
+    if start is not None:
+        changes.append((role.start_at, start))
+    if end is not None:
+        changes.append((role.end_at, end))
+    for (a, b), new in sorted(changes, reverse=True):
+        line = line[:a] + new + line[b:]
+    return line
+
+
+def employer_text(line: str, name: str | None = None, start: str | None = None, end: str | None = None) -> str:
+    """An employer's line with its name or dates changed. A one-line employer ("**Name,** Title, ...") has only its name
+    here: its dates are its role's."""
+    bold = BOLD.search(line)
+    if not bold:
+        raise FactsError("That line isn't an employer any more.")
+    inside, offset = bold["bold"], bold.start("bold")
+    changes = []
+    if inside.rstrip().endswith(","):
+        if name is not None:
+            core = inside.rstrip()[:-1]
+            lead = len(core) - len(core.lstrip())
+            changes.append((offset + lead, offset + len(core), name.strip()))
+    else:
+        dates = _last_dates(inside)
+        if not dates:
+            raise FactsError("That employer's line has no dates any more.")
         if start is not None:
-            changes.append((role.start_at, start))
+            changes.append((offset + dates.start("start"), offset + dates.end("start"), start))
         if end is not None:
-            changes.append((role.end_at, end))
-        for (a, b), new in sorted(changes, reverse=True):
-            line = line[:a] + new + line[b:]
-        self.set_line(role.line, line)
+            changes.append((offset + dates.start("end"), offset + dates.end("end"), end))
+        if name is not None:
+            head = inside[:dates.start()].rstrip(" ,")
+            lead = len(head) - len(head.lstrip())
+            changes.append((offset + lead, offset + len(head), name.strip()))
+    for a, b, new in sorted(changes, reverse=True):
+        line = line[:a] + new + line[b:]
+    return line
+
+
+def date_separator(text: str) -> str:
+    """How the first date range in the text joins its dates, such as " – ", for new lines to match."""
+    match = DATES.search(text)
+    return match["sep"] if match else " – "
 
 
 def _last_dates(text: str) -> re.Match | None:
