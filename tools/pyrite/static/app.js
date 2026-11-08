@@ -17,7 +17,7 @@ function h(tag, attrs = {}, ...children) {
     else if (key === "style") el.setAttribute("style", value);
     else el.setAttribute(key, value === true ? "" : value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     el.append(child.nodeType ? child : document.createTextNode(String(child)));
   }
@@ -630,6 +630,7 @@ function industryCard(industry, index, cards) {
   companies.value = (industry.companies || []).join("\n");
   const wants = h("textarea", { rows: "4" });
   wants.value = (industry.wants || []).map((w) => (w.match ? `${w.name}: ${w.match}` : w.name)).join("\n");
+  const naics = h("input", { value: (industry.naics || []).join(", "), placeholder: "For example: 3332, 334413" });
   const collect = () => ({
     name: name.value,
     points: settingsNumber(points),
@@ -639,6 +640,7 @@ function industryCard(industry, index, cards) {
       const split = line.indexOf(": ");
       return split < 0 ? { name: line } : { name: line.slice(0, split), match: line.slice(split + 2) };
     }),
+    naics: naics.value.split(/[\s,;]+/).filter(Boolean),
   });
   const summary = h("summary", {});
   const skills = h("div", {});
@@ -676,7 +678,8 @@ function industryCard(industry, index, cards) {
     root.remove();
   } }, "Remove");
   root.append(summary,
-    h("div", { class: "industry-head" }, settingsField("Name", name), settingsField("Points", points)),
+    h("div", { class: "industry-head" }, settingsField("Name", name), settingsField("Points", points),
+      settingsField("Industry codes (NAICS)", naics, "For the official numbers on the Industries tab.")),
     h("div", { class: "industry-lists" },
       settingsField("Words in a posting", terms, "One per line. Patterns work: \\b marks a word's edge."),
       settingsField("Employers", companies, "One per line. These always count."),
@@ -1472,6 +1475,203 @@ function closeDrawer() {
   drawerOpener = null;
 }
 
+// ---- Industries ----
+// What Pyrite has seen, the official numbers and Claude's sourced outlook, for each industry under [promote].
+
+let industryData = null;
+let industriesLoading = false;
+let industriesWatch = null;
+const industriesOpen = new Set();
+
+const quarterName = (q) => (q ? q.replace("Q", " Q") : "");
+const money = (n) => (n ? `$${n.toLocaleString()}` : "–");
+
+function percent(n) {
+  if (n === null || n === undefined) return h("span", { class: "muted" }, "–");
+  const tone = n > 0 ? "up" : n < 0 ? "down" : "";
+  return h("span", { class: tone }, `${n > 0 ? "+" : ""}${n.toFixed(1)}%`);
+}
+
+async function loadIndustries() {
+  if (industriesLoading) return;
+  industriesLoading = true;
+  if (!industryData) fill($("industries-view"), h("p", { class: "muted" }, "Reading the official numbers. The first time takes a few seconds."));
+  try {
+    industryData = await api("/api/industries");
+    renderIndustries();
+    $("industries-error").textContent = "";
+  } catch (err) {
+    $("industries-error").textContent = err.message;
+  } finally {
+    industriesLoading = false;
+  }
+  // While an outlook is being written, look again now and then, until it's done or you've moved to another tab.
+  clearTimeout(industriesWatch);
+  if (industryData && industryData.industries.some((i) => i.outlook.state === "running")) {
+    industriesWatch = setTimeout(() => { if (!$("view-industries").hidden) loadIndustries(); }, 8000);
+  }
+}
+
+function seenPart(industry, since) {
+  const s = industry.seen;
+  const tile = (value, label, sub) => h("div", { class: "kpi" },
+    h("span", { class: "value" }, value), h("span", { class: "label" }, label), h("span", { class: "sub" }, sub));
+  const days = since ? Math.floor((Date.now() - toDate(since).getTime()) / 864e5) : null;
+  return [
+    h("h3", { class: "info-heading" }, "In your search"),
+    h("div", { class: "info-tiles" },
+      tile(s.recent, "Postings in 90 days", [`${s.by_month[0]} in the last 30 days`, s.share !== null ? `${s.share}% of all kept` : ""].filter(Boolean).join(", ")),
+      tile(s.open, "Still listed", "Not yet taken down by the employer"),
+      tile(`${s.local} / ${s.remote}`, "Local / remote", "Of the last 90 days"),
+      tile(s.applied, "Applied", s.applied ? `${s.replied} replied, ${s.interviews} interviewed${s.offers ? `, ${s.offers} offered` : ""}` : "None yet")),
+    s.employers.length ? h("div", { class: "info-row" }, h("span", { class: "muted" }, "Posting most:"),
+      s.employers.map(([name, count]) => pill("info", count > 1 ? `${name} ×${count}` : name, `${plural(count, "posting")} in the last 90 days`))) : null,
+    h("p", { class: "info-note" }, "Postings that passed your filters and count as this industry, judged the way your preferred industries are.",
+      days !== null && days < 90 ? ` Pyrite has only been watching since ${shortDate(since)}, so the 90 days aren't full yet.` : ""),
+  ];
+}
+
+function officialRow(area) {
+  const name = h("td", {}, area.name);
+  if (area.error) return h("tr", {}, name, h("td", { class: "gap", colspan: "7" }, area.error));
+  const workplaces = area.estabs === undefined ? h("td", { class: "num gap" }, "–")
+    : h("td", { class: "num" }, area.estabs.toLocaleString(),
+      area.estabs_change ? h("span", { class: area.estabs_change > 0 ? "up" : "down" }, ` ${area.estabs_change > 0 ? "+" : ""}${area.estabs_change}`) : null);
+  if (area.jobs === undefined || area.jobs === null) {
+    return h("tr", {}, name, h("td", {}, quarterName(area.quarter)),
+      h("td", { class: "gap", colspan: "2" }, area.withheld && area.withheld.length ? "Withheld" : "Not on record"),
+      workplaces,
+      h("td", { class: "gap", colspan: "3" }, area.withheld && area.withheld.length
+        ? "Jobs and pay are withheld here, since they would reveal individual employers. Workplace counts are still published."
+        : "None of these codes has a published figure here."));
+  }
+  return h("tr", {},
+    name,
+    h("td", {}, quarterName(area.quarter)),
+    h("td", { class: "num" }, area.jobs.toLocaleString()),
+    h("td", { class: "num" }, percent(area.jobs_change_pct)),
+    workplaces,
+    h("td", { class: "num" }, money(area.weekly_pay), " ", percent(area.pay_change_pct)),
+    h("td", { class: "num" }, area.pay_vs_all ? `${area.pay_vs_all}%` : "–"),
+    h("td", { class: "num" }, area.concentration ? area.concentration.toFixed(2) : "–"));
+}
+
+function officialPart(industry, about) {
+  const heading = h("h3", { class: "info-heading" }, "Official numbers");
+  if (!industry.codes.length) {
+    return [heading, h("p", { class: "muted" }, "Add this industry's codes (NAICS) on the Settings tab to see official employment, pay and growth here. ",
+      h("a", { href: "https://www.census.gov/naics/", target: "_blank", rel: "noopener" }, "Look up codes at census.gov"), ".")];
+  }
+  const partial = industry.official.filter((a) => a.jobs !== undefined && a.jobs !== null && ((a.withheld || []).length || (a.absent || []).length));
+  return [
+    heading,
+    h("p", { class: "info-codes" }, "Counts ", industry.codes.map((c, i) => [i ? "; " : "", h("span", { class: "code" }, c.code), c.title ? ` ${c.title}` : ""])),
+    industry.official.length ? h("div", { class: "table-wrap" }, h("table", { class: "grid" },
+      h("thead", {}, h("tr", {},
+        h("th", {}, "Area"), h("th", {}, "Quarter"),
+        h("th", { class: "num", title: "Private-sector jobs in the last month of the quarter" }, "Jobs"),
+        h("th", { class: "num", title: "Change in jobs from the same month a year before" }, "Over a year"),
+        h("th", { class: "num", title: "Establishments: each work site counts once, so one employer can have several. The signed number is the change over a year." }, "Workplaces"),
+        h("th", { class: "num", title: "Average weekly pay, and its change over a year. A first quarter includes annual bonuses." }, "Weekly pay"),
+        h("th", { class: "num", title: "This industry's average pay as a share of the average for all private jobs in the same area" }, "Vs all jobs"),
+        h("th", { class: "num", title: "Location quotient: above 1 means this industry is a bigger share of jobs here than across the country" }, "Concentration"))),
+      h("tbody", {}, industry.official.map(officialRow)))) : null,
+    partial.map((a) => h("p", { class: "info-note" }, `${a.name}: ${[
+      (a.withheld || []).length ? `${a.withheld.join(", ")} withheld to protect individual employers` : "",
+      (a.absent || []).length ? `no ${a.absent.join(", ")} employers on record` : "",
+    ].filter(Boolean).join("; ")}, so the figures above leave them out.`)),
+    industry.official.filter((a) => a.note).map((a) => h("p", { class: "info-note" }, `${a.name}: ${a.note}`)),
+    h("p", { class: "info-note" }, "Private employers only, from the BLS ",
+      h("a", { href: about, target: "_blank", rel: "noopener" }, "Quarterly Census of Employment and Wages"),
+      ", which counts nearly every job from employers' unemployment insurance filings. It runs five to six months behind, and a metro area's industry detail comes out later than a state's. Industry codes are broad, so a code can include work well outside what you mean by the industry."),
+  ];
+}
+
+function outlookPart(industry) {
+  const o = industry.outlook;
+  const running = o.state === "running";
+  const report = o.report;
+  const error = h("p", { class: "error", role: "alert" });
+  const start = h("button", { class: "btn", type: "button", disabled: running, onclick: async () => {
+    start.disabled = true;
+    try {
+      await api("/api/industries/outlook", { name: industry.name });
+      await loadIndustries();
+    } catch (err) {
+      error.textContent = err.message;
+      start.disabled = false;
+    }
+  } }, running ? "Researching…" : report ? "Research again" : "Research with Claude");
+  let line;
+  if (running) line = `Searching the web, started ${ago(o.started_at)}. This takes a few minutes.`;
+  else if (o.state === "failed") line = h("span", { class: "alert" }, `The last try didn't finish: ${o.detail}${report ? " The outlook below is the one before it." : ""}`);
+  else if (report) line = `Researched ${ago(report.generated_at)}${report.area ? ` for ${[report.area.metro, report.area.state, report.area.country].filter(Boolean).join(", ")}` : ""}.`;
+  else line = "Claude searches the web for this industry's news where you live, and every point links its source. Each run uses your Claude plan for a few minutes.";
+  const sources = report ? new Map(report.sources.map((s) => [s.n, s])) : new Map();
+  const cite = (n) => {
+    const source = sources.get(n);
+    const href = source && safeHref(source.url);
+    return href ? h("a", { class: "cite", href, target: "_blank", rel: "noopener noreferrer", title: source.title }, `[${n}]`) : null;
+  };
+  const dropped = report ? report.dropped.points : 0;
+  return h("div", { class: "outlook" },
+    h("h3", { class: "info-heading" }, "Outlook"),
+    h("div", { class: "outlook-head" }, start, h("span", { class: "muted" }, line)),
+    error,
+    report ? [
+      report.sections.map((section) => [
+        h("h4", {}, section.heading),
+        h("ul", {}, section.points.map((point) => h("li", {}, point.text,
+          point.scope ? pill("muted", point.scope, "Which area this point is about") : null,
+          point.sources.map(cite)))),
+      ]),
+      h("details", { class: "outlook-sources" }, h("summary", {}, `Sources (${report.sources.length})`),
+        h("ol", {}, report.sources.map((s) => h("li", { value: String(s.n) },
+          safeHref(s.url) ? h("a", { href: safeHref(s.url), target: "_blank", rel: "noopener noreferrer" }, s.title) : s.title,
+          [s.publisher, s.date].filter(Boolean).length ? h("span", { class: "muted" }, ` · ${[s.publisher, s.date].filter(Boolean).join(", ")}`) : null)))),
+      h("p", { class: "info-note" }, "Written by Claude from a web search. Pyrite kept only points whose sources came up in that search",
+        dropped ? `, and dropped ${plural(dropped, "point")} that didn't` : "",
+        ". It can't tell whether a page says what a point claims, so open the source before relying on it."),
+    ] : null);
+}
+
+function industrySummary(industry) {
+  const s = industry.seen;
+  const local = industry.official.find((a) => a.jobs_change_pct !== undefined && a.jobs_change_pct !== null);
+  const o = industry.outlook;
+  return [
+    plural(s.recent, "posting") + " in 90 days",
+    local ? `${local.name.replace(/ MSA$/, "")} jobs ${local.jobs_change_pct > 0 ? "+" : ""}${local.jobs_change_pct.toFixed(1)}% over a year` : null,
+    o.state === "running" ? "Researching…" : o.report ? `Outlook from ${shortDate(o.report.generated_at)}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function renderIndustries() {
+  const data = industryData;
+  const view = $("industries-view");
+  if (!data.industries.length) {
+    return fill(view, h("p", { class: "muted" }, "You don't follow any industries yet. Add them on the Settings tab, and they'll show here."));
+  }
+  const m = data.market;
+  const place = [m.metro, m.state, m.us ? "the United States" : null].filter(Boolean).join(", ");
+  fill(view,
+    h("div", { class: "settings-intro" },
+      h("p", { class: "muted" }, `How each industry you follow is doing${place ? ` in ${place}` : ""}: what Pyrite has seen, the official employment numbers, and an outlook Claude researches when you ask.`),
+      h("button", { class: "btn", type: "button", onclick: loadIndustries }, "Reload")),
+    data.problems.map((problem) => h("p", { class: "alert" }, problem)),
+    m.us && !m.metro && !m.state ? h("p", { class: "muted" }, "To see local numbers beside the national ones, add your state and metro area under [market] in profile/search.toml.") : null,
+    data.industries.map((industry, index) => {
+      const root = h("details", { class: "panel industry", open: industriesOpen.has(industry.name) || (!industriesOpen.size && index === 0) },
+        h("summary", {}, h("span", { class: "industry-name" }, industry.name), h("span", { class: "muted" }, industrySummary(industry))),
+        seenPart(industry, data.watching_since),
+        officialPart(industry, data.about),
+        outlookPart(industry));
+      if (root.open) industriesOpen.add(industry.name);
+      root.addEventListener("toggle", () => { if (root.open) industriesOpen.add(industry.name); else industriesOpen.delete(industry.name); });
+      return root;
+    }));
+}
+
 // ---- Wiring ----
 
 const tabs = [...document.querySelectorAll(".tabs button")];
@@ -1489,6 +1689,7 @@ function showTab(name, focus = false) {
   if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
   if (tab.dataset.tab === "settings" && !dirtyParts.size) loadSettings();
   if (tab.dataset.tab === "facts" && !factsOpen) loadFacts();
+  if (tab.dataset.tab === "industries") loadIndustries();
 }
 
 tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tab.dataset.tab)));

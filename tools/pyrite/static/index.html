@@ -41,6 +41,7 @@
   <nav class="tabs" role="tablist" aria-label="Views">
     <button role="tab" data-tab="pipeline" aria-selected="true">Pipeline</button>
     <button role="tab" data-tab="radar" aria-selected="false">Prospects</button>
+    <button role="tab" data-tab="industries" aria-selected="false">Industries</button>
     <button role="tab" data-tab="archive" aria-selected="false">Closed</button>
     <button role="tab" data-tab="sources" aria-selected="false">Sources</button>
     <button role="tab" data-tab="facts" aria-selected="false">Facts</button>
@@ -77,6 +78,11 @@
     </div>
     <p class="muted radar-note">Priority is the score, plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost. Repost counts begin with the first pan.</p>
     <div class="table-wrap"><table id="radar" class="grid"></table></div>
+  </section>
+
+  <section id="view-industries" class="view industries-tab" hidden>
+    <div id="industries-view"></div>
+    <p id="industries-error" class="error" role="alert"></p>
   </section>
 
   <section id="view-archive" class="view" hidden>
