@@ -296,16 +296,17 @@ def _says_none(page) -> bool:
     return any(found.nth(i).is_visible() for i in range(found.count()))
 
 
-def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS_MS):
-    """Wait for a search to answer. Returns the picker's already-chosen entry, an exact match for one of `names`, or neither
-    once the list has settled.
+def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS_MS, chosen_names: list[str] | None = None):
+    """Wait for a search to answer. Returns the picker's already-chosen entry (one of `chosen_names`, by default `names`),
+    an exact match for one of `names`, or neither once the list has settled.
 
     `before` is what was on show before the search, so a list left over from the last picker isn't taken for this one's.
     Two searches can answer with the same entries, though ("Linux", then "Linux Server"), so a list that hasn't changed
     by the end of the grace period counts as this search's answer.
     """
     pattern = "|".join(re.escape(n) for n in names)
-    chosen = page.get_by_role("option", name=re.compile(rf"^(?:{pattern}), press delete", re.I))
+    picked = "|".join(re.escape(n) for n in (chosen_names or names))
+    chosen = page.get_by_role("option", name=re.compile(rf"^(?:{picked}), press delete", re.I))
     exact = page.get_by_role("option", name=re.compile(rf"^(?:{pattern})( not checked| checked)?$", re.I))
     now = time.monotonic()
     deadline, grace = now + timeout_ms / 1000, now + GRACE_MS / 1000
@@ -338,9 +339,10 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
                 terms: list[str] | None = None) -> str:
     """Type into one of Workday's search pickers and tick the entry that matches. Returns what was picked.
 
-    `selector` is a CSS selector, or a locator already in hand. Each wanted name is searched for in turn, and any of
-    them is accepted among the results, so a search for "Python" can turn up "Python (Programming Language)". `terms`
-    are further searches to try, such as the first words of a school's name, that must still turn up a wanted name.
+    `selector` is a CSS selector, or a locator already in hand. Each wanted name is searched for in turn, best first,
+    and a name is accepted among the results once its own search has come round, so a search for "Python" can turn up
+    "Python (Programming Language)" but a last-resort name is never taken while a better one is still to be searched.
+    `terms` are further searches to try, such as the first words of a school's name, that must still turn up a wanted name.
     With `must`, the nearest entry offered is taken and reported for a look. With `keep_text`, a name the list lacks
     stays typed in the box, since some tenants accept one that way, and is reported for a look. Otherwise the box
     is cleared and the field is left to the candidate.
@@ -351,11 +353,14 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
     seen: list[str] = []
     said_none: list[str] = []
     for term in list(dict.fromkeys(wanted + list(terms or []))):
+        # The wanted names whose turn has come: up to this one, or all of them for a further search term.
+        allowed = wanted[:wanted.index(term) + 1] if term in wanted else wanted
         before = set(_texts(_options(page)))
         box.fill(term)
         box.press("Enter")
         page.wait_for_timeout(SETTLE_MS // 3)
-        chosen, exact = _results(page, wanted, before)
+        # What the picker selected by itself counts whichever name it is; it is on the form already.
+        chosen, exact = _results(page, allowed, before, chosen_names=wanted)
         if chosen is None and exact is None:
             found = [t.strip() for t in _texts(_options(page)) if t.strip() and "press delete" not in t.lower()]
             seen += [t for t in found if t not in seen]
@@ -372,7 +377,7 @@ def pick_search(page, selector, wanted: list[str], report: Report, what: str, mu
             page.wait_for_timeout(300)
             report.filled.append(f"{what}: {name}")
             return name
-        near = _same_name(page, wanted)
+        near = _same_name(page, allowed)
         if near:
             report.filled.append(f"{what}: {near}")
             return near

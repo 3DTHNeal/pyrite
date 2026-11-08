@@ -2902,7 +2902,8 @@ class Autofill(ClaudeRun):
                 {"school": "Lakeshore Nowhere Institute", "degree": "Doctor of Philosophy", "field": "Business Administration", "gpa": "", "from": "", "to": ""},
                 {"school": "Lakeshore School of Business and Technology", "degree": "Master of Business Administration", "field": "Business Administration", "gpa": "", "from": "", "to": ""},
                 {"school": "Western Prairie University", "degree": "Bachelor of Science", "field": "Marine and Coastal Engineering Technology",
-                 "field_alternatives": ["Engineering Technology"], "gpa": "3.4", "from": "2004", "to": "2008"},
+                 # The last-resort name shows up in the very first search, and must still lose to the better one searched after it.
+                 "field_alternatives": ["Engineering Technology", "Coastal and Ocean Engineering Technology"], "gpa": "3.4", "from": "2004", "to": "2008"},
             ],
             "languages": ["English"],
             # "Linux Server" is searched right after "Linux" and gets the same list back, which must still count as its answer.
