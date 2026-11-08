@@ -24,6 +24,8 @@ Pyrite is a personal project. I run it on my own job search and share it so othe
   git config core.hooksPath .githooks
   ```
 
+  The hook uses this checkout's venv, or the main checkout's from a `git worktree`. To use another Python, set `git config pyrite.python /path/to/python`.
+
   The tests are split by area (`test_assay.py`, `test_discovery.py`, `test_dashboard.py` and so on), and `tools/tests/support.py` sets up the throwaway workspace they share. Note what changed under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
 
 - **Security problems** go through [SECURITY.md](SECURITY.md), not an issue.
