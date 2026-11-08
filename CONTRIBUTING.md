@@ -19,5 +19,6 @@ Pyrite is a personal project. I run it on my own job search and share it so othe
   The tests are split by area (`test_assay.py`, `test_discovery.py`, `test_dashboard.py` and so on), and `tools/tests/support.py` sets up the throwaway workspace they share. Note what changed under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
 
 - **Security problems** go through [SECURITY.md](SECURITY.md), not an issue.
+- **Conduct:** the [code of conduct](CODE_OF_CONDUCT.md) covers how we treat each other here, and how to report someone who doesn't.
 
 Contributions are licensed under the [MIT License](LICENSE), as section 10 of the [EULA](EULA.md) says.
