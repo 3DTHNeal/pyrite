@@ -66,7 +66,7 @@ Applied by `tools/build_resume.py`, `tools/pyrite/checks.py` and the tailoring i
 
 ## Drafter versions
 
-The drafter is `tools/build_resume.py` plus the writing rules in `tools/pyrite/tailor.md`, `refresh_resume.md` and `daily_run.md`. Its version is `DRAFTER_VERSION` in `tools/pyrite/checks.py`, and every `.docx` and `.pdf` it builds carries that number in its properties (Version and Keywords in Word; Keywords in the PDF). `pyrite check` and the dashboard say which drafter built a folder's files and warn when it isn't the current one. A file with no version was built by drafter 1.
+The drafter is `tools/build_resume.py` plus the writing rules in `tools/pyrite/tailor.md`, `refresh_resume.md` and `daily_run.md`. Its version is `DRAFTER_VERSION` in `tools/pyrite/checks.py`, and every `.docx` and `.pdf` it builds carries that number in its properties (Version and Keywords in Word; Keywords in the PDF). `pyrite check` and the dashboard say which drafter built a folder's files and warn when it isn't the current one, except for a folder with a sent copy, where `pyrite check` only says which drafter the sent files came from. A file with no version was built by drafter 1.
 
 | Version | Date | What changed |
 |---|---|---|

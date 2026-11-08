@@ -34,20 +34,23 @@ Then open <http://127.0.0.1:8788>, and leave the window you ran it in open: clos
 python tools/pyrite.py check example/applications/2026-11-globex-staff-firmware-engineer --company "Globex Automation" --title "Staff Firmware Engineer"
 ```
 
-It prints its verdict as JSON. These are the errors in it:
+It prints its verdict, starting with these errors, then five warnings about roles the draft left out:
 
 ```text
-Resume uses a confidential term: 'Bluebird'
-Resume makes an unsupported claim: '- Led ISO 26262 safety certification for the fleet.'
-Resume makes an unsupported claim: '- Reduced field defect rates by 83%.'
-Resume makes an unsupported claim: '- Reproduced field failures in simulation by replaying robot logs.'
-Resume contains a link or domain that isn't yours: '- Managed a team of 40 engineers. Details at alex-portfolio.example.io.'
-Resume has an unfilled placeholder: '[X]'
-Resume has percentages not in the fact bank: 83%
-Resume has numbers not in the fact bank: 2015, 26262, 40
-Resume names terms not in your approved sources: Kubernetes, VP, ISO. Remove them, or add them to profile/approved-terms.txt if they're true.
-Employer, title or dates differ from your record: '#### VP of Engineering | Madison, WI | Jan 2015 – Oct 2026'
+The assay blocked this draft: 10 problems to fix.
+  - Resume uses a confidential term: 'Bluebird'
+  - Resume makes an unsupported claim: '- Led ISO 26262 safety certification for the fleet.'
+  - Resume makes an unsupported claim: '- Reduced field defect rates by 83%.'
+  - Resume makes an unsupported claim: '- Reproduced field failures in simulation by replaying robot logs.'
+  - Resume contains a link or domain that isn't yours: '- Managed a team of 40 engineers. Details at alex-portfolio.example.io.'
+  - Resume has an unfilled placeholder: '[X]'
+  - Resume has percentages not in the fact bank: 83%
+  - Resume has numbers not in the fact bank: 2015, 26262, 40
+  - Resume names terms not in your approved sources: Kubernetes, VP, ISO. Remove them, or add them to profile/approved-terms.txt if they're true.
+  - Employer, title or dates differ from your record: '#### VP of Engineering | Madison, WI | Jan 2015 – Oct 2026'
 ```
+
+Add `--json` for the same verdict as JSON, which is what it prints whenever its output goes to a file or another program.
 
 It also refuses the disguises that would slip a word past a pattern: invisible characters, a letter borrowed from another alphabet, and a word split in two by formatting. A negative only counts as a denial when it sits right next to the claim it denies, so "With no added headcount, cut defects by 83%" is still a claim of 83%.
 

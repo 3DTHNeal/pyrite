@@ -21,18 +21,18 @@ Commands below use `.venv/Scripts/python.exe`, which is the Windows path. Elsewh
 A timer sweeps the job boards before this run, so don't start with a sweep.
 
 ```bash
-.venv/Scripts/python.exe tools/pyrite.py queue
+.venv/Scripts/python.exe tools/pyrite.py queue --json
 ```
 
 Look at `hours_since_sweep` and `failing_sources`, and note any failures for the briefing. Only if `hours_since_sweep` is over 20 or empty, run one yourself, giving the command a 10-minute timeout, then carry on with whatever it found:
 
 ```bash
-.venv/Scripts/python.exe tools/pyrite.py discover --max-minutes 8
+.venv/Scripts/python.exe tools/pyrite.py discover --max-minutes 8 --json
 ```
 
 ## 2. Triage
 
-Read `profile/facts.md` first. `to_triage` lists the newest listings that haven't been reposted first. `ghost_risk` and `ghost_reason` mean a listing has been up a long time, keeps coming back, or says it stays up for ongoing hiring. That's a reason for doubt, not a reason to skip on its own: say so in your verdict when it applies, and in the briefing if a ghost risk is the strongest match. `unconfirmed` means the latest pan didn't see the listing, so it may be down: say so too. `scam_signs` lists a posting's scam tells, such as asking for a fee or a chat app: give it skip and say why. For each job in `to_triage`, read it with `.venv/Scripts/python.exe tools/pyrite.py job <id>`, then record a verdict:
+Read `profile/facts.md` first. `to_triage` lists the newest listings that haven't been reposted first. `ghost_risk` and `ghost_reason` mean a listing has been up a long time, keeps coming back, or says it stays up for ongoing hiring. That's a reason for doubt, not a reason to skip on its own: say so in your verdict when it applies, and in the briefing if a ghost risk is the strongest match. `unconfirmed` means the latest pan didn't see the listing, so it may be down: say so too. `scam_signs` lists a posting's scam tells, such as asking for a fee or a chat app: give it skip and say why. For each job in `to_triage`, read it with `.venv/Scripts/python.exe tools/pyrite.py job <id> --json`, then record a verdict:
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py triage <id> --fit strong --reason "One plain sentence for the candidate on why."
@@ -47,7 +47,7 @@ Check the location yourself, against `run-notes.md`. The filter can be fooled: "
 
 ## 3. Tailor
 
-Run `.venv/Scripts/python.exe tools/pyrite.py queue` again. Work through `to_tailor` in order, skipping `stretch` jobs unless `priority` is 1. `priority` 1 means the candidate picked that job personally. For each:
+Run `.venv/Scripts/python.exe tools/pyrite.py queue --json` again. Work through `to_tailor` in order, skipping `stretch` jobs unless `priority` is 1. `priority` 1 means the candidate picked that job personally. For each:
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py folder <id>
@@ -81,7 +81,7 @@ Follow the model notes: the posting link, the role in brief, a table mapping wha
 ### Build and check
 
 ```bash
-.venv/Scripts/python.exe tools/pyrite.py finish <id>
+.venv/Scripts/python.exe tools/pyrite.py finish <id> --json
 ```
 
 This runs the fact checker and builds the `.docx` and `.pdf`. It marks the job ready only if everything passes. If it fails, fix the draft and run it again, at most twice. If it still fails, move on: the job stays blocked on the dashboard with the reasons listed. After several failed mornings it leaves `to_tailor` and appears under `stopped_retrying`, until the candidate asks for it again.

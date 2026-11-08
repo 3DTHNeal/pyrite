@@ -24,6 +24,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - **Not rechecked** on a listing the latest full pan didn't see, because its board failed, left the watch list or didn't answer. It may be down.
 - **Possible ghost** also covers a posting that calls itself an evergreen or pipeline role, and a listing with no date that a pan first found 90 days ago or more.
 - Mail scam warnings catch task scams (paid "jobs" rating apps or products), a check sent to buy equipment, and interviews over a chat.
+- On a terminal, `pyrite discover`, `rescore`, `queue`, `job`, `check`, `finish`, `fill` and `usage` say what they found in a few lines of words, such as how many postings a pan read, how many were new and why the rest were filtered out. `--json` prints the JSON as before, and so does any run whose output goes to a file or another program, so the daily run, scheduled pans and scripts see no change. `pyrite sources` takes `--json` too.
 
 ### Changed
 
@@ -58,6 +59,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- `pyrite check` on the folder of a job with a sent copy no longer says to rebuild documents from an older drafter. It says which drafter the sent documents came from, since what was sent is the record and rebuilding would only make the folder differ from it.
 - A job number that isn't in the database, given to `pyrite job`, `status`, `sent`, `refresh`, `prep`, `triage`, `folder`, `finish`, `fill` or `autofill`, gets one line saying so and a non-zero exit, instead of a Python traceback. The line points at the dashboard, which lists every job, and at what `pyrite queue` actually shows: the ones waiting on a run.
 - Finish setup no longer takes words from an explanation under "Do not use" for secret names. It used to name your own name, a site mentioned in passing and an instruction such as "Say", and suggest forbidding them, which would have failed every draft. Asides in parentheses, quoted wording, the first word of each sentence and the words of `[candidate] name` are skipped.
 - Reply detection skips the receipts an application sets off, such as "You have successfully applied", "Thank you for applying" and candidate-account password and code mail. "Thank you for your interest" is still flagged, since rejections often say it. When mail matches several applications at one company and its subject names one title, only that application gets it.
