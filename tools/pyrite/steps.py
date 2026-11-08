@@ -166,9 +166,38 @@ def _term_lines(text: str) -> list[dict]:
     return [group for group in groups if group["terms"]]
 
 
+def _body(doc: factsdoc.Doc, start: int, stop: int) -> tuple[int, str]:
+    """The text of lines start..stop without the blank lines at the end, and where it ends."""
+    end = stop
+    while end > start and not doc.bare(end - 1).strip():
+        end -= 1
+    return end, "\n".join(doc.bare(i) for i in range(start, end))
+
+
+def master_blocks(text: str, kind: str) -> dict:
+    """A master resume or letter as the Master resume section edits it. A resume is its headline and a block of text
+    under each heading; the name, contact line and headings themselves are set by other sections. A letter is its
+    body: everything after the name and contact lines."""
+    doc = factsdoc.Doc(text)
+    header = [i for i in range(min(len(doc.lines), 6)) if doc.bare(i).startswith(("# ", "= ", "@ "))]
+    headline = next((i for i in header if doc.bare(i).startswith("= ")), None)
+    found = {"exists": bool(text), "headline": doc.bare(headline)[2:].strip() if headline is not None else None, "blocks": []}
+    if kind == "letter":
+        start = header[-1] + 1 if header else 0
+        found["body"] = _body(doc, start, len(doc.lines))[1].strip("\n")
+        return found
+    heads = [i for i in range(len(doc.lines)) if doc.bare(i).lstrip().startswith(("## ", "### ", "#### "))]
+    for at, line in enumerate(heads):
+        stop = heads[at + 1] if at + 1 < len(heads) else len(doc.lines)
+        stripped = doc.bare(line).strip()
+        found["blocks"].append({"line": line, "level": len(stripped) - len(stripped.lstrip("#")),
+                                "heading": stripped.lstrip("#").strip(), "text": _body(doc, line + 1, stop)[1]})
+    return found
+
+
 def view() -> dict:
     """What the section editors need beyond profile.view(): the contact line in parts and where the check reads it, the
-    off-limits lists with their patterns, and the approved terms by line."""
+    off-limits lists with their patterns, the approved terms by line, and the masters a block at a time."""
     texts = {key: profile.read(key) for key in profile.FILES}
     try:
         cfg = _config(texts["config"])
@@ -202,6 +231,9 @@ def view() -> dict:
         "off_limits_lists": {**lists, "unguarded": doctor.unguarded_terms(
             texts["facts"], guard.get("forbidden", []), str(cfg.get("candidate", {}).get("name", "")))},
         "term_groups": _term_lines(texts["terms"]),
+        "master_blocks": {"resume": master_blocks(texts["resume"], "resume"),
+                          "letter": master_blocks(texts["letter"], "letter")},
+        "wording": _wording(texts["run_notes"]),
     }
 
 
@@ -950,4 +982,301 @@ def _skills(texts: dict, cfg: dict, edits: dict) -> Draft:
     return Draft(out, count, notes, {"groups": _term_lines(out["terms"])})
 
 
-DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills}
+# ---------- Achievements ----------
+
+WORDING = re.compile(r"(?P<indent>[ \t]*)[-*][ \t]+\*\*Wording:?\*\*:?")
+VAGUE = re.compile(r"\b(?:significantly|various|many|several|helped|greatly|substantially|numerous|a lot of)\b", re.I)
+LEAD_VERB = re.compile(r"(led|managed|directed|headed)\b", re.I)
+LEAD_TITLE = re.compile(r"\b(?:lead|manager|principal|staff|director|head|vp|chief|architect)\b", re.I)
+MANAGER_TITLE = re.compile(r"\b(?:manager|director|head|vp|chief)\b", re.I)
+
+
+def _wording(text: str) -> list[str]:
+    """The wording rules in run-notes.md: the "**Wording:**" bullet and the bullets under it."""
+    lines = text.splitlines()
+    for index, row in enumerate(lines):
+        match = WORDING.match(row)
+        if not match:
+            continue
+        rules = [row[match.end():].strip()] if row[match.end():].strip() else []
+        for sub in lines[index + 1:]:
+            if not sub.strip() or len(sub) - len(sub.lstrip()) <= len(match["indent"]):
+                break
+            rules.append(sub.strip().lstrip("-*").strip())
+        return rules
+    return []
+
+
+def _add_wording(text: str, rules: list[str]) -> str:
+    """run-notes.md with rules added under its "**Wording:**" bullet, which is added if it isn't there."""
+    if not text.strip():
+        return "# Run notes\n\n- **Wording:**\n" + "".join(f"  - {rule}\n" for rule in rules)
+    doc = factsdoc.Doc(text)
+    for index in range(len(doc.lines)):
+        match = WORDING.match(doc.bare(index))
+        if match:
+            end = index + 1
+            while end < len(doc.lines) and doc.bare(end).strip() and \
+                    len(doc.bare(end)) - len(doc.bare(end).lstrip()) > len(match["indent"]):
+                end += 1
+            doc.insert(end, [f"{match['indent']}  - {rule}" for rule in rules])
+            return doc.render()
+    doc.insert(len(doc.lines), ["- **Wording:**", *(f"  - {rule}" for rule in rules)])
+    return doc.render()
+
+
+def compose(builder: dict) -> dict:
+    """An achievement builder's answers as one fact line, with what's worth a second look before adding it."""
+    did = _one_line(builder.get("did"), "What you did").rstrip(".")
+    before = _one_line(builder.get("before"), "Before")
+    after = _one_line(builder.get("after"), "After")
+    where = _one_line(builder.get("where"), "Where it was measured")
+    role = _one_line(builder.get("role"), "The role")
+    text = did
+    if before and after:
+        text += f" from {before} to {after}"
+    elif after:
+        text += f" to {after}"
+    if where:
+        text += f" {where}"
+    flags = []
+    if VAGUE.search(text):
+        flags.append("Words like “significantly” or “helped” read as filler. Say what changed.")
+    if "%" in text and not where:
+        flags.append("A percentage with no setting reads as company-wide. Say where it was measured.")
+    if did and not re.search(r"\d", text):
+        flags.append("No number. That's fine for scope, but a result with a number is stronger.")
+    verb = LEAD_VERB.match(did)
+    if role and verb:
+        if verb.group(1).lower() == "managed" and not MANAGER_TITLE.search(role):
+            flags.append(f"“Managed” needs a management title, and {role} isn't one. Say what you built, or who you worked with.")
+        elif not LEAD_TITLE.search(role):
+            flags.append(f"“{verb.group(1).capitalize()}” on a {role} role can read as a title claim. Say who you led, or what you built.")
+    return {"text": text, "flags": flags, "where": where}
+
+
+def _fact_text(raw) -> str:
+    text = _one_line(raw, "A fact")
+    return re.sub(r"^[-*]\s+", "", text).strip()
+
+
+def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
+    out = dict(texts)
+    notes: list[str] = []
+    count = 0
+    doc = factsdoc.Doc(texts["facts"])
+    sections = {s.start: s for s in doc.sections() if s.kind == "facts"}
+    titles = {s.title.lower() for s in doc.sections()}
+    plan = Plan()
+    added: list[tuple[str, list[str]]] = []
+    touched: list[str] = []
+    if "sections" in edits:
+        seen: set[int] = set()
+        for raw in _list(edits["sections"], "Sections"):
+            if not isinstance(raw, dict):
+                raise ValueError("A section should be a title and facts.")
+            title = _one_line(raw.get("title"), "A section's title").lstrip("#").strip()
+            line = raw.get("line")
+            facts = []
+            for item in _list(raw.get("items"), "Facts"):
+                if not isinstance(item, dict):
+                    raise ValueError("A fact should be its text.")
+                text = _fact_text(item.get("text"))
+                if not text:
+                    if item.get("line") is None:
+                        continue
+                    raise ValueError("A fact can't be empty. Remove it instead.")
+                facts.append((item.get("line"), text))
+            if not title:
+                if line is None and not facts:
+                    continue
+                raise ValueError("Every section needs a title.")
+            kind = factsdoc.Section(title, 0, 0).kind
+            if kind != "facts":
+                raise ValueError(f"“{title}” would read as a {'list of what drafts may not claim' if kind == 'excluded' else kind + ' section'}, "
+                                 "not one of facts. Choose another title.")
+            if not isinstance(line, int):
+                if title.lower() in titles:
+                    raise ValueError(f"There's a section called “{title}” already.")
+                titles.add(title.lower())
+                added.append((title, [text for _, text in facts]))
+                touched += [text for _, text in facts]
+                count += 1 + len(facts)
+                continue
+            section = sections.get(line)
+            if section is None:
+                raise ValueError("A section has moved in facts.md since the page read it. Reload and try again.")
+            seen.add(line)
+            if title != section.title:
+                plan.set(line, f"## {title}")
+                count += 1
+            items = {item.line: item for item in doc.items(section) if item.level == 0}
+            every = doc.items(section)
+            wanted = {at for at, _ in facts if at is not None}
+            for at, item in items.items():
+                if at not in wanted:
+                    plan.delete(item.line, item.end)
+                    count += 1
+            for index, (at, text) in enumerate(facts):
+                if at is not None:
+                    if at not in items:
+                        raise ValueError("A fact has moved in facts.md since the page read it. Reload and try again.")
+                    if text != items[at].text:
+                        bullet = factsdoc.BULLET.fullmatch(doc.bare(at))
+                        plan.set(at, doc.bare(at)[:bullet.start("text")] + text)
+                        touched.append(text)
+                        count += 1
+                    continue
+                following = next((x for x, _ in facts[index + 1:] if x is not None), None)
+                where = items[following].line if following is not None else \
+                    max((item.end for item in every), default=_section_end(doc, section))
+                plan.insert(where, [f"- {text}"])
+                touched.append(text)
+                count += 1
+        for start, section in sections.items():
+            if start not in seen:
+                plan.delete(section.start, section.end)
+                count += 1
+    plan.apply(doc)
+    for title, facts in added:
+        doc.add_section(title, facts)
+    out["facts"] = doc.render()
+
+    rules = []
+    for raw in _list(edits.get("wording"), "Wording rules"):
+        keep = _one_line(raw.get("keep") if isinstance(raw, dict) else None, "The wording to keep")
+        fact = _fact_text(raw.get("fact") if isinstance(raw, dict) else None)
+        if keep and fact in touched:
+            short = fact if len(fact) <= 60 else fact[:57].rstrip() + "…"
+            rules.append(f"Keep “{keep}” with “{short}”.")
+    if rules:
+        out["run_notes"] = _add_wording(texts["run_notes"], rules)
+        count += len(rules)
+
+    guard = cfg.get("guard", {})
+    for fact in touched:
+        for hit in checks.explain(fact, guard)["hits"]:
+            words = checks._matchable(fact)[hit["start"]:hit["end"]]
+            if hit["kind"] == "never":
+                notes.append(f"“{fact}” names “{words}”, which is on Never mention, so any draft that uses it will be blocked.")
+            elif hit["kind"] == "claim":
+                notes.append(f"“{fact}” claims “{words}”, which is on Haven't done. Take it off that list first if it's now true.")
+    builder = edits.get("builder")
+    return Draft(out, count, notes, {
+        "builder": compose(builder) if isinstance(builder, dict) else None,
+        "wording": _wording(out["run_notes"]),
+    })
+
+
+# ---------- Master resume ----------
+
+def _lines(raw, what: str) -> list[str]:
+    if not isinstance(raw, str):
+        raise ValueError(f"{what} should be text.")
+    text = raw.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    rows = [row.rstrip() for row in text.split("\n")] if text.strip() else []
+    for row in rows:
+        stripped = row.strip()
+        if stripped.startswith("#"):
+            raise ValueError("A line starting with # would be a new heading. Headings come from Work history, so change them there.")
+        if stripped.startswith(("@ ", "= ")):
+            raise ValueError("Lines starting with “@ ” or “= ” are the contact line and the headline, which have their own fields.")
+    return rows
+
+
+def _assay(texts: dict, cfg: dict, key: str, kind: str) -> dict:
+    """What the fact check says about a master as drafted: what would stop a draft made from it, and what only the
+    master says, which drafts may use because the master is itself an approved source."""
+    guard = {"forbidden": [], "unsupported": [], "disclaimers": [], "approved_sources": [], **cfg.get("guard", {})}
+    checked = {**cfg, "guard": guard}
+    own = profile.FILES[key]
+    by_path = {path: texts[k] for k, path in profile.FILES.items()}
+
+    def source(rel: str) -> str:
+        if rel in by_path:
+            return by_path[rel]
+        path = store.ROOT / rel
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+    approved = list(guard["approved_sources"])
+    every = "\n".join(checks.claimable(source(rel)) for rel in approved)
+    errors, warnings = checks.check_text(texts[key], kind, checked, every)
+    if kind == "resume" and guard.get("heading_source") == own:
+        more, also = checks.check_resume_structure(texts[key], checked)
+        errors, warnings = errors + more, warnings + also
+    only = []
+    if own in approved:
+        others = "\n".join(checks.claimable(source(rel)) for rel in approved if rel != own)
+        found, _ = checks.check_text(texts[key], kind, checked, others)
+        only = [error.split(". Remove them")[0] for error in found if error not in errors and " not in " in error]
+    return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}
+
+
+def _masters(texts: dict, cfg: dict, edits: dict) -> Draft:
+    out = dict(texts)
+    count = 0
+    resume = edits.get("resume")
+    if isinstance(resume, dict):
+        if not texts["resume"]:
+            raise ValueError("There's no profile/resume.md to change yet.")
+        doc = factsdoc.Doc(texts["resume"])
+        shown = master_blocks(texts["resume"], "resume")
+        plan = Plan()
+        if "headline" in resume:
+            headline = _one_line(resume["headline"], "The headline")
+            if headline != (shown["headline"] or ""):
+                top = range(min(len(doc.lines), 6))
+                line = next((i for i in top if doc.bare(i).startswith("= ")), None)
+                name = next((i for i in top if doc.bare(i).startswith("# ")), None)
+                if line is not None:
+                    if headline:
+                        plan.set(line, f"= {headline}")
+                    else:
+                        plan.delete(line, line + 1)
+                elif name is not None:
+                    plan.insert(name + 1, [f"= {headline}"])
+                else:
+                    raise ValueError("profile/resume.md has no “# Name” line for the headline to go under.")
+                count += 1
+        blocks = {block["line"]: block for block in shown["blocks"]}
+        heads = sorted(blocks)
+        for raw in _list(resume.get("blocks"), "Blocks"):
+            line = raw.get("line") if isinstance(raw, dict) else None
+            if line not in blocks:
+                raise ValueError("profile/resume.md has changed since the page read it. Reload and try again.")
+            rows = _lines(raw.get("text"), "A block")
+            if "\n".join(rows) == blocks[line]["text"]:
+                continue
+            following = next((h for h in heads if h > line), len(doc.lines))
+            end, _ = _body(doc, line + 1, following)
+            plan.delete(line + 1, end)
+            plan.insert(line + 1, rows)
+            count += 1
+        plan.apply(doc)
+        out["resume"] = doc.render()
+    letter = edits.get("letter")
+    if isinstance(letter, dict) and "body" in letter:
+        if not texts["letter"]:
+            raise ValueError("There's no profile/cover-letter.md to change yet.")
+        rows = _lines(letter["body"], "The letter")
+        if "\n".join(rows) != master_blocks(texts["letter"], "letter")["body"]:
+            doc = factsdoc.Doc(texts["letter"])
+            header = [i for i in range(min(len(doc.lines), 6)) if doc.bare(i).startswith(("# ", "= ", "@ "))]
+            start = header[-1] + 1 if header else 0
+            first = start
+            while first < len(doc.lines) and not doc.bare(first).strip():
+                first += 1
+            end, _ = _body(doc, first, len(doc.lines))
+            plan = Plan()
+            plan.delete(first, end)
+            plan.insert(first, rows if first > start or not header else ["", *rows])
+            plan.apply(doc)
+            out["letter"] = doc.render()
+            count += 1
+    preview = {key: _assay(out, cfg, key, kind) for key, kind in (("resume", "resume"), ("letter", "letter"))
+               if out[key] and cfg.get("candidate", {}).get("name")}
+    return Draft(out, count, [], preview)
+
+
+DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
+            "achievements": _achievements, "masters": _masters}

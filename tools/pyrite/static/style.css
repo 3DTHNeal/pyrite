@@ -407,6 +407,17 @@ textarea { width: 100%; resize: vertical; }
 .profile-hit.denied { background: color-mix(in srgb, var(--good) 18%, transparent); }
 .profile-ok { color: var(--good); font-size: 13px; font-weight: 600; margin: 0; }
 .profile-advanced summary { cursor: pointer; color: var(--accent-ink); font-size: 13px; }
+.profile-fact { display: grid; gap: 2px; }
+.profile-under { margin: 0 0 0 18px; padding-left: 14px; font-size: 12px; }
+.profile-builder > summary { cursor: pointer; }
+.profile-builder[open] > summary { margin-bottom: 10px; }
+.profile-builder select { width: 100%; }
+.profile-rules { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
+.profile-block { display: grid; gap: 4px; }
+.profile-head.level2 { font-size: 13px; margin-top: 6px; }
+.profile-head.level3 { font-weight: 650; font-size: 13px; margin-top: 4px; }
+.profile-head.level4 { font-style: italic; font-size: 13px; color: var(--ink-2); }
+.profile-block textarea { font: 13px/1.5 var(--mono); }
 .profile-advanced[open] { display: grid; gap: 10px; }
 
 @media (max-width: 1100px) {
