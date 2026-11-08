@@ -1,12 +1,26 @@
 #!/bin/sh
-# Blocks a push if anything personal is in any commit. Turn it on once per clone:
+# Blocks a push that CI's lint job would fail, or that has anything personal in any commit. Turn it on once per clone:
 #   git config core.hooksPath .githooks
 #   git config pyrite.denylist /path/to/your/workspace/profile/public-denylist.txt
 # With a denylist configured, a missing file blocks the push rather than skipping the check.
+# Lint and type check take a few seconds. The tests take minutes, so they're left to you and to CI.
 root=$(git rev-parse --show-toplevel)
 python="$root/.venv/Scripts/python.exe"
 [ -x "$python" ] || python="$root/.venv/bin/python"
 [ -x "$python" ] || python=python3
+cd "$root" || exit 1
+if ! "$python" -m ruff --version >/dev/null 2>&1 || ! "$python" -m mypy --version >/dev/null 2>&1; then
+    echo "Push blocked: ruff and mypy aren't installed. Run: $python -m pip install -r tools/requirements-dev.txt" >&2
+    exit 1
+fi
+if ! "$python" -m ruff check tools; then
+    echo "Push blocked: ruff found the problems above, as CI's lint job would. Some fix themselves with: $python -m ruff check tools --fix" >&2
+    exit 1
+fi
+if ! "$python" -m mypy; then
+    echo "Push blocked: mypy found the problems above, as CI's lint job would." >&2
+    exit 1
+fi
 denylist=$(git config pyrite.denylist)
 if [ -n "$denylist" ]; then
     if [ ! -f "$denylist" ]; then
