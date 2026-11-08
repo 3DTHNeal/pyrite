@@ -46,6 +46,14 @@ class FactChecker(unittest.TestCase):
                 errors = resume_errors(RESUME + f"\n- Built {term} tooling.\n")
                 self.assertTrue(any("confidential term" in e for e in errors), errors)
 
+    def test_a_placeholder_is_named_once_not_again_as_a_term(self):
+        errors = resume_errors(RESUME + "\n- Led a [X] migration.\n")
+        self.assertTrue(any("unfilled placeholder: '[X]'" in e for e in errors), errors)
+        self.assertFalse([e for e in errors if "not in your approved sources" in e], errors)
+        # A bracket opened on one line and closed on another isn't a placeholder, so nothing between is set aside.
+        errors = resume_errors(RESUME + "\n- Led a [migration of\n- the fleet to Kubernetes].\n")
+        self.assertTrue(any("not in your approved sources: Kubernetes" in e for e in errors), errors)
+
     def test_archive_is_not_hive(self):
         self.assertEqual(resume_errors(RESUME + "\n- Moved old logs to an archive.\n"), [])
 

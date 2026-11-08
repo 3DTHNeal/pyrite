@@ -10,7 +10,7 @@ from pathlib import Path
 
 from support import CFG, Base
 
-from pyrite import market, outlook, settings
+from pyrite import market, outlook, settings, store
 from test_settings import SettingsBase
 
 HEADER = ("area_fips,own_code,industry_code,agglvl_code,size_code,year,qtr,disclosure_code,qtrly_estabs,month1_emplvl,month2_emplvl,"
@@ -176,7 +176,8 @@ class Seen(Base):
         today = date(2026, 11, 8)
         jobs = [
             {"company": "Cyberdyne Research", "title": "Engineer", "description": "", "location_kind": "local", "first_seen": "2026-11-01T00:00:00+00:00",
-             "posting_closed_at": None, "applied_at": "2026-11-02", "response_at": "2026-11-05", "interview_at": None, "offer_at": None},
+             "posting_closed_at": None, "applied_at": "2026-11-02", "response_at": "2026-11-05", "interview_at": None, "offer_at": None,
+             "replied": 1},
             {"company": "Acme", "title": "Robot Software Lead", "description": "", "location_kind": "remote", "first_seen": "2026-09-20",
              "posting_closed_at": "2026-10-01", "applied_at": None, "response_at": None, "interview_at": None, "offer_at": None},
             {"company": "Acme", "title": "Accountant", "description": "", "location_kind": "local", "first_seen": "2026-11-01",
@@ -196,6 +197,17 @@ class Seen(Base):
             view = market.view(self.conn, cfg)
         self.assertEqual([i["name"] for i in view["industries"]], ["Robotics"])
         self.assertEqual(view["industries"][0]["official"], [])
+
+    def test_a_rejection_isnt_a_reply_here_either(self):
+        # The same rule as the dashboard's Reply rate, so the two never disagree.
+        cfg = {**CFG, "promote": {**CFG["promote"], "industry": [{"name": "Robotics", "terms": ["robot"]}]}}
+        heard = {"applied_at": "2026-11-02T00:00:00+00:00", "response_at": "2026-11-05T00:00:00+00:00"}
+        self.add(title="Robot Lead", source_id="a", status="rejected", **heard)
+        replied = self.add(title="Robot Engineer", source_id="b", status="responded", **heard)
+        store.log_event(self.conn, replied, "responded", "")
+        with mock.patch.object(market, "_download", side_effect=AssertionError("no download")):
+            seen = market.view(self.conn, cfg)["industries"][0]["seen"]
+        self.assertEqual((seen["applied"], seen["replied"]), (2, 1))
 
 
 SOURCES = [

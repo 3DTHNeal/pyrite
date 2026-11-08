@@ -3,6 +3,8 @@ import contextlib
 import io
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -13,6 +15,7 @@ from support import CFG, CODE_ROOT, FACTS_STILL_EXAMPLE, WORKSPACE, WORKSPACE_TO
 
 import pyrite
 from pyrite import cli, doctor, score, server, store, tasks
+from pyrite.workspace import INIT_EXAMPLE_HEADER, INIT_NAMED_FILES
 
 SEED = ('[[application]]\ncompany = "Acme Robotics"\ntitle = "Principal Engineer"\napplied_on = "2026-11-02"\n\n'
         '[[application]]\ncompany = "Hooli"\ntitle = "Director"\nnote = "Not sure it went out."\n')
@@ -93,8 +96,28 @@ class Workspace(unittest.TestCase):
             self.assertEqual(self.find(env=str(first), pointer=pointer), first.resolve())
 
     def test_missing_workspace_stops_instead_of_starting_empty(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit) as caught:
             self.find(env=str(WORKSPACE / "does-not-exist"))
+        self.assertIn("pyrite init", str(caught.exception.code))  # Named first and made second is a normal way to start.
+        # For `init` and help, which the entry point marks, it isn't there yet and that's fine.
+        with mock.patch.dict(os.environ, {store.MAY_BE_MISSING: "1"}):
+            self.assertEqual(self.find(env=str(WORKSPACE / "does-not-exist")), store.EXAMPLE_ROOT)
+
+    def test_init_and_help_work_before_the_named_workspace_is_made(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            target = Path(folder) / "my-job-search"
+            env = {**os.environ, "PYRITE_HOME": str(target)}
+            env.pop(store.MAY_BE_MISSING, None)
+            script = str(CODE_ROOT / "tools" / "pyrite.py")
+            ran = subprocess.run([sys.executable, script, "--help"], env=env, capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            ran = subprocess.run([sys.executable, script, "doctor"], env=env, capture_output=True, text=True, encoding="utf-8")
+            self.assertIn("doesn't exist", ran.stderr)
+            ran = subprocess.run([sys.executable, script, "init", str(target), "--name", "Sam Doe"], env=env, capture_output=True,
+                                 text=True, encoding="utf-8", cwd=folder)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertIn("PYRITE_HOME already names it", ran.stdout)
+            self.assertTrue((target / "profile" / "facts.md").is_file())
 
     def test_paths_follow_the_workspace_and_code_stays_put(self):
         self.assertEqual(store.ROOT, WORKSPACE.resolve())
@@ -182,10 +205,20 @@ class NewWorkspace(unittest.TestCase):
         cfg["guard"]["forbidden"] = [*self.cfg()["guard"]["forbidden"], r"\bMine\b"]
         return cfg
 
-    def make_masters_mine(self, name="Sam Doe"):
-        for rel in ("profile/resume.md", "profile/cover-letter.md"):
-            path = self.root / rel
-            path.write_text(path.read_text(encoding="utf-8").replace("Alex Rivera", name), encoding="utf-8")
+    # Profile files written from scratch, as someone making the workspace theirs would, in the form the assay reads.
+    OWN_TEXT = {
+        "profile/facts.md": "# Fact bank\n\n## Data\n- Moved the nightly batch to Postgres, from 6 hours to 2\n\n## Do not use\n- Internal names: Bluebird\n",
+        "profile/approved-terms.txt": "# Mine\nPostgres\nGit\n",
+        "profile/run-notes.md": "# Run notes\n\n- **Who:** Sam Doe, open to remote data engineering roles.\n",
+        "profile/resume.md": "# Sam Doe\n@ Springfield, IL · sam@example.com\n\n## Experience\n### Acme Data | Jan 2020 – Oct 2026\n"
+                             "#### Senior Data Engineer | Springfield, IL | Jan 2020 – Oct 2026\n- Cut nightly batch time from 6 hours to 2.\n\n"
+                             "## Education\n- B.S., Computer Science\n",
+        "profile/cover-letter.md": "# Sam Doe\n@ Springfield, IL · sam@example.com\n\nDear team,\n\nI make data pipelines faster.\n\nSam Doe\n",
+    }
+
+    def make_own(self, *rels):
+        for rel in rels or doctor.OWN_FILES:
+            (self.root / rel).write_text(self.OWN_TEXT[rel], encoding="utf-8")
 
     def test_a_copied_profile_has_every_source_its_guard_names(self):
         guard = self.cfg()["guard"]
@@ -216,11 +249,33 @@ class NewWorkspace(unittest.TestCase):
         cfg["guard"]["expected_on_resume"] = cfg["guard"]["ordinary_words"] = cfg["track"] = []  # Emptied counts as yours.
         self.assertFalse([what for what in self.todos(cfg) if "still has the example's" in what])
 
+    def test_a_file_edited_only_here_and_there_is_still_the_examples(self):
+        # The note at the top of facts.md is the first thing anyone deletes, and the fictional facts are all still there.
+        path = self.root / "profile" / "facts.md"
+        text = path.read_text(encoding="utf-8")
+        path.write_text("\n".join(row for row in text.splitlines() if "fictional candidate" not in row), encoding="utf-8")
+        self.assertIn("profile/facts.md", doctor.still_example(self.root))
+        finding = next(todo for todo in WORKSPACE_TODOS(self.root, self.cfg()) if "still the fictional example's" in todo["what"])
+        self.assertIn("profile/facts.md has been edited but still has the example's lines, such as: ", finding["fix"])
+        self.assertEqual(finding["tab"], "facts")  # The dashboard's Facts tab can fix it, so the to-do item opens it.
+        # Two of the example's sentences could be coincidence or a deliberate keep. Three or more is the example's.
+        own = self.OWN_TEXT["profile/facts.md"]
+        kept = doctor.example_lines_left(self.root, "profile/facts.md")
+        for count, expected in ((2, False), (3, True)):
+            path.write_text(own + "\n".join(kept[:count]) + "\n", encoding="utf-8")
+            self.assertEqual("profile/facts.md" in doctor.still_example(self.root), expected, count)
+
+    def test_short_terms_shared_with_the_example_dont_make_a_file_the_examples(self):
+        # Anyone might list Git or CAN, so approved-terms.txt is the example's only while it's unchanged.
+        path = self.root / "profile" / "approved-terms.txt"
+        path.write_text(path.read_text(encoding="utf-8") + "Postgres\n", encoding="utf-8")
+        self.assertNotIn("profile/approved-terms.txt", doctor.still_example(self.root))
+
     def test_a_workspace_made_its_own_has_nothing_left(self):
-        for rel in (*doctor.OWN_FILES, *doctor.OPTIONAL_FILES):
+        self.make_own()
+        for rel in doctor.OPTIONAL_FILES:
             path = self.root / rel
             path.write_text(path.read_text(encoding="utf-8") + "\nMine now.\n", encoding="utf-8")
-        self.make_masters_mine()
         self.edit_config('name = "Alex Rivera"', 'name = "Sam Doe"')
         self.edit_config("allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']", "allowed_hosts = []")
         (self.root / "profile" / "seed.toml").unlink()
@@ -257,9 +312,29 @@ class NewWorkspace(unittest.TestCase):
         self.assertEqual(doctor.unguarded_terms(nested, []), ["Nightjar", "Globex"])
         example = (store.EXAMPLE_ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
         self.assertEqual(doctor.unguarded_terms(example, self.cfg()["guard"]["forbidden"]), [])
+        self.make_own("profile/facts.md")
         path = self.root / "profile" / "facts.md"
         path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n"), encoding="utf-8")
         self.assertTrue(any("Nightjar" in what and "forbidden" in what for what in self.todos()))
+        # A fact bank that's still the example's is named as that, not picked apart term by term.
+        shutil.copy(store.EXAMPLE_ROOT / "profile" / "facts.md", path)
+        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n- Project Nightjar\n"), encoding="utf-8")
+        self.assertFalse(any("Nightjar" in what for what in self.todos()))
+
+    def test_explanations_instructions_and_your_own_name_arent_taken_for_secret_names(self):
+        # Forbidding any of these would do harm: your own name would fail every draft.
+        facts = ("# Facts\n\n## Do not use\n"
+                 "- Mentions of calibration (Alex Rivera removed them from LinkedIn, 2026-11-06). Say \"Machine Control\" instead.\n"
+                 "- Rivera's old team codename Nightjar; Use the plain name.\n"
+                 "- Firmware 2.5 Bluebird build\n")
+        self.assertEqual(doctor.unguarded_terms(facts, [], "Alex Rivera"), ["Nightjar", "Bluebird"])
+        path = self.root / "profile" / "facts.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("## Do not use\n", "## Do not use\n" + facts.split("## Do not use\n")[1]),
+                        encoding="utf-8")
+        todo = next(what for what in self.todos() if "forbidden" in what)
+        self.assertNotIn("Alex", todo)
+        self.assertNotIn("LinkedIn", todo)
+        self.assertNotIn("Say", todo)
 
     def test_outside_a_venv_the_fix_makes_one_rather_than_installing_into_that_python(self):
         self.assertIn("-m venv .venv", doctor.install_fix(in_venv=False))
@@ -307,12 +382,26 @@ class SetupGuard(Base):
             for kind in tasks.WRITERS:
                 self.assertIn("profile/facts.md", tasks.refusal(self.conn, kind))
             self.assertIsNone(tasks.refusal(self.conn, tasks.SWEEP))  # Reading the boards costs nothing, so it isn't held back.
+            # The dashboard gets the same reasons up front, to disable those buttons rather than refuse after a click.
+            not_ready = server.build_state(self.conn, CFG)["not_ready"]
+            self.assertEqual(set(not_ready), set(tasks.WRITERS))
+            self.assertIn("profile/facts.md", not_ready[tasks.CLAUDE])
+        self.assertEqual(server.build_state(self.conn, CFG)["not_ready"], {})
+
+    def test_editing_one_line_of_the_facts_doesnt_unlock_the_claude_runs(self):
+        path = WORKSPACE / "profile" / "facts.md"
+        original = path.read_text(encoding="utf-8")
+        self.addCleanup(path.write_text, original, encoding="utf-8")
+        path.write_text(original.replace("fictional candidate", "candidate"), encoding="utf-8")
+        with mock.patch.object(tasks, "_facts_still_example", FACTS_STILL_EXAMPLE):
+            self.assertIn("profile/facts.md", tasks.refusal(self.conn, tasks.CLAUDE))
 
     def test_the_dashboard_lists_setup_first_and_the_demo_never_does(self):
-        left = [{"what": "profile/facts.md is still the fictional example's.", "fix": "Replace it."}]
+        left = [{"what": "profile/facts.md is still the fictional example's.", "fix": "Replace it.", "tab": "facts"}]
         with mock.patch.object(doctor, "workspace_todos", return_value=left):
             orders = server.build_state(self.conn, CFG)["orders"]
             self.assertEqual((orders[0]["kind"], orders[0]["job_id"], orders[0]["text"]), ("Finish setup", None, left[0]["what"]))
+            self.assertEqual(orders[0]["tab"], "facts")  # Clicking it opens the tab that fixes it.
             with mock.patch.object(server, "IS_EXAMPLE", True):
                 self.assertEqual(server._setup_orders(CFG), [])
 
@@ -400,6 +489,11 @@ class Init(unittest.TestCase):
         text = (store.EXAMPLE_ROOT / "profile" / "search.toml").read_text(encoding="utf-8")
         self.assertIn(cli.INIT_EXAMPLE_NAME, text)
         self.assertIn(cli.INIT_EXAMPLE_HOSTS, text)
+        for old, _ in INIT_EXAMPLE_HEADER:
+            self.assertIn(old, text)
+        example_name = cli.INIT_EXAMPLE_NAME.split('"')[1]
+        for file in INIT_NAMED_FILES:
+            self.assertIn(f"# {example_name}\n", (store.EXAMPLE_ROOT / "profile" / file).read_text(encoding="utf-8"))
 
     def test_makes_a_workspace_without_the_examples_applications_or_hosts_and_points_at_it(self):
         out = self.init("--name", 'Sam "Q" Doe')
@@ -415,10 +509,22 @@ class Init(unittest.TestCase):
         for gone in ("[candidate] name", "allowed_hosts", "seed.toml"):
             self.assertNotIn(gone, todos)
         self.assertRegex(todos, r"^profile/facts\.md, .* are still the fictional example's")  # Making it yours is the next step.
+        # The name goes on the master resume and letter too, and the rest of them is still the example's to replace.
+        self.assertIn("resume.md", todos)
+        self.assertNotIn("has no '# ", todos)
+        for file in INIT_NAMED_FILES:
+            text = (self.folder / "profile" / file).read_text(encoding="utf-8")
+            self.assertTrue(text.startswith('# Sam "Q" Doe\n'), file)
+            self.assertNotRegex(text, r"(?m)^(# )?Alex Rivera$")
+        # The top of search.toml no longer says it's the example's own.
+        self.assertNotIn("This is the fictional candidate's search", (self.folder / "profile" / "search.toml").read_text(encoding="utf-8"))
 
-    def test_without_a_name_the_example_name_stays_for_doctor_to_flag(self):
-        self.init()
-        self.assertEqual(self.cfg()["candidate"]["name"], "Alex Rivera")
+    def test_a_name_is_required_so_the_example_name_never_carries_over(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.init()
+        self.assertIn("Give your name", str(caught.exception.code))
+        self.assertFalse(self.folder.exists())
+        self.assertFalse(self.pointer.exists())
 
     def test_a_placeholder_copied_from_the_docs_is_refused_before_anything_is_made(self):
         for extra in (("--name", "Your Name"), ("--name", "<your name>"), ("--name", "[Name]")):
@@ -449,7 +555,7 @@ class Init(unittest.TestCase):
         self.assertFalse(self.pointer.exists())
 
     def test_running_it_again_on_the_workspace_in_use_changes_nothing_and_isnt_an_error(self):
-        self.init()
+        self.init("--name", "Sam Doe")
         (self.folder / "profile" / "facts.md").write_text("Mine.", encoding="utf-8")
         with mock.patch.object(store, "ROOT", self.folder.resolve()):
             out = self.init()
@@ -466,13 +572,13 @@ class Init(unittest.TestCase):
 
     def test_a_workspace_already_named_is_never_replaced(self):
         self.pointer.write_text("/somewhere/else\n", encoding="utf-8")
-        out = self.init()
+        out = self.init("--name", "Sam Doe")
         self.assertEqual(self.pointer.read_text(encoding="utf-8"), "/somewhere/else\n")
         self.assertIn("left alone", out)
         with mock.patch.dict(os.environ, {"PYRITE_HOME": "/elsewhere"}):
             self.pointer.unlink()
             self.folder = self.base / "second"
-            self.assertIn("PYRITE_HOME", self.init())
+            self.assertIn("PYRITE_HOME", self.init("--name", "Sam Doe"))
         self.assertFalse(self.pointer.exists())
 
 

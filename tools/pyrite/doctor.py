@@ -7,14 +7,16 @@ Claude Code, the mail login) take longer to look for, so only `pyrite doctor` ch
 import importlib.util
 import re
 import shutil
+import sqlite3
 import sys
 import tomllib
+from contextlib import closing
 from pathlib import Path
 
 from . import inbox
 from .checks import do_not_use
 from .claude_code import find_claude, signed_in
-from .store import EXAMPLE_ROOT
+from .store import DB_PATH, EXAMPLE_ROOT
 
 # The profile files a new workspace copies from the example and must then make its own.
 OWN_FILES = ("profile/facts.md", "profile/approved-terms.txt", "profile/run-notes.md", "profile/resume.md", "profile/cover-letter.md")
@@ -43,6 +45,14 @@ EXAMPLE_SETTINGS = (
     (("inbox", "domains"), "[inbox.domains]", None),
 )
 CAPITALIZED = re.compile(r"\b[A-Z][\w+#-]*")
+# A line of the example this long is the fictional candidate's own writing, and this many of them left in a file means
+# it's still the example's, edited here and there. Shorter lines, such as a term in approved-terms.txt, could be anyone's.
+EXAMPLE_LINE_WORDS = 5
+EXAMPLE_LINES_LEFT = 3
+# Asides in parentheses and quoted wording explain a rule or suggest what to say instead. They name nothing secret.
+ASIDE = re.compile(r"\([^)]*\)|\"[^\"]*\"|“[^”]*”")
+# A sentence: everything up to a full stop, question mark or semicolon that ends a clause, so "2.5" stays whole.
+SENTENCE = re.compile(r"(?:[^.!?;]|[.!?;](?=\S))+")
 
 
 def _and(items: list[str]) -> str:
@@ -78,14 +88,38 @@ def _example_config() -> dict:
         return tomllib.load(handle)
 
 
+def _example_lines(text: str) -> list[str]:
+    """The lines of an example file that only the fictional candidate would write: whole sentences, not headings or
+    one-word terms, which a real person could share with the example by chance."""
+    lines = (row.strip() for row in text.splitlines())
+    return [row for row in lines if row and not row.startswith("#") and len(row.split()) >= EXAMPLE_LINE_WORDS]
+
+
+def example_lines_left(root: Path, rel: str) -> list[str]:
+    """The example's own lines still in this workspace file, in the example's order. Empty if the file is missing."""
+    mine, example = _text(root / rel), _text(EXAMPLE_ROOT / rel)
+    if mine is None or example is None:
+        return []
+    kept = {row.strip() for row in mine.splitlines()}
+    return [row for row in _example_lines(example) if row in kept]
+
+
 def still_example(root: Path) -> list[str]:
-    """The profile files that are still word for word the fictional example's."""
+    """The profile files that are still the fictional example's: word for word, or edited only here and there.
+
+    Changing one line, such as the note at the top of facts.md that says it's fictional, mustn't count as making a
+    file yours while the fictional employers and numbers are still in it. So a file counts as the example's while it
+    keeps EXAMPLE_LINES_LEFT of the example's sentences, or all of them where the example has fewer."""
     if root.resolve() == EXAMPLE_ROOT:
         return []
     same = []
     for rel in OWN_FILES:
         mine, example = _text(root / rel), _text(EXAMPLE_ROOT / rel)
-        if mine is not None and mine == example:
+        if mine is None or example is None:
+            continue
+        own_lines = _example_lines(example)
+        left = example_lines_left(root, rel)
+        if mine == example or (own_lines and len(left) >= min(EXAMPLE_LINES_LEFT, len(own_lines))):
             same.append(rel)
     return same
 
@@ -97,7 +131,8 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     confidential name through, add "severity": "bad"."""
     if root.resolve() == EXAMPLE_ROOT:
         return [{"what": "No workspace is set, so this is the fictional example.",
-                 "fix": "Run `pyrite init ../my-job-search` to make yours beside this repository, or name another folder "
+                 "fix": "Run `pyrite init ../my-job-search --name \"Your Name\"`, with your own name, to make yours beside this "
+                        "repository, or name another folder "
                         f"outside it. {SETUP_DOCS}", "step": "workspace"}]
     if cfg is None:
         return [{"what": "profile/search.toml is missing.", "fix": f"Copy example/profile/ into your workspace to start. {SETUP_DOCS}", "step": "workspace"}]
@@ -106,9 +141,15 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     if same:
         # One finding for all of them, since the fix is the same, with the first named in full so it's easy to find.
         names = [same[0], *(Path(rel).name for rel in same[1:])]
-        todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.",
-                      "fix": "Replace each with your own, starting with facts.md. Claude writes from these files, and the "
-                             "assay checks against them.", "step": "achievements"})
+        fix ="Replace each with your own, starting with facts.md. Claude writes from these files, and the assay checks against them."
+        # A file that was edited but still reads as the example's would otherwise look like a mistake, so show what's left.
+        edited = next((rel for rel in same if _text(root / rel) != _text(EXAMPLE_ROOT / rel)), None)
+        if edited:
+            fix += f' {edited} has been edited but still has the example\'s lines, such as: {example_lines_left(root, edited)[0]}'
+        # The dashboard's Facts tab edits facts.md and approved-terms.txt, so the to-do item can open it.
+        todos.append({"what": f"{_and(names)} {'is' if len(same) == 1 else 'are'} still the fictional example's.", "fix": fix,
+                      "step": "achievements",
+                      **({"tab": "facts"} if {"profile/facts.md", "profile/approved-terms.txt"} & set(same) else {})})
     for rel, fix in OPTIONAL_FILES.items():
         mine = _text(root / rel)
         if mine is not None and mine == _text(EXAMPLE_ROOT / rel):
@@ -162,9 +203,10 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     contact = next((row.strip() for rel in guard.get("approved_sources", [])
                     for row in (_text(root / rel) or "").splitlines() if row.startswith("@ ")), None)
     todos = []
+    same = still_example(root)
     for rel, kind in ((guard.get("heading_source", ""), "resume"), ("profile/cover-letter.md", "letter")):
         text = _text(root / rel) if rel else None
-        if text is None or text == _text(EXAMPLE_ROOT / rel):
+        if text is None or text == _text(EXAMPLE_ROOT / rel) or rel in same:
             continue  # Missing or still the example's, and either is named already.
         lines = [row.strip() for row in text.splitlines()]
         problems = []
@@ -185,31 +227,40 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     return todos
 
 
-def unguarded_terms(facts: str, forbidden: list[str]) -> list[str]:
+def unguarded_terms(facts: str, forbidden: list[str], own_name: str = "") -> list[str]:
     """Capitalized terms under "Do not use" in facts.md that no pattern in [guard] forbidden matches. The assay reads
-    nothing from that section, so a term listed only there isn't blocked by name. The first word of each line is
-    skipped, since it's usually a label such as "Internal names:" or "Customer names"."""
+    nothing from that section, so a term listed only there isn't blocked by name.
+
+    Only words that could be a secret name count. The first word of each sentence is skipped, since it's usually a
+    label such as "Internal names:" or an instruction such as "Say". Asides in parentheses and quoted wording are
+    skipped, since they explain the rule rather than name something. The words of your own name are skipped too:
+    forbidding them would fail every draft."""
+    mine = {word.lower() for word in re.findall(r"\w+", own_name)}
     found: list[str] = []
     for row in do_not_use(facts).splitlines():
         line = row.strip().lstrip("-*").strip()
         spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
-        for term in list(CAPITALIZED.finditer(line))[1:]:
-            covered = any(start < term.end() and term.start() < end for start, end in spans)
-            if not covered and term.group(0) not in found:
-                found.append(term.group(0))
+        masked = ASIDE.sub(lambda aside: " " * len(aside.group(0)), line)
+        for sentence in SENTENCE.finditer(masked):
+            for term in list(CAPITALIZED.finditer(masked, sentence.start(), sentence.end()))[1:]:
+                covered = any(start < term.end() and term.start() < end for start, end in spans)
+                if not covered and term.group(0).lower() not in mine and term.group(0) not in found:
+                    found.append(term.group(0))
     return found
 
 
 def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
     facts = _text(root / "profile" / "facts.md")
-    if facts is None or facts == _text(EXAMPLE_ROOT / "profile" / "facts.md"):
+    if facts is None or "profile/facts.md" in still_example(root):
         return []
-    terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []))
+    own_name = cfg.get("candidate", {}).get("name", "")
+    terms = unguarded_terms(facts, cfg.get("guard", {}).get("forbidden", []), own_name)
     if not terms:
         return []
     return [{"what": f"profile/facts.md lists {_and(terms)} under \"Do not use\", but forbidden under [guard] in "
                      f"profile/search.toml doesn't block {'it' if len(terms) == 1 else 'them'}.",
-             "fix": f"The assay blocks only what forbidden names, so add a pattern for each, such as '\\b{terms[0]}\\b'.",
+             "fix": f"The assay blocks only the terms that forbidden lists, so add a pattern for each, such as "
+                    f"'\\b{terms[0]}\\b'. If one is only part of an explanation, put it in parentheses.",
              "step": "offlimits", "severity": "bad"}]
 
 
@@ -260,6 +311,19 @@ def install_fix(in_venv: bool | None = None) -> str:
             f"Then run {venv_python} -m pip install -r tools/requirements.txt, and use {venv_python} for Pyrite from then on.")
 
 
+def last_mail_error(source: str) -> str:
+    """Why the last mail check failed, from the Sources tab's record, or "" if it worked or never ran. Read-only."""
+    if not DB_PATH.exists():
+        return ""
+    key = "inbox:gmail" if source == "gmail" else inbox.SOURCE_KEY
+    try:
+        with closing(sqlite3.connect(f"{DB_PATH.as_uri()}?mode=ro", uri=True)) as conn:
+            row = conn.execute("SELECT last_error FROM source_status WHERE source_key = ?", (key,)).fetchone()
+    except sqlite3.Error:
+        return ""
+    return (row[0] or "").strip() if row else ""
+
+
 def tool_checks(cfg: dict | None) -> list[dict]:
     """The programs Pyrite uses, each as {"ok": True | False | None, "what", "fix"}. None means optional and missing."""
     found = []
@@ -283,7 +347,10 @@ def tool_checks(cfg: dict | None) -> list[dict]:
     else:
         found.append({"ok": True, "what": f"Claude Code, signed in, at {claude}", "fix": ""})
     source = (cfg or {}).get("inbox", {}).get("source", "imap")
-    if source == "gmail":
+    trouble = last_mail_error(source)
+    if trouble:
+        found.append({"ok": False, "what": "Reply detection's last check failed", "fix": f"{trouble}\nTry again with `pyrite inbox`."})
+    elif source == "gmail":
         found.append({"ok": True, "what": "Reply detection reads Gmail through Claude Code", "fix": "Test it with `pyrite inbox`."})
     elif inbox.CREDENTIALS_PATH.exists():
         found.append({"ok": True, "what": f"Reply detection reads mail with the login in {inbox.CREDENTIALS_PATH}", "fix": "Test it with `pyrite inbox`."})

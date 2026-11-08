@@ -65,6 +65,19 @@ class Dashboard(Base):
         self.assertEqual([o["text"] for o in state["orders"] if o["kind"] == "New listing"], ["Acme: New"])
         self.assertEqual(sorted((j["title"] for j in state["jobs"]), key=lambda t: -next(j["rank"] for j in state["jobs"] if j["title"] == t)), ["New", "Back", "Old"])
 
+    def test_adding_a_link_already_tracked_opens_that_job_instead(self):
+        # Added again, it would go to the front of the next run and be tailored a second time.
+        sent = self.add(source_id="r1", title="Firmware Lead", status="applied", url="https://jobs.example.com/acme/R-100")
+        for url in ("https://jobs.example.com/acme/R-100", "https://JOBS.example.com/acme/R-100/", "https://jobs.example.com/acme/R-100#apply"):
+            with self.subTest(url):
+                self.assertEqual(server.tracked_by_url(self.conn, url)["id"], sent)
+                self.assertEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", url), sent)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+        # Another posting with the same title, or no link at all, is still added.
+        self.assertIsNone(server.tracked_by_url(self.conn, "https://jobs.example.com/acme/R-200"))
+        self.assertNotEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", "https://jobs.example.com/acme/R-200"), sent)
+        self.assertIsNone(server.tracked_by_url(self.conn, ""))
+
 
 class Security(unittest.TestCase):
     @classmethod

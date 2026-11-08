@@ -36,13 +36,13 @@ my-job-search/
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
 
-`init` makes one from the example's profile and points this folder at it. Put your own name in the quotes. A name with a space needs them, and `init` refuses a placeholder such as "Your Name":
+`init` makes one from the example's profile and points this folder at it. Put your own name in the quotes. `init` needs one, a name with a space needs the quotes, and `init` refuses a placeholder such as "Your Name":
 
 ```bash
 .venv/Scripts/python.exe tools/pyrite.py init ../my-job-search --name "Your Name"
 ```
 
-It leaves out the example's `seed.toml` and clears its `allowed_hosts`, and changes nothing if the folder already has a `profile/`. Then replace everything else in `profile/`:
+It puts your name in `search.toml` and on the `# Name` lines of the master resume and letter, leaves out the example's `seed.toml` and clears its `allowed_hosts`, and changes nothing if the folder already has a `profile/`. Then replace everything else in `profile/`:
 
 - `facts.md`, `approved-terms.txt` and `run-notes.md` with your own.
 - `resume.md` and `cover-letter.md` with your master resume and letter, written in the form under [How the documents are written](#how-the-documents-are-written). The `[guard]` section of `search.toml` names them as the sources every draft is checked against, and `resume.md` as the one whose employers, titles and dates a draft must match.

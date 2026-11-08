@@ -220,7 +220,9 @@ function renderOrders() {
     title: "Rebuilds the documents and runs the assay again. Takes up to a minute each.", onclick: () => recheckAll(ids) }, recheckProgress || label);
   // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
   const items = state.orders.map((o) => h("li", {},
-    h("button", { class: "order", type: "button", onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : null) },
+    // A job opens its drawer, and a setup item opens the tab that fixes it, where there is one.
+    h("button", { class: "order", type: "button", title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.slice(1)} tab` : null,
+      onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : o.tab ? showTab(o.tab, true) : null) },
       h("span", { class: kindClass(o.kind) }, o.kind),
       h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),
     o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
@@ -342,9 +344,9 @@ function renderBoard() {
       h("h3", {}, col.title, h("span", {}, jobs.length)),
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
       col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
-        id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo,
+        id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo || Boolean(notReady("tailor")),
         title: state.demo ? "Not in the demo, which starts no runs."
-          : "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
+          : notReady("tailor") || "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
         onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
       h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id, jobs.map((j) => j.id)) },
         h("span", { class: "co" }, job.company), h("span", { class: "ti" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
@@ -921,6 +923,11 @@ const RUN_RESULT_SHOWN_FOR = 30 * 60e3;
 let runWatch = null;
 let runError = "";
 
+// Why this workspace can't start this kind of run at all yet, such as facts.md still being the example's.
+function notReady(kind) {
+  return (state.not_ready || {})[kind] || "";
+}
+
 function renderRuns() {
   const tasks = state.tasks || {};
   const lines = runError ? [h("span", { class: "alert" }, runError)] : [];
@@ -931,10 +938,13 @@ function renderRuns() {
     running = running || busy;
     const button = $(run.button);
     if (button) {
-      // The demo starts no runs, so its buttons say so rather than asking to spend your Claude plan and then refusing.
-      button.disabled = busy || Boolean(state.demo);
+      // The demo starts no runs, and a workspace still holding the example's facts starts no Claude runs, so their
+      // buttons say why rather than asking to spend your Claude plan and then refusing.
+      const why = notReady(kind);
+      if (!("idleTitle" in button.dataset)) button.dataset.idleTitle = button.title;
+      button.disabled = busy || Boolean(state.demo) || Boolean(why);
       button.textContent = busy ? run.busy : run.idle;
-      if (state.demo) button.title = "Not in the demo, which starts no runs.";
+      button.title = state.demo ? "Not in the demo, which starts no runs." : why || button.dataset.idleTitle;
     }
     if (!task) continue;
     const ended = task.finished_at || task.started_at;
@@ -1827,13 +1837,15 @@ $("add-form").addEventListener("submit", async (e) => {
   save.disabled = true;
   $("add-error").textContent = "";
   try {
-    const { id } = await api("/api/jobs", {
+    const { id, existing, status } = await api("/api/jobs", {
       company: field("company"), title: field("title"), url: field("url"), location: field("location"), description: field("description"),
     });
     $("add-form").reset();
     $("add-dialog").close();
     await refresh();
     await openJob(id);
+    // A link already tracked opens that job rather than adding it again, which would tailor it a second time.
+    if (existing) toast(`Already tracked at that link (${status}), so it wasn't added again. Here it is.`);
   } catch (err) {
     $("add-error").textContent = err.message;
   } finally {

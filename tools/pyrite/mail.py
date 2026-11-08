@@ -37,6 +37,11 @@ TIME_LIMIT_MINUTES = 25  # A first read of a week or two of mail is the long one
 DEFAULT_MODEL = "claude-sonnet-5-5"
 MAX_ITEMS = 3000
 MAX_TEXT = 4000
+# Now and then Claude writes its first tool call out as text instead of making it, and stops after one turn having read
+# nothing. That's cheap and passing, so it gets one more try, told what went wrong.
+WRITTEN_OUT_CALL = re.compile(r"<\s*(invoke|parameter|function_calls)\b", re.I)
+RETRY_NOTE = ("\n\nYour last attempt wrote a tool call out as text instead of making it, so no mail was read. "
+              "Call the tools themselves; never write them out as text.\n")
 MAX_LINKS = 50
 # A run reads back this far past the last good one, so a late-arriving message is still seen.
 OVERLAP_DAYS = 2
@@ -362,15 +367,24 @@ def run(conn, cfg: dict, claude: str | None = None, ask=claude_code.ask) -> dict
         return _fail(conn, sign_in_help(claude))
     text = prompt(known_companies(conn, cfg), window(conn, cfg))
     model = str(cfg.get("inbox", {}).get("model") or DEFAULT_MODEL)
-    try:
-        answer = ask(conn, None, KIND, command(claude, model), text, ROOT, TIME_LIMIT_MINUTES * 60, TIME_LIMIT_MINUTES)
-        items = parse_export(answer)
-    except ClaudeFailed as err:
-        return _fail(conn, str(err))
-    except ValueError as err:
-        preview = inbox._clean(answer, 120)
-        return _fail(conn, f"Claude didn't hand back a usable list: {err} Its answer began: {preview}")
-    return ingest(conn, cfg, items)
+    for attempt in (1, 2):
+        try:
+            answer = ask(conn, None, KIND, command(claude, model), text, ROOT, TIME_LIMIT_MINUTES * 60, TIME_LIMIT_MINUTES)
+        except ClaudeFailed as err:
+            return _fail(conn, str(err))
+        try:
+            items = parse_export(answer)
+        except ValueError as err:
+            # Claude Code finished cleanly, but the run read no mail, so it isn't counted as a good one.
+            claude_code.mark_last_failed(conn, KIND)
+            if attempt == 1 and WRITTEN_OUT_CALL.search(answer):
+                text += RETRY_NOTE
+                continue
+            preview = inbox._clean(answer, 120)
+            tried = " It was tried twice." if attempt == 2 else ""
+            return _fail(conn, f"Claude didn't hand back a usable list: {err}{tried} Its answer began: {preview}")
+        return ingest(conn, cfg, items)
+    raise AssertionError("unreachable")
 
 
 def check(conn, cfg: dict) -> dict:
