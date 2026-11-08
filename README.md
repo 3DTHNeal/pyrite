@@ -40,8 +40,8 @@ Resume makes an unsupported claim: '- Reproduced field failures in simulation by
 Resume contains a link or domain that isn't yours: '- Managed a team of 40 engineers. Details at alex-portfolio.example.io.'
 Resume has an unfilled placeholder: '[X]'
 Resume has percentages not in the fact bank: 83%
-Resume has numbers not in the fact bank: 2015, 40
-Resume names terms not in your approved sources: Kubernetes, VP, X. Remove them, or add them to profile/approved-terms.txt if they're true.
+Resume has numbers not in the fact bank: 2015, 26262, 40
+Resume names terms not in your approved sources: Kubernetes, VP, ISO, X. Remove them, or add them to profile/approved-terms.txt if they're true.
 Employer, title or dates differ from your record: '#### VP of Engineering | Madison, WI | Jan 2015 – Oct 2026'
 ```
 
