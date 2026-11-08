@@ -378,7 +378,7 @@ function renderUsage() {
     h("td", { class: "num" }, tokens(t.input_tokens)),
     h("td", { class: "num" }, tokens(t.output_tokens)),
     h("td", { class: "num" }, `$${t.cost_usd.toFixed(2)}`));
-  const counted = "Refresh resume and Interview prep are counted. The daily run starts on its own, so it isn't.";
+  const counted = "Every Claude run Pyrite starts is counted: the daily run, Refresh resume, Interview prep and checking mail. A Claude Code session of your own isn't.";
   $("usage-summary").textContent = usage.all.runs
     ? `${counted} Cost is Claude Code's own estimate at API prices, which isn't a bill if you're on a Claude plan.`
     : `No Claude runs have been started from here yet. ${counted}`;

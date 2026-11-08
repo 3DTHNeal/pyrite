@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from . import checks, claude_code, deadline, facts, fill, mail, prep, refresh, tasks, workday
+from . import checks, claude_code, deadline, doctor, facts, fill, mail, prep, refresh, tasks, workday
 from . import score as scoring
 from . import settings
 from .cli import finish_job
@@ -284,6 +284,14 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: lis
     return sorted(orders, key=lambda o: o["rank"])
 
 
+def _setup_orders(cfg: dict) -> list[dict]:
+    """What a new workspace still has to change, first on the to-do list. The demo is the example on purpose, so it has none."""
+    if IS_EXAMPLE:
+        return []
+    return [{"rank": 0, "kind": "Finish setup", "job_id": None, "text": todo["what"], "detail": todo["fix"]}
+            for todo in doctor.workspace_todos(ROOT, cfg)]
+
+
 def build_state(conn, cfg) -> dict:
     today = date.today().isoformat()
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
@@ -356,7 +364,7 @@ def build_state(conn, cfg) -> dict:
         "stats": stats,
         "funnel": funnel,
         "closed": closed,
-        "orders": _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg)),
+        "orders": _setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg)),
         "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),

@@ -163,14 +163,15 @@ unsupported = [
 ]
 disclaimers = ['\bnot\b', '\bnever\b', '\bno\b', "n't\b", '\bwithout\b', '\byet to\b']
 # Sources of truth. Numbers, job headings and specialist terms must appear in these.
-# In your own workspace, point these and heading_source at your own master resume and letter.
+# profile/resume.md and profile/cover-letter.md are the master resume and letter: replace them with your own.
+# heading_source is the one whose employers, titles and dates every draft must match.
 approved_sources = [
   'profile/facts.md',
   'profile/approved-terms.txt',
-  'applications/2026-11-acme-principal-robotics-software-engineer/resume.md',
-  'applications/2026-11-acme-principal-robotics-software-engineer/cover-letter.md',
+  'profile/resume.md',
+  'profile/cover-letter.md',
 ]
-heading_source = 'applications/2026-11-acme-principal-robotics-software-engineer/resume.md'
+heading_source = 'profile/resume.md'
 max_resume_pages = 2
 max_letter_pages = 1
 # Capitalized words the assay shouldn't question, such as your own region.

@@ -494,7 +494,7 @@ def cmd_seed(args):
         sys.exit(f"Nothing to import: {seed_path} doesn't exist.")
     with seed_path.open("rb") as handle:
         seeds = tomllib.load(handle).get("application", [])
-    added = 0
+    added, skipped = 0, []
     for seed in seeds:
         company, title = seed["company"], seed["title"]
         location, url, note = seed.get("location", ""), seed.get("url", ""), seed.get("note", "")
@@ -502,6 +502,10 @@ def cmd_seed(args):
         source_id = _slug(f"{company} {title}", 10)
         # By name, because a sweep that links a job to its live posting replaces the seed's source key.
         if conn.execute("SELECT 1 FROM jobs WHERE company = ? AND title = ?", (company, title)).fetchone():
+            continue
+        if folder and not (ROOT / folder).is_dir():
+            # Imported without its folder, it would show documents that aren't there. A seed.toml copied from the example does this.
+            skipped.append(f"{company}: {title}, since its folder {folder} isn't in your workspace")
             continue
         if folder:
             files = _collect_files(ROOT / folder)
@@ -527,6 +531,34 @@ def cmd_seed(args):
         added += 1
     conn.commit()
     print(f"Added {added} existing applications.")
+    for line in skipped:
+        print(f"Skipped {line}. Fix its path in profile/seed.toml, or remove `folder`, and run this again.")
+    if skipped:
+        sys.exit(1)
+
+
+def cmd_doctor(args):
+    """What's left to set up: example files still in place, sources that point nowhere, and missing programs."""
+    from . import doctor
+
+    print(f"Workspace: {ROOT}")
+    try:
+        cfg = load_config()
+    except SystemExit:
+        cfg = None
+    todos = doctor.workspace_todos(ROOT, cfg)
+    for todo in todos:
+        print(f"  TO DO  {todo['what']}\n         {todo['fix']}")
+    if not todos:
+        print("  ok     Nothing in it is still the example's, and every source it names is there.")
+    print("Programs:")
+    tools = doctor.tool_checks(cfg)
+    for tool in tools:
+        mark = {True: "ok   ", False: "TO DO", None: "note "}[tool["ok"]]
+        print(f"  {mark}  {tool['what']}" + (f"\n         {tool['fix']}" if tool["fix"] else ""))
+    if todos or any(tool["ok"] is False for tool in tools):
+        sys.exit(1)
+    print("Ready. `pyrite sources` tests the job boards you watch.")
 
 
 def _saved_posting(folder: str) -> str:
@@ -536,7 +568,8 @@ def _saved_posting(folder: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pyrite", description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
+    # A metavar of its own, or the list of choices in the usage line would show the hidden `task` worker too.
+    sub = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     p = sub.add_parser("discover", help="pull new postings from the watchlist")
     p.add_argument("--only", help="only sources whose name contains this")
@@ -586,7 +619,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("sweep", help="read the job boards, then check mail for replies").set_defaults(func=cmd_sweep)
     sub.add_parser("run", help="judge new postings and tailor the best, with Claude given no shell").set_defaults(func=cmd_run)
 
-    p = sub.add_parser("task", help=argparse.SUPPRESS)
+    # No help, so it isn't listed: argparse prints help=SUPPRESS on a subcommand as the text "==SUPPRESS==".
+    p = sub.add_parser("task")
     p.add_argument("id", type=int)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_task)
@@ -637,6 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("seed", help="import applications listed in profile/seed.toml").set_defaults(func=cmd_seed)
     sub.add_parser("where", help="print which workspace is in use").set_defaults(func=cmd_where)
+    sub.add_parser("doctor", help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("demo", help="serve the fictional example, without touching your own data")
     p.add_argument("--port", type=int, default=8788)

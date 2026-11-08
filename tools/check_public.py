@@ -29,6 +29,11 @@ import zipfile
 import zlib
 from pathlib import Path
 
+# Before the definitions below, which an older Python can't read: a privacy check that crashes mustn't look like one that ran.
+if sys.version_info < (3, 11):
+    sys.exit("This check needs Python 3.11 or newer, and this is {}.{}. On Windows, `py -3 tools/check_public.py` runs the newest "
+             "one installed, and elsewhere `python3` may be newer.".format(*sys.version_info[:2]))
+
 REPO = Path(__file__).resolve().parents[1]
 
 # Private files belong in the workspace. Anything under example/ is fictional and allowed.

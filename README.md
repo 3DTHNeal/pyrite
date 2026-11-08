@@ -14,7 +14,7 @@ The interesting problem isn't generating a resume. It's that a language model wi
 
 ## Try it
 
-Python 3.11 or newer, no install needed. Where `python` is older or missing, use `python3`, or `py -3.11` on Windows:
+Python 3.11 or newer, no install needed. Where `python` is older or missing, use `python3`, or `py -3` on Windows, which runs the newest one installed:
 
 ```bash
 python tools/pyrite.py demo
@@ -106,7 +106,7 @@ This project runs on my real job search, and it has to be public without showing
 
 ## Running it yourself
 
-[docs/operating.md](docs/operating.md) covers creating your own workspace, scheduling, reply detection and the commands. To run the tests:
+[docs/operating.md](docs/operating.md) covers creating your own workspace, scheduling, reply detection and the commands. Once you've made a workspace, `pyrite doctor` lists what's still the example's and which programs are missing. To run the tests:
 
 ```bash
 python -W ignore::ResourceWarning -m unittest discover -s tools/tests
