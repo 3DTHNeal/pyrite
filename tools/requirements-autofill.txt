@@ -1,3 +1,3 @@
 # For `pyrite autofill` only, which is experimental and off by default. After installing, also run:
 #   python -m playwright install chromium
-playwright
+playwright>=1.64,<2

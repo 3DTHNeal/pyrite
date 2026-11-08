@@ -1,0 +1,46 @@
+name: Bug
+description: Something Pyrite does wrong, shown on the example workspace.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        This issue is public. Leave out your resume, fact bank, mail, the postings you applied to
+        and anything from `pyrite.db`. `python tools/pyrite.py demo` runs on a fictional candidate,
+        and that's enough to show almost any bug.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce on the example workspace
+      placeholder: |
+        1. python tools/pyrite.py demo
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: The output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and Python version
+      placeholder: Windows 11, Python 3.12
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: Nothing personal is in this issue, its logs or its screenshots.
+          required: true
