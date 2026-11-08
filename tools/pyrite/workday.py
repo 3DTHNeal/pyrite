@@ -81,6 +81,12 @@ FILE_INPUT = 'input[data-automation-id="file-upload-input-ref"]'
 # Pages this knows. Anything else, including the review page, is where it stops.
 STEPS = ("Autofill with Resume", "My Information", "My Experience", "Application Questions")
 SIGN_IN_MINUTES = 15
+# A page load gets far longer than a field does: the 8-second field allowance would otherwise apply to it too, and a slow
+# tenant would end the run before the candidate could sign in.
+NAVIGATION_MS = 60000
+# How long a tick box gets to take a plain check before the other ways in are tried, and an upload to be confirmed.
+TICK_MS = 3000
+UPLOAD_MS = 20000
 SETTLE_MS = 1500
 # How long a search picker gets to show its results, and a saved page to turn into the next one.
 RESULTS_MS = 8000
@@ -280,6 +286,89 @@ def load_skill_overrides(root: Path) -> dict[str, str]:
 
 
 # ---- Driving the page. Everything below takes a Playwright page and is exercised against a fixture in the tests.
+
+def _holds(box, value: str) -> bool:
+    """Whether a box shows `value`: the same words, or for a number the same digits, since a box may format
+    "5550100142" as "(555) 010-0142"."""
+    try:
+        got = box.input_value()
+    except Exception:
+        return False
+    if " ".join(got.split()) == " ".join(value.split()):
+        return True
+    digits = re.sub(r"\D", "", value)
+    return bool(digits) and not re.search(r"[a-z]", value, re.I) and re.sub(r"\D", "", got) == digits
+
+
+def _type(box, value: str) -> bool:
+    """Put `value` in a text box and check that it took. False when the box shows something else afterwards.
+
+    `fill` sets the whole value at once, which is right for most boxes. A box with its own key handling, such as a date
+    part that is a spin button, or a masked box, can drop a value set that way or keep it on screen without taking it.
+    So a spin button is typed into key by key from the start, and any other box that doesn't show the value after `fill`
+    is cleared and typed into key by key.
+    """
+    keys = box.get_attribute("role") == "spinbutton"
+    if not keys:
+        box.fill(value)
+        if _holds(box, value):
+            return True
+    box.click()
+    box.press("ControlOrMeta+a")
+    box.press("Backspace")
+    box.press_sequentially(value, delay=20 if len(value) < 100 else 0)
+    return _holds(box, value)
+
+
+def _put(box, value: str, report: Report, what: str) -> bool:
+    """`_type`, with a box that won't take the value reported for the candidate to check, along with what it shows."""
+    if _type(box, value):
+        return True
+    try:
+        shown = box.input_value()
+    except Exception:
+        shown = "?"
+    report.skipped.append(f"{what}: typed {value[:60]!r}, but the box shows {shown[:60]!r}, so check it")
+    return False
+
+
+def _ticked(box) -> bool:
+    try:
+        return box.is_checked()
+    except Exception:
+        return False
+
+
+def _tick(box) -> bool:
+    """Tick a checkbox or a radio button, and check that it took. False when it couldn't be ticked.
+
+    Pages often hide the real box and draw their own, and Playwright won't check a box it can't see. So a box that a
+    plain check doesn't tick is ticked through its label, as a person would, and failing that by a click sent to the
+    box itself, which ticks a hidden one and tells the page it changed.
+    """
+    try:
+        box.set_checked(True, timeout=TICK_MS)
+    except Exception:
+        pass
+    if _ticked(box):
+        return True
+    try:
+        ident = box.get_attribute("id")
+        label = box.page.locator(f'label[for="{ident}"]') if ident else None
+        if label is None or not label.count():
+            label = box.locator("xpath=ancestor::label[1]")
+        if label.count():
+            label.first.click(timeout=TICK_MS)
+    except Exception:
+        pass
+    if _ticked(box):
+        return True
+    try:
+        box.dispatch_event("click")
+    except Exception:
+        pass
+    return _ticked(box)
+
 
 def _fill(page, selector: str, value: str, report: Report, what: str) -> bool:
     box = page.locator(selector)
@@ -553,28 +642,57 @@ def _add_after(page, heading: str):
 
 
 def fill_roles(page, roles: list[dict], report: Report) -> None:
+    """Each job in its own block, one at a time, so a field one block lacks or won't take can't stop the jobs after it."""
+    titles = page.locator('[id^="workExperience-"][id$="--jobTitle"]')
     for i, role in enumerate(roles):
-        titles = page.locator('[id^="workExperience-"][id$="--jobTitle"]')
-        if titles.count() <= i:
-            _add_after(page, "Work Experience").click()
-            page.wait_for_timeout(800)
-        block = page.locator('[id^="workExperience-"][id$="--jobTitle"]').nth(i).get_attribute("id").rsplit("--", 1)[0]
         what = f"job {i + 1} ({role['title']})"
-        page.locator(f'[id="{block}--jobTitle"]').fill(role["title"])
-        page.locator(f'[id="{block}--companyName"]').fill(role["company"])
-        if role.get("location"):
-            page.locator(f'[id="{block}--location"]').fill(role["location"])
-        if role.get("current"):
-            page.locator(f'[id="{block}--currentlyWorkHere"]').check()
-        for key, name in (("from", "startDate"), ("to", "endDate")):
-            value = role.get(key, "")
-            if not value or (key == "to" and role.get("current")):
-                continue
+        if titles.count() <= i:
+            add = _add_after(page, "Work Experience")
+            if add is None:
+                report.skipped.append(f"{what}: this page has no Work Experience section")
+                return
+            add.click()
+            try:
+                titles.nth(i).wait_for(state="attached", timeout=RESULTS_MS)
+            except Exception:
+                report.skipped.append(f"{what}: no work experience block appeared on the page")
+                return
+        try:
+            _fill_role(page, titles.nth(i).get_attribute("id").rsplit("--", 1)[0], role, report, what)
+        except Exception as err:
+            report.skipped.append(f"{what}: stopped on an error, so finish it by hand: {str(err).splitlines()[0][:160]}")
+            page.keyboard.press("Escape")
+
+
+def _fill_role(page, block: str, role: dict, report: Report, what: str) -> None:
+    def box(suffix: str):
+        found = page.locator(f'[id="{block}--{suffix}"]')
+        return found.first if found.count() else None
+
+    # Ticking "I currently work here" first, since it takes the end date off the form, and a redraw can't undo typing.
+    if role.get("current"):
+        current = box("currentlyWorkHere")
+        if current is None or not _tick(current):
+            report.skipped.append(f"{what}: couldn't tick 'I currently work here'")
+    fields = [("jobTitle", role["title"], "title"), ("companyName", role["company"], "company"),
+              ("location", role.get("location", ""), "location")]
+    for key, name in (("from", "startDate"), ("to", "endDate")):
+        value = role.get(key, "")
+        if value and not (key == "to" and role.get("current")):
             month, year = (value.split("/") + [""])[:2]
-            page.locator(f'[id="{block}--{name}-dateSectionMonth-input"]').fill(month)
-            page.locator(f'[id="{block}--{name}-dateSectionYear-input"]').fill(year)
-        page.locator(f'[id="{block}--roleDescription"]').fill(role.get("description", ""))
-        report.filled.append(what)
+            fields += [(f"{name}-dateSectionMonth-input", month, f"{key} month"), (f"{name}-dateSectionYear-input", year, f"{key} year")]
+    fields.append(("roleDescription", role.get("description", ""), "description"))
+    for suffix, value, label in fields:
+        if not value:
+            continue
+        target = box(suffix)
+        if target is None:
+            # A tenant that doesn't ask for the location needs none; anything else missing is the candidate's to type.
+            if label != "location":
+                report.skipped.append(f"{what} {label}: no such field in this entry")
+            continue
+        _put(target, value, report, f"{what} {label}")
+    report.filled.append(what)
 
 
 def _blocks(page, prefix: str) -> list[str]:
@@ -716,8 +834,7 @@ def _education_details(page, block: str, entry: dict, report: Report, what: str)
     elif field is None and entry.get("field"):
         report.skipped.append(f"{what} field of study: no field-of-study box found in this entry")
     gpa = _in_block(page, block, ["gradeAverage", "gpa"])
-    if gpa is not None and entry.get("gpa"):
-        gpa.fill(entry["gpa"])
+    if gpa is not None and entry.get("gpa") and _put(gpa, entry["gpa"], report, f"{what} GPA"):
         report.filled.append(f"{what} GPA")
     for key, name in (("from", "firstYearAttended"), ("to", "lastYearAttended")):
         value = entry.get(key, "")
@@ -725,8 +842,8 @@ def _education_details(page, block: str, entry: dict, report: Report, what: str)
         if box is None:
             continue
         if value:
-            box.fill(value.split("/")[-1])
-            report.filled.append(f"{what} {key}")
+            if _put(box, value.split("/")[-1], report, f"{what} {key}"):
+                report.filled.append(f"{what} {key}")
         else:
             report.skipped.append(f"{what} {key}: the sheet has no date")
 
@@ -740,8 +857,8 @@ def fill_languages(page, languages: list[str], report: Report) -> None:
         if picker is not None and _is_unset(picker):
             choose(page, picker, [language], report, f"language {i + 1}")
         native = _in_block(page, block, ["native", "fluent"], 'input[type="checkbox"]')
-        if native is not None and not native.is_checked():
-            native.check()
+        if native is not None and not _tick(native):
+            report.skipped.append(f"language {i + 1}: couldn't tick that you're fluent in it")
         # A tenant may ask for a level per skill. Every remaining "Select One" in the block gets the fluent entry.
         for _ in range(8):
             pending = page.locator(f'[id^="{block}--"]').filter(has_text=re.compile(r"^\s*Select One\s*$"))
@@ -778,14 +895,19 @@ def fill_websites(page, websites: list[str], report: Report) -> None:
         box = _in_block(page, block, ["url", "website", "address"], 'input[type="text"]')
         if box is None or box.input_value().strip():
             continue
-        box.fill(url)
-        report.filled.append(f"website {url}")
+        if _put(box, url, report, f"website {i + 1}"):
+            report.filled.append(f"website {url}")
+
+
+def _attached(page):
+    """What Workday shows once it holds a file: its "Successfully Uploaded" note, or the file's Delete button."""
+    return page.get_by_text(re.compile("successfully uploaded", re.I)).or_(page.locator('[data-automation-id="delete-file"]'))
 
 
 def upload_resume(page, files: dict[str, str], report: Report) -> None:
     box = page.locator(FILE_INPUT)
     path = files.get("resume") or files.get("resume_pdf")
-    if page.get_by_text(re.compile("successfully uploaded", re.I)).count() or page.locator('[data-automation-id="delete-file"]').count():
+    if _attached(page).count():
         report.filled.append("resume: already attached")
     elif not box.count():
         report.skipped.append("resume: no upload box on this page")
@@ -793,8 +915,15 @@ def upload_resume(page, files: dict[str, str], report: Report) -> None:
         report.skipped.append("resume: no built resume to attach")
     else:
         box.first.set_input_files(path)
-        page.wait_for_timeout(SETTLE_MS)
-        report.filled.append(f"resume: {Path(path).name}")
+        # Handing the file to the box is only the start: Workday uploads it and says when it has it. Until it does, the
+        # resume isn't on the application, so the run waits for that rather than for a set time.
+        try:
+            _attached(page).first.wait_for(state="visible", timeout=UPLOAD_MS)
+            report.filled.append(f"resume: {Path(path).name}")
+        except Exception:
+            said = "; ".join(page_errors(page))[:200]
+            report.skipped.append(f"resume: {Path(path).name} was handed to the upload box, but Workday never showed it as uploaded"
+                                  + (f". It says: {said}" if said else "") + ". Check the Resume/CV section")
 
 
 def fill_experience(page, data: dict, report: Report, overrides: dict[str, str] | None = None) -> None:
@@ -815,14 +944,29 @@ def fill_experience(page, data: dict, report: Report, overrides: dict[str, str] 
             page.keyboard.press("Escape")
 
 
+def _size(page) -> int:
+    """How many elements the page has, or -1 while it is between documents."""
+    try:
+        return page.evaluate("document.querySelectorAll('*').length")
+    except Exception:
+        return -1
+
+
 def settle(page) -> None:
-    """Give a page that has just appeared its moment to finish drawing its fields."""
+    """Wait for a page that has just appeared to finish drawing its fields: its footer button is up, and nothing has been
+    added to it or taken away for SETTLE_MS. Waiting for the network to go quiet instead can cost the whole allowance on
+    every page, since a page that keeps a connection busy never does, and says nothing about the fields."""
     try:
         page.locator(NEXT_BUTTON).first.wait_for(state="visible", timeout=PAGE_TURN_MS)
-        page.wait_for_load_state("networkidle", timeout=PAGE_TURN_MS)
     except Exception:
-        pass  # A page that never goes quiet is still filled; the pause below gives it a moment either way.
-    page.wait_for_timeout(SETTLE_MS)
+        pass  # A page without the button is still filled, once it has stopped changing.
+    deadline = time.monotonic() + PAGE_TURN_MS / 1000
+    last, since = _size(page), time.monotonic()
+    while time.monotonic() < deadline and time.monotonic() - since < SETTLE_MS / 1000:
+        page.wait_for_timeout(250)
+        now = _size(page)
+        if now != last or now < 0:
+            last, since = now, time.monotonic()
 
 
 def _field_for(page, pattern: str):
@@ -840,8 +984,10 @@ def answer_radio(page, question_pattern: str, value: str, report: Report, what: 
         if not radio.count():
             radio = scope.get_by_label(re.compile(rf"^\s*{_literal(value)}\s*$", re.I))
         if radio.count():
-            radio.first.check()
-            report.filled.append(f"{what}: {value}")
+            if _tick(radio.first):
+                report.filled.append(f"{what}: {value}")
+            else:
+                report.skipped.append(f"{what}: couldn't tick {value!r}")
             return True
     return False
 
@@ -988,8 +1134,7 @@ def answer_source(page, field, box, sources: list[str], report: Report, company:
 def _fill_blank(page, selector: str, value: str, report: Report, what: str) -> None:
     """Type into a field only when it is empty: the account's own details are already right."""
     box = page.locator(selector)
-    if value and box.count() and not box.first.input_value().strip():
-        box.first.fill(value)
+    if value and box.count() and not box.first.input_value().strip() and _put(box.first, value, report, what):
         report.filled.append(f"{what}: {value}")
 
 
@@ -1060,13 +1205,11 @@ def fill_information(page, info: dict[str, str], report: Report, source: str = "
         first, last = name.split(" ", 1)
         for selector, value in (('[id$="--firstName"]', first), ('[id$="--lastName"]', last)):
             box = page.locator(selector)
-            if box.count() and not box.first.input_value():
-                box.first.fill(value)
+            if box.count() and not box.first.input_value() and _put(box.first, value, report, "name"):
                 report.filled.append(f"name: {value}")
     phone = re.sub(r"\D", "", info.get("Phone number", ""))
     box = page.locator('[id$="--phoneNumber"]')
-    if phone and box.count() and not box.first.input_value():
-        box.first.fill(phone)
+    if phone and box.count() and not box.first.input_value() and _put(box.first, phone, report, "phone"):
         report.filled.append("phone")
 
 
@@ -1096,20 +1239,21 @@ def fill_questions(page, questions: dict[str, str], report: Report) -> None:
             radio = radios.filter(has_text=re.compile(rf"^\s*{_literal(value)}\s*$", re.I))
             if not radio.count():
                 radio = box.get_by_role("radio", name=re.compile(rf"^{_literal(value)}$", re.I))
-            if radio.count():
-                radio.first.check()
+            if not radio.count():
+                report.skipped.append(f"{label[:60]}: no choice called {value!r}")
+            elif _tick(radio.first):
                 report.filled.append(f"{label[:60]}: {value}")
             else:
-                report.skipped.append(f"{label[:60]}: no choice called {value!r}")
+                report.skipped.append(f"{label[:60]}: couldn't tick {value!r}")
         elif box.locator("textarea").count():
-            box.locator("textarea").first.fill(answer)
-            report.filled.append(label[:60])
+            if _put(box.locator("textarea").first, answer, report, label[:60]):
+                report.filled.append(label[:60])
         elif box.locator('input[type="text"]').count():
             if len(value) > 80:
                 report.skipped.append(f"{label[:60]}: the sheet's answer reads like advice, not a value, so it's yours to type")
                 continue
-            box.locator('input[type="text"]').first.fill(value)
-            report.filled.append(f"{label[:60]}: {value}")
+            if _put(box.locator('input[type="text"]').first, value, report, label[:60]):
+                report.filled.append(f"{label[:60]}: {value}")
         else:
             report.skipped.append(f"{label[:60]}: a kind of field this can't fill")
 
@@ -1203,16 +1347,51 @@ def restore_cookies(context, profile: Path, report: Report) -> bool:
         return False
 
 
+TRACE = "last-fill-trace.zip"
+
+
+def save_trace(context, profile: Path, report: Report) -> None:
+    """Keep the run's record, replacing the last one's. It holds the pages as they were, the candidate's details
+    included, and the session's cookies in the requests, so it stays beside the kept sign-ins, in the workspace."""
+    try:
+        context.tracing.stop(path=str(profile / TRACE))
+        report.say(f"A step-by-step record of this fill is in {profile / TRACE}. To replay it: "
+                   f"python -m playwright show-trace \"{profile / TRACE}\". It holds your details, so don't share it.")
+    except Exception as err:
+        report.say(f"Couldn't keep a record of this fill: {str(err).splitlines()[0][:160]}")
+
+
+def _open(page, report: Report, url: str = "") -> None:
+    """Go to `url`, or load the page again without one. Only the document is waited for: a Workday page draws itself
+    afterwards, and the steps that follow wait for what they need. A page that is slow or fails to load is left for the
+    candidate to see in the window, instead of ending the run."""
+    try:
+        if url:
+            page.goto(url, wait_until="domcontentloaded")
+        else:
+            page.reload(wait_until="domcontentloaded")
+    except Exception as err:
+        report.say(f"The page was slow to load or didn't ({str(err).splitlines()[0][:160]}). Carry on in the browser window.")
+
+
 def asks_to_sign_in(page) -> bool:
-    """Whether the page that came up is a sign-in form rather than the application."""
-    try:
-        page.wait_for_load_state("networkidle", timeout=PAGE_TURN_MS)
-    except Exception:
-        pass  # The check below reads whatever has loaded.
-    try:
-        return not current_step(page) and page.locator('input[type="password"]:visible').count() > 0
-    except Exception:
-        return False
+    """Whether the page that came up is a sign-in form rather than the application: whichever of the two shows first.
+    One that shows neither within PAGE_TURN_MS isn't taken for a sign-in."""
+    deadline = time.monotonic() + PAGE_TURN_MS / 1000
+    while True:
+        try:
+            if current_step(page):
+                return False
+            if page.locator('input[type="password"]:visible').count():
+                return True
+        except Exception:
+            pass  # Between documents; the next look reads the new one.
+        if time.monotonic() > deadline:
+            return False
+        try:
+            page.wait_for_timeout(400)
+        except Exception:
+            time.sleep(0.4)
 
 
 def hold_open(context, report: Report, wait_ms: int = 2000) -> None:
@@ -1267,18 +1446,20 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
     if "/apply" not in url:
         url = url.rstrip("/") + "/apply/applyManually"
     with sync_playwright() as pw:
-        context = pw.chromium.launch_persistent_context(str(profile), headless=False, viewport={"width": 1100, "height": 900})
-        # A field that isn't there should be noticed in seconds, not half a minute.
+        # The page follows the window, so the candidate can resize it to finish the form; a fixed viewport wouldn't.
+        context = pw.chromium.launch_persistent_context(str(profile), headless=False, no_viewport=True, args=["--window-size=1200,950"])
+        # A field that isn't there should be noticed in seconds, not half a minute. A page load is given longer.
         context.set_default_timeout(8000)
+        context.set_default_navigation_timeout(NAVIGATION_MS)
         restored = restore_cookies(context, profile, report)
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(url)
+        _open(page, report, url)
         if restored and asks_to_sign_in(page):
             # The kept sign-in has lapsed on Workday's side. Its cookies go before the candidate signs in, so the fresh
             # session isn't muddled by the old one, which otherwise leaves a page that needs a refresh after signing in.
             report.say("The kept sign-in has lapsed, so it's cleared. Sign in afresh on the page.")
             context.clear_cookies()
-            page.reload()
+            _open(page, report)
         report.say("Sign in on the Workday page and open the application form. Waiting for the first page of the form.")
         for _ in range(SIGN_IN_MINUTES * 30):
             # A sign-in may open the form in a new tab; the newest one is where the candidate is.
@@ -1297,6 +1478,13 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
                 on_filled(report)
             context.close()
             return report
+        # From here on, a record of every step: what the page looked like, what was typed, what Workday answered. It
+        # starts after the sign-in, so the password is never in it.
+        try:
+            context.tracing.start(screenshots=True, snapshots=True)
+            tracing = True
+        except Exception:
+            tracing = False
         seen: set[str] = set()
         while True:
             if not context.pages:
@@ -1353,6 +1541,8 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
             report.say(f"  left for you: {line}")
         for line in report.decisions:
             report.say(f"  check this pick: {line}")
+        if tracing:
+            save_trace(context, profile, report)
         save_cookies(context, profile)
         if on_filled:
             on_filled(report)

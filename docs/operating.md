@@ -199,6 +199,14 @@ Only the file can turn it on: the dashboard's Settings tab can't. Check that aut
 .venv/Scripts/python.exe -m playwright install chromium
 ```
 
+Each value it types or box it ticks is read back from the page, and one the page didn't take is in the report with what the box shows. A resume counts as attached once Workday shows it as uploaded. Each run keeps a step-by-step record of the fill, starting after you sign in, in `data/browser/last-fill-trace.zip`, replacing the last run's. When a page goes wrong, replay it to see what the page looked like at each step:
+
+```bash
+.venv/Scripts/python.exe -m playwright show-trace data/browser/last-fill-trace.zip
+```
+
+The record holds your details as the pages showed them and the session's cookies, so keep it to yourself, as you would the rest of `data/`.
+
 The browser profile lives in your workspace's `data/browser/`, so each Workday tenant's sign-in survives between runs. Every tenant customizes its form a little, so the first run on a new one may find a section this doesn't fill; it says so and leaves it to you. Workday spells some skills its own way ("Machine Learning (ML)"); the common ones are built in, and `profile/workday-skills.toml` in your workspace adds more, as `"Your name" = "Workday's name"` lines under `[skills]`. `fill-sheet.json` beside the sheet is what the run reads, so the sheet's shape matters: the sections and field names in `example/profile/workday-paste.md`.
 
 Nothing ever applies on your behalf. Click **I applied** on the dashboard and it schedules a follow-up reminder for 7 days later. It also freezes the job: a read-only copy of `resume.md`, `cover-letter.md` and the built documents goes into the folder's `sent/`, the job leaves the ready list, and from then on nothing rebuilds, refreshes or re-checks its documents. The job shows **Frozen** with links to the sent copies, and **Changed after sending** if a file in the folder stops matching them. A second application to the same company is a new job with its own folder. For applications made before this existed, `pyrite sent <id> --from <subfolder>` keeps the copy from a subfolder you saved by hand. Log what comes back with **Got a reply**, **Interview** or **Rejected** so the numbers stay right. Reply detection points out mail worth checking, but only those buttons change a job's status.
