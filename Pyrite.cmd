@@ -6,6 +6,8 @@ set "URL=http://127.0.0.1:8787/"
 
 rem A fresh clone has no venv yet, and starting without one would only show a "Windows cannot find" box.
 if not exist ".venv\Scripts\pythonw.exe" goto novenv
+rem With no workspace, serve refuses to start, and waiting for it below would take half a minute to say so.
+if not defined PYRITE_HOME if not exist ".pyrite-home" goto noworkspace
 
 rem Anything can answer on a port, so check that what answers is Pyrite's own page.
 curl.exe -s --max-time 3 %URL% 2>nul | findstr /c:"<title>Pyrite</title>" >nul && goto open
@@ -41,7 +43,16 @@ exit /b 1
 echo Pyrite isn't set up in this folder yet: there's no .venv here. From this folder, run:
 echo     py -3 -m venv .venv
 echo     .venv\Scripts\python.exe -m pip install -r tools\requirements.txt
-echo Then point it at your workspace and run .venv\Scripts\python.exe tools\pyrite.py doctor. See docs\operating.md.
+echo     .venv\Scripts\python.exe tools\pyrite.py init ..\my-job-search --name "Your Name"
+echo Then run .venv\Scripts\python.exe tools\pyrite.py doctor, which lists what's left. See docs\operating.md.
+pause
+exit /b 1
+
+:noworkspace
+echo Pyrite has no workspace yet, so there's nothing of yours to show. From this folder, run:
+echo     .venv\Scripts\python.exe tools\pyrite.py init ..\my-job-search --name "Your Name"
+echo Or look around the fictional example with:
+echo     .venv\Scripts\python.exe tools\pyrite.py demo
 pause
 exit /b 1
 

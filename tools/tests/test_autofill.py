@@ -714,7 +714,8 @@ class Gate(ClaudeRun):
                 with self.subTest(argv), self.assertRaises(SystemExit) as stop:
                     self.command(*argv)
                 self.assertIn("No workspace is set", str(stop.exception))
-            self.assertTrue(self.command("where").strip())
+            with contextlib.redirect_stderr(io.StringIO()):  # where notes the example there, which a test run needn't show.
+                self.assertTrue(self.command("where").strip())
 
 
 if __name__ == "__main__":

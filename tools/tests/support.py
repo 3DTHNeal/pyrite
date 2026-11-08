@@ -151,7 +151,7 @@ class ClaudeRun(Base):
             patcher = mock.patch.object(target, name, self.root)
             patcher.start()
             self.addCleanup(patcher.stop)
-        patcher = mock.patch.object(cli, "_build", return_value="built")
+        patcher = mock.patch.object(cli, "_build", return_value="")  # The real one prints the files it made, which a test run needn't.
         self.build = patcher.start()
         self.addCleanup(patcher.stop)
 

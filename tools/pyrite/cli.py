@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import textwrap
 import tomllib
 from collections.abc import Callable
 from contextlib import closing
@@ -223,8 +224,19 @@ def ensure_folder(conn, job_id: int) -> str:
 
 @_with_db
 def cmd_folder(args, conn):
-    """Create the application folder for a job and save a copy of the posting."""
-    print(ROOT / ensure_folder(conn, args.id))
+    """Create the application folder for a job, save a copy of the posting, and start the drafts from your masters.
+    The daily run makes its folders with ensure_folder and writes its own drafts, so only this command copies them."""
+    folder = ROOT / ensure_folder(conn, args.id)
+    masters = {"resume.md": load_config()["guard"]["heading_source"], "cover-letter.md": "profile/cover-letter.md"}
+    copied = []
+    for name, rel in masters.items():
+        if (ROOT / rel).is_file() and not (folder / name).exists():
+            shutil.copyfile(ROOT / rel, folder / name)
+            copied.append(name)
+    print(folder)
+    if copied:
+        print(f"Started {' and '.join(copied)} from your masters. Tailor them to the posting, write notes.md, "
+              f"then `pyrite finish {args.id}` builds and checks them.", file=sys.stderr)
 
 
 def _build(source: Path, name: str, author: str, paper: str = "letter", letter: tuple[Path, str] | None = None) -> str:
@@ -283,8 +295,10 @@ def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict
             # Word's first PDF export in a process takes most of a minute, which looks like a hang with nothing said.
             print("Building the documents. With Word, the first PDF takes most of a minute.", file=sys.stderr, flush=True)
         try:
-            print(_build(folder / "resume.md", f"{prefix}_Resume_{token}", author, paper,
-                         (letter, f"{prefix}_Cover_Letter_{token}") if letter.exists() else None))
+            built = _build(folder / "resume.md", f"{prefix}_Resume_{token}", author, paper,
+                           (letter, f"{prefix}_Cover_Letter_{token}") if letter.exists() else None)
+            if built:
+                print(built)
         except subprocess.CalledProcessError as err:
             report["ok"] = False
             report["errors"].append(f"Build failed: {(err.stderr or err.stdout or '').strip()[:300]}")
@@ -536,8 +550,11 @@ def cmd_init(args):
     if folder == CODE_ROOT or CODE_ROOT in folder.parents:
         sys.exit(f"{folder} is inside this repository. Make your workspace outside it, so nothing personal can be committed here.")
     if (folder / "profile").exists():
-        use = "It's already the workspace in use." if folder == ROOT else f"To use it, put its path in {store.HOME_POINTER}."
-        sys.exit(f"{folder} already has a profile/ folder, so nothing was changed. {use}")
+        if folder == ROOT:
+            # Asking again for what's already true isn't an error, so a setup script can run this twice.
+            print(f"{folder} is already the workspace in use, so nothing was changed. `pyrite doctor` lists what's left.")
+            return
+        sys.exit(f"{folder} already has a profile/ folder, so nothing was changed. To use it, put its path in {store.HOME_POINTER}.")
     profile = folder / "profile"
     shutil.copytree(store.EXAMPLE_ROOT / "profile", profile, ignore=shutil.ignore_patterns(*INIT_SKIP, "*.previous.*"))
     config = profile / "search.toml"
@@ -636,6 +653,16 @@ def cmd_seed(args, conn):
         sys.exit(1)
 
 
+def _doctor_line(mark: str, what: str, fix: str = "") -> str:
+    """One finding, wrapped to the terminal under its mark. Paths and commands are never split across lines."""
+    width = max(60, min(shutil.get_terminal_size((100, 24)).columns, 110))
+    indent = " " * 9
+    wrap = functools.partial(textwrap.fill, width=width, subsequent_indent=indent, break_long_words=False, break_on_hyphens=False)
+    lines = [wrap(what, initial_indent=f"  {mark}  ")]
+    lines += [wrap(part, initial_indent=indent) for part in fix.splitlines() if part.strip()]
+    return "\n".join(lines)
+
+
 def cmd_doctor(args):
     """What's left to set up: example files still in place, sources that point nowhere, and missing programs."""
     from . import doctor
@@ -647,14 +674,13 @@ def cmd_doctor(args):
         cfg = None
     todos = doctor.workspace_todos(ROOT, cfg)
     for todo in todos:
-        print(f"  TO DO  {todo['what']}\n         {todo['fix']}")
+        print(_doctor_line("TO DO", todo["what"], todo["fix"]))
     if not todos:
-        print("  ok     Nothing in it is still the example's, and every source it names is there.")
+        print(_doctor_line("ok   ", "Nothing in it is still the example's, and every source it names is there."))
     print("Programs:")
     tools = doctor.tool_checks(cfg)
     for tool in tools:
-        mark = {True: "ok   ", False: "TO DO", None: "note "}[tool["ok"]]
-        print(f"  {mark}  {tool['what']}" + (f"\n         {tool['fix']}" if tool["fix"] else ""))
+        print(_doctor_line({True: "ok   ", False: "TO DO", None: "note "}[tool["ok"]], tool["what"], tool["fix"]))
     if todos or any(tool["ok"] is False for tool in tools):
         sys.exit(1)
     print("Ready. `pyrite sources` tests the job boards you watch.")
@@ -804,6 +830,6 @@ def main(argv=None):
     if store.IS_EXAMPLE and args.command in NEEDS_WORKSPACE:
         sys.exit(
             f"No workspace is set, so `pyrite {args.command}` would write into the fictional example inside this repository.\n"
-            "Point PYRITE_HOME or .pyrite-home at your own workspace (see docs/operating.md), or run `pyrite demo` to look around."
+            "`pyrite init <folder>` makes your own workspace outside it and points Pyrite there. `pyrite demo` looks around without one."
         )
     args.func(args)

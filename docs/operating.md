@@ -45,8 +45,9 @@ my-job-search/
 It leaves out the example's `seed.toml` and clears its `allowed_hosts`, and changes nothing if the folder already has a `profile/`. Then replace everything else in `profile/`:
 
 - `facts.md`, `approved-terms.txt` and `run-notes.md` with your own.
-- `resume.md` and `cover-letter.md` with your master resume and letter. The `[guard]` section of `search.toml` names them as the sources every draft is checked against, and `resume.md` as the one whose employers, titles and dates a draft must match.
-- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks and the companies to watch, and under `[guard]` your own confidential and unsupported terms and `expected_on_resume`. `allowed_hosts` under `[dashboard]` lists names the dashboard would answer to, so add only ones you use.
+- `resume.md` and `cover-letter.md` with your master resume and letter, written in the form under [How the documents are written](#how-the-documents-are-written). The `[guard]` section of `search.toml` names them as the sources every draft is checked against, and `resume.md` as the one whose employers, titles and dates a draft must match.
+- In `search.toml`, `[candidate]` with your name, `[location]`, the tracks, industries and companies to watch, and under `[guard]` your own confidential and unsupported terms and `expected_on_resume`. The assay reads nothing from the "Do not use" and "Unsupported" sections of `facts.md`, so every term in them needs a pattern under `forbidden` or `unsupported` to be blocked. `allowed_hosts` under `[dashboard]` lists names the dashboard would answer to, so add only ones you use.
+- `workday-paste.md` with your own Workday answers, or delete it if you won't use `pyrite fill`.
 - `seed.toml`, if you want it, with the applications you made before Pyrite. `pyrite seed` imports them: one with `applied_on` as applied, and one without under Being tailored, where `pyrite finish` checks it.
 
 To do it by hand instead, copy `example/profile/` into a folder outside this repository and point the code at it. Either set `PYRITE_HOME`, or put the path on one line in a file called `.pyrite-home` in this folder, which git ignores. A Git Bash path such as `/c/Users/you/my-job-search` works too. Check it with:
@@ -61,7 +62,7 @@ Then ask what's left:
 .venv/Scripts/python.exe tools/pyrite.py doctor
 ```
 
-It lists every profile file that's still the example's, the example's settings left in `search.toml`, each source under `[guard]` that isn't in your workspace, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
+It lists every profile file that's still the example's, the example's settings left in `search.toml`, each source under `[guard]` that isn't in your workspace, a master resume or letter that isn't in the form the assay reads, each "Do not use" term in `facts.md` that `forbidden` doesn't block, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
 
 With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder`, `finish` and `serve`, then refuse to run, so nothing real ends up inside this repository. `pyrite demo` is the way to look around without a workspace.
 
@@ -81,12 +82,34 @@ git config pyrite.denylist /path/to/my-job-search/profile/public-denylist.txt
 
 The check reads file contents, file and branch names, commit messages and the text inside `.docx` and `.pdf` files. Reading a PDF's pages needs poppler's `pdftotext`, which Git for Windows includes, or `pypdf`. Without either, a PDF blocks the push, since nothing would vouch for what's on its pages.
 
+## How the documents are written
+
+Your master resume and letter, and every draft made from them, are Markdown with a few marks of Pyrite's own, one element per line. The builder turns them into Word documents, and the assay reads them, so a master that strays from this form makes every draft fail:
+
+```text
+# Your Name                                         your name, exactly as [candidate] name in search.toml
+= Senior Data Engineer | Python and Postgres         optional headline under the name
+@ Springfield, IL · you@example.com                  the contact line, items separated by " · "
+## Summary                                           a section heading
+### Acme Data | Jan 2020 – Oct 2026                  an employer and its dates
+#### Senior Data Engineer | Springfield, IL | Jan 2020 – Oct 2026     a role, its place and its dates
+- Cut nightly batch time from 6 hours to 2 hours.    a bullet
+```
+
+- A resume needs `## Experience` and `## Education`. Every `###` and `####` line in a draft must appear word for word in the master resume, so that's where your employers, titles and dates are set.
+- A letter opens with the same `# Your Name` and `@` lines as the resume, then the letter as plain paragraphs. The assay takes the first `@` line in your approved sources as the one every document must carry.
+- `~ Label` is an italic group label inside a role, and `**bold**` works inside a line.
+
+The example's [resume](../example/profile/resume.md) and [letter](../example/profile/cover-letter.md) show the whole form, and `tools/build_resume.py` describes each mark. `pyrite doctor` says when a master is missing one of the lines the assay needs.
+
 ## A new application by hand
 
-1. Make a folder under `applications/` in your workspace and copy the closest `resume.md` into it.
-2. Tailor it to the posting using only facts from `profile/facts.md`. Add new confirmed facts there first.
+1. Add the posting with `pyrite add`, or the dashboard's **Add a posting**, then make its folder with `pyrite folder <id>`. That saves the posting and starts `resume.md` and `cover-letter.md` from your masters.
+2. Tailor them to the posting using only facts from `profile/facts.md`. Add new confirmed facts there first.
 3. Write `notes.md` with the posting link, fit and gaps.
-4. Build it and confirm it's two pages:
+4. `pyrite finish <id>` builds the documents and runs the assay, and marks the job ready only if it passes.
+
+To build a document without the assay, run the builder yourself, and confirm a resume is two pages:
 
 ```bash
 .venv/Scripts/python.exe tools/build_resume.py path/to/resume.md --name Your_Name_Resume_Acme --author "Your Name"

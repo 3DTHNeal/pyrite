@@ -387,7 +387,9 @@ def main():
         problems = lint_pdf(source, out_pdf, letter=letter)
         if problems:
             sys.exit(f"{out_pdf.name} would not parse cleanly: " + "; ".join(problems) + ".")
-        print(f"{out_pdf} ({_pages(out_pdf) or 'unknown'} pages, drafter {DRAFTER_VERSION})")
+        pages = _pages(out_pdf)
+        count = "page count unknown" if not pages else f"{pages} page" if pages == 1 else f"{pages} pages"
+        print(f"{out_pdf} ({count}, drafter {DRAFTER_VERSION})")
 
 
 if __name__ == "__main__":
