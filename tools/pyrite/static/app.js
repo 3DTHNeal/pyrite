@@ -63,8 +63,88 @@ async function api(path, body) {
   } catch (err) {
     throw new Error(`The server gave no usable answer (${res.status}).`);
   }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    // 428 means the change needs a code: data says what for. The caller decides what to do with it.
+    const err = new Error(data.error || (res.status === 428 ? "This change needs a code." : `Request failed (${res.status})`));
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   return data;
+}
+
+// A change that loosens the fact check needs a code Pyrite sends to this computer's notifications. `send` sends the
+// change again with a request id and code (both null to ask for a fresh code), and `cancelled` puts the form back.
+function codePrompt(first, send, cancelled) {
+  let current = first;
+  const digits = (value) => value.replace(/\D/g, "");
+  const list = h("ul", { class: "code-changes" });
+  const note = h("p", { class: "muted" });
+  const input = h("input", { class: "code-input", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "7",
+    placeholder: "000 000", "aria-label": "Code from the notification" });
+  const error = h("p", { class: "error", role: "alert" });
+  const ok = h("button", { class: "btn primary", type: "button", disabled: true }, "Confirm");
+  const show = (fresh) => {
+    current = fresh;
+    fill(list, current.changes.map((change) => h("li", {}, `It will ${change}.`)));
+    note.textContent = current.sent
+      ? "Pyrite sent a 6-digit code to this computer's notifications. It works once, for this change only, for 2 minutes. No notification? Run `pyrite code` in a terminal on this computer."
+      : "The notification didn't go through. Run `pyrite code` in a terminal on this computer to see the code. It works once, for this change only, for 2 minutes.";
+    input.value = "";
+    ok.disabled = true;
+  };
+  const restart = async () => {
+    try {
+      await send(null, null);
+    } catch (err) {
+      if (err.status !== 428) throw err;
+      show(err.data);
+    }
+  };
+  input.addEventListener("input", () => { ok.disabled = digits(input.value).length !== 6; });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !ok.disabled) ok.click();
+    if (e.key === "Escape") cancel.click();
+  });
+  ok.addEventListener("click", async () => {
+    error.textContent = "";
+    ok.disabled = true;
+    try {
+      await send(current.request_id, digits(input.value));
+    } catch (err) {
+      if (err.status === 428) show(err.data);
+      error.textContent = err.message;
+      ok.disabled = digits(input.value).length !== 6;
+      input.focus();
+    }
+  });
+  const resend = h("button", { class: "btn", type: "button", onclick: async () => {
+    error.textContent = "";
+    try {
+      show(await api("/api/profile/code", { action: "resend", request_id: current.request_id }));
+    } catch (err) {
+      // That code had ended, so make the change again for a new one.
+      try {
+        await restart();
+      } catch (again) {
+        error.textContent = again.message;
+      }
+    }
+    input.focus();
+  } }, "Send a new code");
+  const cancel = h("button", { class: "btn", type: "button", onclick: async () => {
+    try {
+      await api("/api/profile/code", { action: "cancel", request_id: current.request_id });
+    } catch (err) {
+      // Nothing was waiting. Either way, nothing was changed.
+    }
+    cancelled();
+  } }, "Cancel");
+  show(first);
+  setTimeout(() => input.focus(), 0);
+  return h("div", { class: "code-prompt", role: "group", "aria-label": "Confirm with a code" },
+    h("p", { class: "code-title" }, "This change loosens the fact check"), list, note,
+    h("div", { class: "part-actions" }, input, ok, resend, cancel), error);
 }
 
 // ---- Top of page ----
@@ -748,13 +828,23 @@ function factsEditor(file, initial, rebuild) {
   const error = h("p", { class: "error", role: "alert" });
   const save = h("button", { class: "btn primary", type: "button", onclick: async () => {
     error.textContent = "";
+    const body = { file: file.key, version: file.version, text: rebuild(area.value) };
+    const saved = (data) => { facts = data; renderFacts(); };
     try {
-      facts = await api("/api/facts", { file: file.key, version: file.version, text: rebuild(area.value) });
+      saved(await api("/api/facts", body));
     } catch (err) {
-      error.textContent = err.message;
-      return;
+      if (err.status !== 428) {
+        error.textContent = err.message;
+        return;
+      }
+      // Approving a term or unlisting a "Do not use" item: confirm with the code before it's saved.
+      save.disabled = true;
+      area.readOnly = true;
+      const prompt = codePrompt(err.data,
+        async (requestId, code) => saved(await api("/api/facts", { ...body, request_id: requestId, code })),
+        () => { prompt.remove(); save.disabled = false; area.readOnly = false; area.focus(); });
+      box.append(prompt);
     }
-    renderFacts();
   } }, "Save");
   const cancel = h("button", { class: "btn", type: "button", onclick: renderFacts }, "Cancel");
   const box = h("div", { class: "facts-editing" }, area, h("div", { class: "part-actions" }, save, cancel), error);

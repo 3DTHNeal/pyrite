@@ -152,6 +152,14 @@ def _keep(stamp: str, key: str, text: str, reason: str) -> None:
         old.unlink(missing_ok=True)
 
 
+def refuse_stale(current: dict[str, str], based_on: dict) -> None:
+    """Raise Conflict if any file changed since the version the page read."""
+    for key, text in current.items():
+        if based_on.get(key) != version(text):
+            raise Conflict(f"{FILES[key]} changed after you opened it, so nothing was saved. "
+                           "Reload to see the latest, then make your change again.")
+
+
 def write(changes: dict, based_on: dict, reason: str) -> dict:
     """Write several profile files at once, each only if it hasn't changed since `based_on` says it was read.
 
@@ -168,10 +176,7 @@ def write(changes: dict, based_on: dict, reason: str) -> dict:
     texts = {key: _clean(key, text) for key, text in changes.items()}
     with settings._lock:
         current = {key: read(key) for key in texts}
-        for key, text in current.items():
-            if based_on.get(key) != version(text):
-                raise Conflict(f"{FILES[key]} changed after you opened it, so nothing was saved. "
-                               "Reload to see the latest, then make your change again.")
+        refuse_stale(current, based_on)
         changed = [key for key, text in texts.items() if text != current[key]]
         existed = {key: _path(key).exists() for key in changed}
         stamp = _stamp()

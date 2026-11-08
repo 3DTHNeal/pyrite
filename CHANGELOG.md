@@ -6,6 +6,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- Saves on the Facts tab that would let drafts say more, such as approving a term or taking an item off "Do not use", ask for a six-digit code that Pyrite sends to this computer's notifications, naming the change. `pyrite code` prints the code waiting when the notification doesn't show. A code works once, for that change, for 2 minutes.
 - An **Industries** tab: for each industry under `[promote]`, what Pyrite has seen of it, the official BLS employment, pay and growth figures for your metro area, state and the country, and an outlook Claude researches on the web on request, keeping only points whose sources turned up in its own search. Add `naics` codes to each industry and a `[market]` section with your state and metro area to `search.toml`. `pyrite outlook "<industry>"` writes the outlook from the command line.
 - `pyrite init <folder>` makes a workspace from the example's profile, without its fictional applications or allowed hosts, and points `.pyrite-home` at it.
 - `pyrite doctor` and the dashboard's Finish setup list also name the example's settings left in `search.toml`: its local places, confidential and unsupported terms, ordinary words, the degree every resume is expected to name, preferred cities and mail domains.

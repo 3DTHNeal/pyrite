@@ -571,6 +571,23 @@ def cmd_serve(args):
     serve(args.port)
 
 
+def cmd_code(args):
+    """The code the dashboard is waiting for, for when its notification didn't show."""
+    import time
+
+    from . import confirm
+
+    found = confirm.waiting()
+    if not found:
+        print("No code is waiting. The dashboard asks for one when a change would loosen the fact check, and each "
+              "code lasts 2 minutes.")
+        return
+    code = str(found["code"])
+    left = max(0, int(float(found["expires"]) - time.time()))
+    print(f"{code[:3]} {code[3:]}")
+    print(f"{confirm.sentence(list(found['summary']))} It expires in {left} seconds.")
+
+
 def cmd_where(args):
     """Which workspace this command would read and write. The path alone goes to stdout, for scripts."""
     print(ROOT)
@@ -830,6 +847,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("seed", help="import applications listed in profile/seed.toml").set_defaults(func=cmd_seed)
     sub.add_parser("where", help="print which workspace is in use").set_defaults(func=cmd_where)
+    sub.add_parser("code", help="show the code the dashboard is asking for, if its notification didn't show").set_defaults(func=cmd_code)
 
     p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it")
     p.add_argument("folder", help="where your workspace goes, outside this repository")

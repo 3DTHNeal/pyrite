@@ -98,7 +98,7 @@ The split is deliberate. Everything that can be a rule is a rule, which keeps it
 
 **Ghost jobs get flagged, not hidden.** Some listings stay up for months or keep getting reposted. [`score.py`](tools/pyrite/score.py) tracks each job's earliest date, so a repost can't make an old job look new, and it marks likely ghosts as a reason for doubt while leaving the decision to you.
 
-**The dashboard assumes it's a target.** It listens on localhost only and checks the `Host` header against DNS rebinding. It refuses cross-site requests and non-JSON posts, and it builds the page from text nodes, never from HTML strings, under a strict content security policy. [`server.py`](tools/pyrite/server.py) has the details, and the tests attack all of it.
+**The dashboard assumes it's a target.** It listens on localhost only and checks the `Host` header against DNS rebinding. It refuses cross-site requests and non-JSON posts, and it builds the page from text nodes, never from HTML strings, under a strict content security policy. A save that would loosen the fact check, such as approving a term, waits for a one-time code that [`confirm.py`](tools/pyrite/confirm.py) sends to this computer's notifications, naming the change. [`server.py`](tools/pyrite/server.py) has the details, and the tests attack all of it.
 
 ## Keeping my data out of this repo
 
