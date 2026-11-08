@@ -3038,6 +3038,11 @@ class Autofill(ClaudeRun):
             self.assertEqual(field, ["", ""])
             self.assertIn("education 1 field of study: no entry called 'Underwater Welding Technology'. Workday offers: Coastal and Ocean Engineering Technology",
                           report.skipped)
+            # A "/" in a name ends the pattern Playwright writes out unless it's escaped, and the search dies with a selector error.
+            page.evaluate("document.body.insertAdjacentHTML('beforeend', '<ul role=\"listbox\"><li role=\"option\">Electrical/Electronic Engineering Technology</li></ul>')")
+            chosen, exact = workday._results(page, ["Electrical/Electronic Engineering Technology", "Electrical and Computer Engineering"], set(), timeout_ms=500)
+            self.assertIsNone(chosen)
+            self.assertEqual(exact.first.inner_text(), "Electrical/Electronic Engineering Technology")
             schools = page.evaluate("[...document.querySelectorAll('[id$=\"--schoolName\"]')].map(e => e.value)")
             degrees = page.evaluate("[...document.querySelectorAll('[id$=\"--degree\"]')].map(e => e.textContent)")
             browser.close()

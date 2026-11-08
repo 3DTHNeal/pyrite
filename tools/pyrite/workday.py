@@ -296,6 +296,13 @@ def _says_none(page) -> bool:
     return any(found.nth(i).is_visible() for i in range(found.count()))
 
 
+def _literal(text: str) -> str:
+    """`text` as a literal inside a pattern that goes to the browser. Playwright writes a pattern out as /source/flags,
+    so a "/" in a name, as in "Electrical/Electronic Engineering Technology", must be escaped too or it ends the
+    pattern early and the search fails with a selector error."""
+    return re.escape(text).replace("/", r"\/")
+
+
 def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS_MS, chosen_names: list[str] | None = None):
     """Wait for a search to answer. Returns the picker's already-chosen entry (one of `chosen_names`, by default `names`),
     an exact match for one of `names`, or neither once the list has settled.
@@ -304,8 +311,8 @@ def _results(page, names: list[str], before: set[str], timeout_ms: int = RESULTS
     Two searches can answer with the same entries, though ("Linux", then "Linux Server"), so a list that hasn't changed
     by the end of the grace period counts as this search's answer.
     """
-    pattern = "|".join(re.escape(n) for n in names)
-    picked = "|".join(re.escape(n) for n in (chosen_names or names))
+    pattern = "|".join(_literal(n) for n in names)
+    picked = "|".join(_literal(n) for n in (chosen_names or names))
     chosen = page.get_by_role("option", name=re.compile(rf"^(?:{picked}), press delete", re.I))
     exact = page.get_by_role("option", name=re.compile(rf"^(?:{pattern})( not checked| checked)?$", re.I))
     now = time.monotonic()
@@ -451,7 +458,7 @@ def choose(page, button, wanted: list[str], report: Report, what: str) -> str:
             break
     if listbox is not None:
         for name in wanted:
-            entry = listbox.get_by_text(re.compile(rf"^\s*{re.escape(name)}\s*$", re.I))
+            entry = listbox.get_by_text(re.compile(rf"^\s*{_literal(name)}\s*$", re.I))
             if entry.count():
                 entry.first.click()
                 page.wait_for_timeout(300)
@@ -796,9 +803,9 @@ def answer_radio(page, question_pattern: str, value: str, report: Report, what: 
     field = _field_for(page, question_pattern)
     scopes = [field, page] if field is not None else [page]
     for scope in scopes:
-        radio = scope.get_by_role("radio", name=re.compile(rf"^\s*{re.escape(value)}\s*$", re.I))
+        radio = scope.get_by_role("radio", name=re.compile(rf"^\s*{_literal(value)}\s*$", re.I))
         if not radio.count():
-            radio = scope.get_by_label(re.compile(rf"^\s*{re.escape(value)}\s*$", re.I))
+            radio = scope.get_by_label(re.compile(rf"^\s*{_literal(value)}\s*$", re.I))
         if radio.count():
             radio.first.check()
             report.filled.append(f"{what}: {value}")
@@ -857,7 +864,7 @@ def pick_source(page, field, box, source: str, report: Report, company: str = ""
     if not terms:
         return False
     if source == "company site" and company:
-        first = re.escape(company.split()[0])
+        first = _literal(company.split()[0])
         terms = [f"{company} Careers", f"{company} Website", company] + terms
         accept = re.compile(rf"{accept.pattern}|^\s*{first}\b.*(?:career|job|site|web)", re.I)
     page.keyboard.press("Escape")
@@ -1054,9 +1061,9 @@ def fill_questions(page, questions: dict[str, str], report: Report) -> None:
         if button.count():
             choose(page, button.first, [value, answer], report, label[:60])
         elif radios.count():
-            radio = radios.filter(has_text=re.compile(rf"^\s*{re.escape(value)}\s*$", re.I))
+            radio = radios.filter(has_text=re.compile(rf"^\s*{_literal(value)}\s*$", re.I))
             if not radio.count():
-                radio = box.get_by_role("radio", name=re.compile(rf"^{re.escape(value)}$", re.I))
+                radio = box.get_by_role("radio", name=re.compile(rf"^{_literal(value)}$", re.I))
             if radio.count():
                 radio.first.check()
                 report.filled.append(f"{label[:60]}: {value}")
