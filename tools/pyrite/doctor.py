@@ -5,8 +5,8 @@ are cheap file reads, so the dashboard lists them on every refresh. The tools (t
 Claude Code, the mail login) take longer to look for, so only `pyrite doctor` checks them.
 """
 import importlib.util
-import os
 import shutil
+import sys
 import tomllib
 from pathlib import Path
 
@@ -96,7 +96,8 @@ def _seed_todos(root: Path) -> list[dict]:
 
 
 def _word_installed() -> bool:
-    if os.name != "nt":
+    # sys.platform rather than os.name, so type checkers on other systems know winreg is never reached there.
+    if sys.platform != "win32":
         return False
     import winreg
 

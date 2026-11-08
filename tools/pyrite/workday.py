@@ -91,12 +91,11 @@ GRACE_MS = 1500
 
 def ask(prompt: str) -> str:
     """input(), after dropping keystrokes typed before the question was asked, so one page's Enter can't answer the next."""
-    try:
+    # Only Windows offers a way to read what's waiting, and checking sys.platform lets type checkers on other systems agree.
+    if sys.platform == "win32":
         import msvcrt
         while msvcrt.kbhit():
             msvcrt.getwch()
-    except ImportError:
-        pass
     return input(prompt)
 
 
