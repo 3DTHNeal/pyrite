@@ -8,7 +8,7 @@ import unittest
 import unittest.mock as mock
 from pathlib import Path
 
-import support  # Points Pyrite at a throwaway workspace before it loads.
+import support  # noqa: F401  Points Pyrite at a throwaway workspace before it loads.
 
 from pyrite import checks, factsdoc, profile, server, steps, store, tomledit
 
@@ -138,7 +138,7 @@ class Steps(unittest.TestCase):
         line = "Madison, WI · (555) 010-0142 · alex@rivera.example · linkedin.com/in/alex-rivera-example"
         self.assertIn(f"\n{line}\n", lf(result, "facts"))
         for key in ("resume", "letter"):
-            self.assertIn(f"# Alex Q. Rivera\n", lf(result, key))
+            self.assertIn("# Alex Q. Rivera\n", lf(result, key))
             self.assertIn(f"@ {line}\n", lf(result, key))
         config = tomllib.loads(lf(result, "config"))
         self.assertEqual((config["candidate"]["name"], config["documents"]["paper"]), ("Alex Q. Rivera", "a4"))

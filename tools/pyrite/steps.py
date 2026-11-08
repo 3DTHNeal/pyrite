@@ -12,6 +12,7 @@ import difflib
 import re
 import tomllib
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import checks, confirm, doctor, factsdoc, profile, store, tomledit
 
@@ -99,7 +100,7 @@ class Plan:
             doc.set_line(line, text)
         # From the bottom up, so each change leaves the lines above it where they were. At one place, a deletion goes
         # first, so what's inserted there isn't deleted with it.
-        ops = [(start, 1, end) for start, end in self.deletes] + [(at, 0, None) for at in self.inserts]
+        ops = [(start, 1, end) for start, end in self.deletes] + [(at, 0, 0) for at in self.inserts]
         for at, kind, end in sorted(ops, reverse=True):
             if kind:
                 doc.delete(at, end)
@@ -274,8 +275,8 @@ def _basics(texts: dict, cfg: dict, edits: dict) -> Draft:
     if contact != old_contact:
         if found:
             doc.set_line(found[0], contact)
-        elif doc.section("contact"):
-            doc.insert(doc.section("contact").start + 1, [contact])
+        elif contact_section := doc.section("contact"):
+            doc.insert(contact_section.start + 1, [contact])
         else:
             sections = doc.sections()
             doc.insert(sections[0].start if sections else len(doc.lines), ["## Contact", contact, ""])
@@ -406,10 +407,10 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
     # For the master resume: each employer as it was and as it will be.
     moves: list[dict] = []
     last_employer_end = max((items[e.line].end for e in employers), default=None)
-    labeled_end = max((items[l.line].end for l in labeled), default=None)
+    labeled_end = max((items[entry.line].end for entry in labeled), default=None)
     end_of_section = _section_end(doc, section) if section else len(doc.lines)
 
-    parsed = []
+    parsed: list[dict[str, Any]] = []
     for entry in want:
         if not isinstance(entry, dict):
             raise ValueError("An employer should be a name and roles.")
@@ -437,7 +438,7 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
 
     for index, entry in enumerate(parsed):
         old, name, roles = entry["old"], entry["name"], entry["roles"]
-        move = {"old": old, "name": name, "roles": [], "removed": []}
+        move: dict[str, Any] = {"old": old, "name": name, "roles": [], "removed": []}
         moves.append(move)
         if old is None:
             count += 1 + len(roles)
@@ -451,7 +452,7 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
             move["roles"] = [{"old": None, "new": role} for role in roles]
             after = next((p["old"].line for p in parsed[index + 1:] if p["old"] is not None), None)
             at = after if after is not None else last_employer_end if last_employer_end is not None else \
-                min(l.line for l in labeled) if labeled else end_of_section
+                min(entry.line for entry in labeled) if labeled else end_of_section
             plan.insert(at, block)
             continue
 
@@ -500,7 +501,8 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
             span_end = end if _span(new_values)[1] != _span(old_values)[1] else None
         if renamed or span_start or span_end:
             plan.set(old.line, factsdoc.employer_text(doc.bare(old.line), name if renamed else None, span_start, span_end))
-        indent = factsdoc.BULLET.fullmatch(doc.bare(old.roles[0].line))["indent"] if old.roles else "  "
+        bullet = factsdoc.BULLET.fullmatch(doc.bare(old.roles[0].line)) if old.roles else None
+        indent = bullet["indent"] if bullet else "  "
         wanted = {role["line"] for role in roles if role["line"] is not None}
         for was in old.roles:
             if was.line not in wanted:
@@ -526,7 +528,7 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
 
     if want_other is not None:
         seen: set[int] = set()
-        by_line = {l.line: l for l in labeled}
+        labeled_by_line = {entry.line: entry for entry in labeled}
         for raw in _list(want_other, "Other lines"):
             if not isinstance(raw, dict):
                 raise ValueError("An education or certification line should be a label and text.")
@@ -538,21 +540,22 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
                 raise ValueError("Education and certification lines need a label, such as Education, and the text.")
             line = raw.get("line")
             if isinstance(line, int):
-                was = by_line.get(line)
-                if was is None:
+                old_line = labeled_by_line.get(line)
+                if old_line is None:
                     raise ValueError("A line in the Timeline has moved since the page read it. Reload and try again.")
                 seen.add(line)
-                if (label, text) != (was.label, was.text):
+                if (label, text) != (old_line.label, old_line.text):
                     bold = factsdoc.BOLD.search(doc.bare(line))
+                    assert bold is not None  # A labeled line is one that starts with a bold label.
                     plan.set(line, f"{doc.bare(line)[:bold.start()]}**{label}:** {text}")
                     count += 1
             else:
                 at = labeled_end if labeled_end is not None else last_employer_end if last_employer_end is not None else end_of_section
                 plan.insert(at, [f"- **{label}:** {text}"])
                 count += 1
-        for was in labeled:
-            if was.line not in seen:
-                plan.delete(was.line, items[was.line].end)
+        for old_line in labeled:
+            if old_line.line not in seen:
+                plan.delete(old_line.line, items[old_line.line].end)
                 count += 1
 
     plan.apply(doc)
@@ -599,7 +602,7 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
         "timeline": [{"name": e.name, "start": e.start, "end": e.end,
                       "roles": [{"title": r.title, "place": r.place, "start": r.start, "end": r.end} for r in e.roles]}
                      for e in after_employers],
-        "other": [{"label": l.label, "text": l.text} for l in after_labeled],
+        "other": [{"label": entry.label, "text": entry.text} for entry in after_labeled],
         "gaps": _gaps(after_employers),
     })
 

@@ -400,7 +400,7 @@ def edit_list(text: str, table: str | Path, key: str, remove=(), add=(), literal
     eol = _eol(text)
     new = text
     spans = _items(text, pair)
-    for (a, b), value in reversed(list(zip(spans, current))):
+    for (a, b), value in reversed(list(zip(spans, current, strict=True))):
         if value not in gone:
             continue
         end = _ws(new, b)
