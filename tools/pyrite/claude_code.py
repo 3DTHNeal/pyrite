@@ -1,7 +1,8 @@
 """Running Claude Code for one narrow job, and keeping count of what each run used.
 
 Refresh resume and interview prep both start Claude here, so they share the same limits: no shell,
-no web access, and edits only to the files each one names.
+no web access and no tool that writes. Each hands its document back in its closing message, and the
+code writes it.
 """
 import json
 import os
@@ -126,13 +127,15 @@ def model_documents(root: Path) -> list[str]:
     return found
 
 
-def files_section(root: Path, folder: str, drafts: tuple[str, ...]) -> str:
+def files_section(root: Path, folder: str, drafts: tuple[str, ...], models: bool = True) -> str:
     """The workspace files a writing run needs, in the prompt itself, so it spends its turns writing rather than reading.
 
-    The fact bank, run notes and approved terms, then the model documents the run notes name, the job's
-    posting, and whichever of `drafts` already exist in its folder. A file that doesn't exist is left out.
+    The fact bank, run notes and approved terms, then the model documents the run notes name (unless `models`
+    is false), the job's posting, and whichever of `drafts` already exist in its folder. A file that doesn't
+    exist is left out.
     """
-    paths = [*PROFILE_FILES, *model_documents(root), f"{folder}/posting.md", *(f"{folder}/{name}" for name in drafts)]
+    paths = [*PROFILE_FILES, *(model_documents(root) if models else []), f"{folder}/posting.md",
+             *(f"{folder}/{name}" for name in drafts)]
     blocks = []
     for path in paths:
         file = root / path
@@ -170,6 +173,69 @@ def command(claude: str, editable: list[str]) -> list[str]:
         *limits,
         "--disallowedTools", ",".join(NEVER_READ),
     ]
+
+
+# A run that writes one document hands it back in its closing message, and the code saves it. A path-scoped Edit
+# rule isn't honored in headless dontAsk on every platform: on Windows it was refused in every spelling, and a bare
+# Write would have let the run write anywhere. So these runs get no tools, and nothing on disk changes unless the
+# code writes it.
+DOCUMENT = re.compile(r"""<document\s+name\s*=\s*["']([^"'<>]+)["']\s*>(.*?)</document\s*>""", re.I | re.S)
+OPEN_DOCUMENT = re.compile(r"<document\b", re.I)
+WRAPPING_FENCE = re.compile(r"\A(`{3,}|~{3,})[^\n]*\n(.*?)\n?\1\Z", re.S)
+FENCE_LINE = re.compile(r"^[ \t]*(?:`{3,}|~{3,})[\w-]*[ \t]*$", re.M)
+
+
+class NoDocument(ClaudeFailed):
+    """Claude Code finished, but its closing message didn't carry the document it was asked for."""
+
+
+def hand_back(required: str, optional: tuple[str, ...] = ()) -> str:
+    """The closing message a run with no tools is asked for, in the shape `documents` reads."""
+    text = (
+        "\n\n## Hand it back\n\n"
+        "You have no tools, so you can't read or write a file. Your closing message carries the document instead, "
+        f"and Pyrite saves it. Give the whole of `{required}`, not just what changed, between an opening and a "
+        "closing line of their own, exactly like this:\n\n"
+        f'<document name="{required}">\n'
+        "The whole file, as Markdown, with no code fence around it.\n"
+        "</document>\n\n"
+    )
+    if optional:
+        names = " or ".join(f"`{name}`" for name in optional)
+        text += (f"If you changed {names}, hand it back the same way, whole, in a block of its own. "
+                 "Leave out a file you didn't change.\n\n")
+    return text + "Outside the blocks, write only the one sentence for the dashboard.\n"
+
+
+def documents(answer: str, required: str, optional: tuple[str, ...] = ()) -> tuple[dict[str, str], str]:
+    """The documents a run handed back in its closing message, by file name, and the sentence it wrote around them.
+
+    A block may name the file with its folder, and a code fence around the whole of it is dropped. A file handed
+    back twice keeps the last block. Anything not asked for is ignored. Raises NoDocument without `required`.
+    """
+    wanted = (required, *optional)
+    found: dict[str, str] = {}
+    for match in DOCUMENT.finditer(answer):
+        name = match.group(1).strip().replace("\\", "/").rsplit("/", 1)[-1]
+        body = match.group(2).strip()
+        fenced = WRAPPING_FENCE.match(body)
+        if fenced:
+            body = fenced.group(2).strip()
+        if name in wanted and body:
+            found[name] = body + "\n"
+    if required not in found:
+        said = " ".join(answer.split())
+        began = f" Its answer began: {said[:160]}" if said else " Its answer was empty."
+        raise NoDocument(f"Claude didn't hand back {required}, so nothing was saved.{began}")
+    # The sentence for the dashboard is whatever is left, up to any block left open by an answer that was cut off.
+    rest = OPEN_DOCUMENT.split(DOCUMENT.sub("\n", answer))[0]
+    return found, " ".join(FENCE_LINE.sub("", rest).split())
+
+
+def save_documents(folder: Path, found: dict[str, str]) -> None:
+    """Write what a run handed back into the job's folder."""
+    for name, text in found.items():
+        (folder / name).write_text(text, encoding="utf-8", newline="\n")
 
 
 def profile_section(root: Path, paths: tuple[str, ...]) -> str:

@@ -79,6 +79,8 @@ SAME_TITLE = 0.9
 SOON = 2  # Days. A deadline this close puts a job near the top of the Sluice.
 # A to-do item shows the start of a long fit reason. The job panel has all of it.
 ORDER_REASON = 200
+# Days after applying when a short note to the hiring manager is due, until one is logged.
+REACH_OUT_DAYS = range(1, 4)
 
 
 def safe_url(url: str) -> str:
@@ -295,6 +297,10 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
             when = f"Applied {job['days_since_applied']} days ago." if job["days_since_applied"] is not None else ""
             orders.append({"rank": 1, "kind": "Follow up", "job_id": job["id"], "text": name,
                            "detail": f"{when} {job['next_action']}".strip()})
+        elif job["status"] == "applied" and not job.get("reached_out") and job["days_since_applied"] in REACH_OUT_DAYS:
+            orders.append({"rank": 2, "kind": "Reach out", "job_id": job["id"], "text": name,
+                           "detail": f"Applied {_days(job['days_since_applied'])} ago with no outreach logged. Send the hiring manager "
+                                     "a short note, then log it with Reached out."})
         elif job["status"] == "needs_fix":
             tries = job.get("fix_attempts", 0)
             detail = "The draft failed the assay. The next run retries it."
@@ -339,6 +345,10 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
     return sorted(orders, key=lambda o: o["rank"])
 
 
+def _days(count: int) -> str:
+    return f"{count} day{'' if count == 1 else 's'}"
+
+
 def _setup_orders(cfg: dict) -> list[dict]:
     """What a new workspace still has to change, first on the to-do list. The demo is the example on purpose, so it has none."""
     if IS_EXAMPLE:
@@ -359,10 +369,12 @@ def build_state(conn, cfg) -> dict:
     history = _applied_by_company(conn)
     limit = cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY)
     seen = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (SEEN,))}
+    reached = store.outreach(conn)
     for job in jobs:
         _attach_runs(job, replies, refreshes, preps, tries, scams)
         _attach_history(job, history, limit)
         job["seen"] = job["id"] in seen
+        job["reached_out"] = job["id"] in reached
 
     applied =[j for j in jobs if j["applied_at"]]
     heard = [j for j in applied if j["response_at"]]
@@ -445,6 +457,8 @@ def job_detail(conn, job_id: int, cfg: dict) -> dict:
     _attach_history(job, _applied_by_company(conn), cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY))
     job["seen"] = bool(conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = ?", (job_id, SEEN)).fetchone())
     job["can_unpass"] = job["status"] == "passed" and _status_before_pass(conn, job_id) is not None
+    job["reached_out"] = job_id in store.outreach(conn)
+    job["can_reach_out"] = bool(job["applied_at"]) and job["status"] in store.ACTIVE
     job["fix_limit"] = cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS)
     job["can_refresh"] = job["status"] in refresh.REFRESHABLE and bool(job["app_folder"])
     job["can_recheck"] = job["status"] in RECHECKABLE and bool(job["app_folder"]) and not IS_EXAMPLE
@@ -507,6 +521,8 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         log_event(conn, job_id, REPLY_DISMISSED, note)
     elif action == "acknowledge_changes":
         store.acknowledge_sent_changes(conn, job_id)
+    elif action == "reached_out":
+        store.log_outreach(conn, job_id, str(body.get("date") or ""), str(body.get("to") or ""), note, follow_up)
     elif action == "tailor_next":
         conn.execute("UPDATE jobs SET priority = 1 WHERE id = ?", (job_id,))
         # Also the marker that gives a draft the daily run gave up on a fresh set of tries.

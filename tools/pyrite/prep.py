@@ -1,15 +1,16 @@
 """Write an interview prep brief on request: Claude drafts it, and the fact checker decides whether it stays.
 
 The limits are the ones a resume refresh has. The posting is untrusted text from the internet, so this
-Claude gets no shell and no web access, and can only write the brief. A brief that doesn't pass is thrown
-away, and an earlier brief goes back. State lives in the job's events.
+Claude gets no tools at all: no shell, no web access and nothing that writes. It hands the brief back in its
+closing message, and the code writes it only once it passes. A brief that doesn't pass is thrown away, and
+an earlier brief stays. State lives in the job's events.
 """
 import json
 import time
 from pathlib import Path
 
 from . import checks, claude_code
-from .claude_code import ClaudeFailed, find_claude, sign_in_help, spawn_worker
+from .claude_code import ClaudeFailed, NoDocument, find_claude, sign_in_help, spawn_worker
 from .cli import _collect_files, write_posting
 from .store import IS_EXAMPLE, ROOT, get_job, log_event
 
@@ -73,39 +74,50 @@ def start(conn, job_id: int) -> None:
         raise ValueError(f"Couldn't start the interview prep: {err}") from err
 
 
-def command(claude: str, folder: str) -> list[str]:
-    """Claude may read the workspace, and write only this job's brief."""
-    return claude_code.command(claude, [f"{folder}/{BRIEF}"])
+def command(claude: str) -> list[str]:
+    """No tools: everything Claude needs is in the prompt, and the brief comes back in its closing message."""
+    return claude_code.command(claude, [])
 
 
-def prompt(job, folder: str, feedback: str = "") -> str:
+def prompt(job, folder: str, feedback: str = "", last: str = "") -> str:
+    """The instructions and the files. A retry carries what went wrong and, if the checker blocked it, the last brief."""
     text = INSTRUCTIONS.read_text(encoding="utf-8").replace("{folder}", folder)
+    # An earlier brief isn't given: this run writes a new one.
+    text += claude_code.files_section(ROOT, folder, ("resume.md", "cover-letter.md", "notes.md"), models=False)
     text += claude_code.job_line(job)
-    if feedback:
-        text += f"\nThe fact checker blocked your last brief. Fix the brief:\n{feedback}\n"
-    return text
+    if feedback and last:
+        text += f"\nThe fact checker blocked your last brief. Fix the brief:\n{feedback}\n\n"
+        text += claude_code.file_block(f"{folder}/{BRIEF}", last)
+    elif feedback:
+        text += f"\nYour last answer couldn't be used:\n{feedback}\n"
+    return text + claude_code.hand_back(BRIEF)
 
 
 def _write(conn, cfg, job_id: int, folder: str, claude: str) -> tuple[str, list[str]]:
-    """Ask until a brief passes. Returns Claude's summary and the checker's warnings."""
+    """Ask until a brief passes, then write it. Returns Claude's summary and the checker's warnings."""
     deadline = time.monotonic() + TIME_LIMIT_MINUTES * 60
-    brief = ROOT / folder / BRIEF
     sources = checks._read_sources(cfg)
-    feedback = ""
+    feedback = last = ""
+    missing: NoDocument | None = None
     for _ in range(ATTEMPTS):
         job = get_job(conn, job_id)
-        # An earlier brief left in place mustn't pass for a new one, so the file has to change.
-        before = brief.read_bytes() if brief.exists() else None
-        summary = claude_code.ask(conn, job_id, "prep", command(claude, folder), prompt(job, folder, feedback),
-                                  ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
-        if not brief.exists() or brief.read_bytes() == before:
-            feedback = f"- You didn't write {folder}/{BRIEF}."
+        answer = claude_code.ask(conn, job_id, "prep", command(claude), prompt(job, folder, feedback, last),
+                                 ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
+        try:
+            found, summary = claude_code.documents(answer, BRIEF)
+        except NoDocument as err:
+            claude_code.mark_last_failed(conn, "prep")
+            missing, last = err, ""
+            feedback = f"- Your answer had no {BRIEF} block. Hand back the whole brief, as the end of these instructions says."
             continue
-        errors, warnings = checks.check_brief(
-            brief.read_text(encoding="utf-8"), cfg, sources, job["company"], job["title"], job["description"])
+        missing, last = None, found[BRIEF]
+        errors, warnings = checks.check_brief(last, cfg, sources, job["company"], job["title"], job["description"])
         if not errors:
+            claude_code.save_documents(ROOT / folder, found)
             return summary, warnings
         feedback = "\n".join(f"- {error}" for error in errors)
+    if missing:
+        raise ClaudeFailed(f"{missing} It was asked {ATTEMPTS} times.")
     raise ClaudeFailed(f"The brief didn't pass the assay after {ATTEMPTS} tries: {feedback}")
 
 
@@ -132,7 +144,7 @@ def run(conn, cfg, job_id: int, claude: str | None = None) -> bool:
         conn.commit()
         return False
     conn.execute("UPDATE jobs SET files = ? WHERE id = ?", (json.dumps(_collect_files(ROOT / folder)), job_id))
-    detail = summary[:500]
+    detail = summary[:500] or "Wrote the brief."
     if warnings:
         detail += "\nWorth a look: " + " ".join(warnings)[:800]
     log_event(conn, job_id, DONE, detail)
