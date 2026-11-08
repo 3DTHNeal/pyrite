@@ -451,7 +451,7 @@ class Init(unittest.TestCase):
     def test_running_it_again_on_the_workspace_in_use_changes_nothing_and_isnt_an_error(self):
         self.init()
         (self.folder / "profile" / "facts.md").write_text("Mine.", encoding="utf-8")
-        with mock.patch.object(cli, "ROOT", self.folder.resolve()):
+        with mock.patch.object(store, "ROOT", self.folder.resolve()):
             out = self.init()
         self.assertIn("already the workspace in use", out)
         self.assertEqual((self.folder / "profile" / "facts.md").read_text(encoding="utf-8"), "Mine.")

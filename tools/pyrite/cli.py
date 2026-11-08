@@ -3,7 +3,6 @@ import argparse
 import difflib
 import functools
 import json
-import os
 import re
 import shutil
 import sqlite3
@@ -17,8 +16,11 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from . import __version__, checks, claude_code, demo, discover, fill, score, store
+from . import __version__, checks, claude_code, demo, discover, fill, score, store, workspace
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
+
+# The tests and anything else that read these from here still find them.
+from .workspace import INIT_EXAMPLE, INIT_EXAMPLE_HOSTS, INIT_EXAMPLE_NAME, INIT_SKIP  # noqa: F401
 
 BUILD = CODE_ROOT / "tools" / "build_resume.py"
 BUILD_TIMEOUT_SECONDS = 300
@@ -576,56 +578,14 @@ def cmd_where(args):
         print(f"No workspace is set, so this is the fictional example. `{INIT_EXAMPLE}` makes yours.", file=sys.stderr)
 
 
-# Copied from the example by `pyrite init`, and changed on the way. Each line is checked to be in the example's
-# search.toml, so a change there that would leave one behind fails the tests rather than a new user's setup.
-INIT_EXAMPLE_NAME = 'name = "Alex Rivera"'
-INIT_EXAMPLE_HOSTS = "allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']"
-# Its applications are the fictional candidate's, so a new workspace starts with none.
-INIT_SKIP = ("seed.toml",)
 def cmd_init(args):
     """Make a new workspace from the example's profile, and point this copy of Pyrite at it."""
-    from .doctor import PLACEHOLDER_NAMES
-
-    # Placeholders copied from the docs as they are. Angle brackets can't be in a Windows folder name either.
-    if any(mark in args.folder for mark in "<>"):
-        sys.exit(f"{args.folder} is a placeholder. Put the folder you want in its place, such as `{INIT_EXAMPLE}`.")
-    name = args.name.strip()
-    if name.strip("<>[]").lower() in PLACEHOLDER_NAMES or any(mark in name for mark in "<>[]"):
-        sys.exit(f'"{name}" is a placeholder. Use your own name, in quotes, such as --name "Alex Rivera". Nothing was made.')
-    folder = Path(args.folder).expanduser().resolve()
-    if folder == CODE_ROOT or CODE_ROOT in folder.parents:
-        beside = Path("..") / folder.name if folder != CODE_ROOT else Path("..") / "my-job-search"
-        sys.exit(f"{folder} is inside this repository. Make your workspace outside it, so nothing personal can be committed here.\n"
-                 f"To put it beside this repository instead: pyrite init {beside}")
-    if (folder / "profile").exists():
-        if folder == ROOT:
-            # Asking again for what's already true isn't an error, so a setup script can run this twice.
-            print(f"{folder} is already the workspace in use, so nothing was changed. `pyrite doctor` lists what's left.")
-            return
-        sys.exit(f"{folder} already has a profile/ folder, so nothing was changed. To use it, put its path in {store.HOME_POINTER}.")
-    profile = folder / "profile"
-    shutil.copytree(store.EXAMPLE_ROOT / "profile", profile, ignore=shutil.ignore_patterns(*INIT_SKIP, "*.previous.*"))
-    config = profile / "search.toml"
-    text = config.read_text(encoding="utf-8")
-    if name:
-        text = text.replace(INIT_EXAMPLE_NAME, f"name = {json.dumps(name, ensure_ascii=False)}", 1)
-    # The dashboard has no login, so it answers to no names but localhost until you add one.
-    text = text.replace(INIT_EXAMPLE_HOSTS, "allowed_hosts = []", 1)
-    config.write_text(text, encoding="utf-8")
-    (folder / "applications").mkdir(exist_ok=True)
-    print(f"Made a workspace at {folder}, from the fictional example's profile.")
-
-    pointer = store.HOME_POINTER
-    current = os.environ.get("PYRITE_HOME", "").strip()
-    if current:
-        print(f"PYRITE_HOME is set to {current}, which wins over .pyrite-home. Set it to {folder} to use this workspace.")
-    elif pointer.exists() and pointer.read_bytes().strip():
-        print(f"{pointer} already names a workspace, so it was left alone. Put {folder} in it to use this one.")
-    else:
-        pointer.write_text(f"{folder}\n", encoding="utf-8")
-        print(f"Pointed Pyrite at it in {pointer}.")
-    print("\nNext: make the files in its profile/ yours, starting with facts.md and resume.md. `pyrite doctor` lists what's left.\n"
-          "Keep the workspace private. A private git repository of its own is a good home for it.")
+    try:
+        told = workspace.create(args.folder, args.name)
+    except workspace.Refused as err:
+        sys.exit(str(err))
+    for line in told:
+        print(line)
 
 
 def cmd_demo(args):
@@ -743,8 +703,6 @@ def _saved_posting(folder: str) -> str:
 
 
 JOB_ID = "a job's number, as the dashboard's job panel, `pyrite add` and `pyrite queue` show it"
-# A real folder rather than <folder>, which a shell reads as redirection when it's copied as it is.
-INIT_EXAMPLE = "pyrite init ../my-job-search"
 START_HERE = f"""new here:
   pyrite demo                   look around the fictional example
   {INIT_EXAMPLE}  make your own workspace from it, beside this folder
