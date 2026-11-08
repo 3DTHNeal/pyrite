@@ -5,9 +5,11 @@ The rules restate profile/facts.md: only claim what's there, keep numbers as
 measured, never use anything on the do-not-use list.
 """
 import hashlib
+import json
 import re
 import subprocess
 import unicodedata
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .store import ROOT
@@ -16,8 +18,20 @@ from .store import ROOT
 DATE_LINE = re.compile(
     r"(?m)^[ \t]*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}[ \t]*$"
 )
-NUMBER = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
-PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*%")
+# A number keeps its scale: $3M isn't the 3 the fact bank measured, and 212K tests aren't 212. Each reads as its value,
+# so 1.5M and 1,500,000 are the same number. A lowercase m is left alone, since 30m is as often minutes as millions.
+NUMBER = re.compile(
+    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s?(thousand|million|billion|trillion)\b|(K|k|M|MM|B|bn|BN)\b)?"
+)
+SCALE = {"thousand": 3, "k": 3, "million": 6, "m": 6, "mm": 6, "billion": 9, "b": 9, "bn": 9, "trillion": 12}
+# A percentage spelled out is still a percentage.
+PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent\b|per\s?cent\b|pct\b)", re.I)
+# Multiples and orders of magnitude claimed in words are measurements too.
+MULTIPLE = re.compile(
+    r"\b(?:doubled|tripled|quadrupled|halved|(?:two|three|four|five|six|seven|eight|nine|ten|hundred|thousand)[- ]?fold|"
+    r"(?:double|triple)[- ]digits?|order[s]? of magnitude)\b",
+    re.I,
+)
 # Domains people link from a resume, link shorteners and chat handles included, and anything shaped like domain/path.
 # File types a skill list names, such as Node.js/React, aren't domains.
 LINK_TLDS = "com|io|ai|org|net|co|dev|app|me|ly|gg|so|sh|to|tv|cc|gl|xyz|info|biz|us|uk|ca|de|eu|link|site|page|online|tech|blog|bio|fm|im"
@@ -30,13 +44,18 @@ EMPHASIS = re.compile(r"\*+|(?<!\w)_+|_+(?!\w)")
 PLACEHOLDER = re.compile(r"\[[^\]]*\]|\{\{|\bTODO\b|\bTBD\b|\bXXX\b|<[a-z_ ]+>")
 WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#]*(?:[-/.][A-Za-z0-9+#]+)*\+*")
 SENTENCE = re.compile(r"(?<=[.!?])\s+|\n")
-# Sections of a fact bank that list what must not be claimed. Their words and numbers approve nothing.
-EXCLUDED_SECTION = re.compile(r"## (do not use|unsupported)", re.I)
+# Sections of a fact bank that list what must not be claimed, at any heading level. Their words and numbers approve
+# nothing, and neither do their subsections.
+HEADING = re.compile(r"^[ \t]*(#{1,6})[ \t]+(.*)$")
+EXCLUDED_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use|unsupported)\b", re.I)
+DO_NOT_USE_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use)\b", re.I)
 # A negative only disclaims what follows it in the same clause. "Not only" is no negative at all.
 NOT_A_NEGATIVE = re.compile(r"\b(?:not|no)\s+(?:only|just|merely|less|fewer)\b", re.I)
 # Punctuation and joining words start a new clause, so "With no added headcount, cut defects by 83%" denies nothing.
+# So does a new subject: in "With no budget I led X" the negative is about the budget, not X.
 CLAUSE_BREAK = re.compile(
-    r"[;,:()]|\s[-–]\s|—|\b(?:but|however|although|though|whereas|while|and|after|before|when|which|who|where|since|because|then)\b",
+    r"[;,:()]|\s[-–]\s|—|\b(?:but|however|although|though|whereas|while|and|after|before|when|which|who|where|since|because|then"
+    r"|I|we)\b",
     re.I,
 )
 # A denial sits right before the claim it denies: "I have not yet worked under X", "no X experience".
@@ -49,6 +68,12 @@ FIRST_PERSON_DENIAL = re.compile(
 # A first-person denial after the claim counts only when it points back at it: "...and I have not done it", "...I haven't."
 # "Led X, and I never missed a deadline" denies the deadline, not X.
 REFERS_BACK = re.compile(r"(?:\s+[\w'’]+){0,4}?\s+(?:it|that|this|them|one|so|either|any|yet)\b|\W*$", re.I)
+# Some negatives that point back are praise, not denial: "I led X, and I could not be prouder of it", "...never missed one".
+PRAISE = re.compile(
+    r"\b(?:be|prouder|happier|better|more|enough|wait|forget|regret|change|stop|miss|missed|say|imagine|believe|recommend|"
+    r"overstate|thank|trade|resist|want|ask|love|enjoy|enjoyed|loved)\b",
+    re.I,
+)
 # A claim the sentence puts in the posting's mouth isn't yours: "Your posting lists X as a plus, and I have not worked under Y".
 ATTRIBUTED = re.compile(
     r"\b(?:posting|role|job|position|description|you|your)\b[^.;]{0,60}?"
@@ -73,6 +98,15 @@ CLICHE = re.compile(
     r"I am (?:excited|thrilled) to apply)\b",
     re.I,
 )
+# Letters from other alphabets, and Latin small capitals, that a reader takes for plain Latin ones. A word spelled only
+# with these and plain letters reads as English and matches nothing: ВӏуеЬird, ʙʟᴜᴇʙɪʀᴅ.
+LOOKALIKES = str.maketrans(
+    "АВСЕНІЈКМОРЅТХУԚԜҮҺӀ" "асеһіјӏорԛѕԁуҳхԝүɡ" "ΑΒΕΖΗΙΚΜΝΟΡΤΥΧ" "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ",
+    "ABCEHIJKMOPSTXYQWYHI" "acehijlopqsdyxxwyg" "ABEZHIKMNOPTYX" "abcdefghijklmnoprstuvwyz",
+)
+# Latin letters that don't decompose into a plain one plus an accent. They're real letters in names (Łukasz, Søren,
+# Işık), so they're never an error, but a check reads them as the plain letter so they can't split a word.
+PLAIN_LATIN = str.maketrans({"ı": "i", "ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ħ": "h", "Ħ": "H"})
 EM_DASH = "—"
 LETTER_WORDS_MAX = 350  # a letter longer than this is the one readers say they stop reading
 ORDINARY_CAPS = {
@@ -85,10 +119,33 @@ ORDINARY_CAPS = {
 }
 
 
+def _split_sections(text: str, title: re.Pattern) -> tuple[str, str]:
+    """The text outside and inside the sections whose heading matches title, at any heading level. Such a section runs
+    to the next heading at its own level or above, so its subsections go with it."""
+    outside: list[str] = []
+    inside: list[str] = []
+    level_in = None
+    for line in text.splitlines(keepends=True):
+        heading = HEADING.match(line.rstrip("\r\n"))
+        if heading:
+            level = len(heading.group(1))
+            if level_in is not None and level <= level_in:
+                level_in = None
+            if level_in is None and title.match(heading.group(2)):
+                level_in = level
+                continue
+        (outside if level_in is None else inside).append(line)
+    return "".join(outside), "".join(inside)
+
+
 def claimable(text: str) -> str:
     """A source without the sections that list what must not be claimed."""
-    sections = re.split(r"(?m)^(?=## )", text)
-    return "".join(section for section in sections if not EXCLUDED_SECTION.match(section))
+    return _split_sections(text, EXCLUDED_SECTION)[0]
+
+
+def do_not_use(text: str) -> str:
+    """What a fact bank lists under "Do not use", subsections included."""
+    return _split_sections(text, DO_NOT_USE_SECTION)[1]
 
 
 def missing_sources(cfg: dict) -> list[str]:
@@ -114,12 +171,51 @@ def saved_posting(folder: Path) -> str:
     return path.read_text(encoding="utf-8").partition("- **Saved:**")[2].partition("\n")[2].strip()
 
 
+def _value(digits: str, scale: str = "") -> str:
+    """A number as one canonical string: 1,500,000 and 1.5M are both 1500000, and 4.0 is 4."""
+    digits = digits.replace(",", "")
+    try:
+        value = Decimal(digits).scaleb(SCALE.get(scale.lower(), 0) if scale else 0)
+    except InvalidOperation:
+        return digits
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def _numbers(text: str) -> set[str]:
-    return {m.group(0).replace(",", "").rstrip(",") for m in NUMBER.finditer(text)}
+    """The numbers a text states, percentages aside: a number the fact bank has only as a percentage counts nothing."""
+    return {_value(m.group(1), m.group(2) or m.group(3) or "") for m in NUMBER.finditer(PERCENT.sub(" ", text))}
 
 
 def _percents(text: str) -> set[str]:
-    return {m.group(1).replace(",", "") for m in PERCENT.finditer(text)}
+    return {_value(m.group(1)) for m in PERCENT.finditer(text)}
+
+
+def _spelled(text: str) -> set[str]:
+    """Numbers written as words, apart from a scale word that follows digits, which is part of that number."""
+    return {match.group(0).lower() for match in NUMBER_WORD.finditer(NUMBER.sub(" ", text))}
+
+
+def _number_errors(label: str, body: str, known: str, vocab: set[str], where: str) -> list[str]:
+    """Numbers, percentages, spelled-out numbers and multiples in body that the known text doesn't hold."""
+    errors = []
+    invented_pct = sorted(_percents(body) - _percents(known))
+    if invented_pct:
+        errors.append(f"{label} has percentages {where}: {', '.join(p + '%' for p in invented_pct)}")
+    invented = sorted(_numbers(body) - _numbers(known))
+    if invented:
+        errors.append(f"{label} has numbers {where}: {', '.join(invented)}")
+    spelled = sorted(_spelled(body) - vocab)
+    if spelled:
+        errors.append(f"{label} spells out numbers {where}: {', '.join(spelled)}. Write numbers as digits, as measured.")
+    multiples = sorted({m.group(0).lower() for m in MULTIPLE.finditer(body)} - _phrases(MULTIPLE, known))
+    if multiples:
+        errors.append(f"{label} claims a multiple {where}: {', '.join(multiples)}. Give the measured number instead.")
+    return errors
+
+
+def _phrases(pattern: re.Pattern, text: str) -> set[str]:
+    return {m.group(0).lower() for m in pattern.finditer(text)}
 
 
 def _vocabulary(text: str) -> set[str]:
@@ -202,8 +298,10 @@ def _disclaimed(before: str, after: str, disclaimers: list) -> bool:
             if len(clause[negative.end():].split()) <= DENIAL_REACH:
                 return True
     denials = list(FIRST_PERSON_DENIAL.finditer(after))
-    if any(REFERS_BACK.match(after, denial.end()) for denial in denials):
-        return True
+    for denial in denials:
+        back = REFERS_BACK.match(after, denial.end())
+        if back and not PRAISE.search(back.group(0)):
+            return True
     return bool(denials) and ATTRIBUTED.search(before) is not None
 
 
@@ -213,37 +311,62 @@ def _disguises(text: str, label: str) -> list[str]:
     hidden = sorted({f"U+{ord(ch):04X}" for ch in text.lstrip("﻿") if unicodedata.category(ch) == "Cf"})
     if hidden:
         errors.append(f"{label} contains invisible characters ({', '.join(hidden[:5])}). Retype the lines that hold them.")
+    lookalike = list(dict.fromkeys(w for w in re.findall(r"[^\W\d_]+", unicodedata.normalize("NFKC", text)) if _lookalike(w)))
     mixed = []
     for word in re.findall(r"[^\W\d_]+", text):
         scripts = {unicodedata.name(ch, "?").split(" ")[0] for ch in word}
-        if "LATIN" in scripts and len(scripts) > 1 and word not in mixed:
+        if "LATIN" in scripts and len(scripts) > 1 and word not in mixed and not _lookalike(unicodedata.normalize("NFKC", word)):
             mixed.append(word)
+    if lookalike:
+        errors.append(f"{label} spells words in look-alike letters from another alphabet, which hides them from the checks "
+                      f"and from screening software: {', '.join(lookalike[:5])}. Retype them.")
     if mixed:
         errors.append(f"{label} mixes alphabets inside a word, which hides it from the checks: {', '.join(mixed[:5])}")
     return errors
 
 
+def _lookalike(word: str) -> bool:
+    """Whether a word is spelled only with plain Latin letters and letters that pass for them, using at least one of
+    the latter. A word in another language has letters with no Latin double, so it isn't one."""
+    folded = word.translate(LOOKALIKES)
+    return folded != word and folded.isascii()
+
+
+def _fold_lookalikes(match: re.Match) -> str:
+    word = match.group(0)
+    return word.translate(LOOKALIKES) if _lookalike(word) else word
+
+
 def _matchable(text: str) -> str:
-    """The text as a reader sees it: compatibility forms folded (full-width digits, no-break spaces), invisible characters
-    and emphasis markers gone. Every check reads this, so a word split by formatting is still that word."""
-    text = unicodedata.normalize("NFKC", text)
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    """The text as a reader sees it: compatibility forms folded (full-width digits, no-break spaces), accents and
+    look-alike letters read as the plain letter, invisible characters and emphasis markers gone. Every check reads
+    this, and so do the sources it's compared with, so a word split by formatting or an accent is still that word."""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) not in ("Cf", "Mn"))
+    text = unicodedata.normalize("NFC", text).translate(PLAIN_LATIN)
+    text = re.sub(r"[^\W\d_]+", _fold_lookalikes, text)
     return EMPHASIS.sub("", text)
+
+
+def _set_aside(body: str, phrase: str) -> str:
+    """The body with a phrase blanked out where it stands as words, so a company called Meta leaves Metadata alone."""
+    phrase = phrase.strip()
+    return re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", " ", body) if phrase else body
 
 
 def _unsupported(text: str, guard: dict, label: str) -> tuple[list[str], list[str]]:
     """Errors for unsupported claims, and the exact words of the claims that were properly disclaimed."""
     errors, disclaimed = [], []
     for sentence in SENTENCE.split(text):
-        for pattern in guard["unsupported"]:
-            match = re.search(pattern, sentence, re.I)
-            if not match:
-                continue
+        claimed = False
+        # Every mention counts, not just the first: "I have not worked under X, but led X audits" claims X.
+        for match in (m for pattern in guard["unsupported"] for m in re.finditer(pattern, sentence, re.I)):
             if _disclaimed(sentence[:match.start()], sentence[match.end():], guard["disclaimers"]):
                 disclaimed.append(match.group(0))
-                continue
+            else:
+                claimed = True
+        if claimed:
             errors.append(f"{label} makes an unsupported claim: {sentence.strip()[:140]!r}")
-            break
     return errors, disclaimed
 
 
@@ -256,7 +379,8 @@ def check_text(
     guard = cfg["guard"]
     label = "Resume" if kind == "resume" else "Cover letter"
     errors += _disguises(text, label)
-    text = _matchable(text)
+    # The draft and everything it's compared with are read the same way.
+    text, sources, company, title, posting = (_matchable(part) for part in (text, sources, company, title, posting))
     lines = [line.strip() for line in text.splitlines() if line.strip()]
 
     # Nothing from the do-not-use list, anywhere.
@@ -275,16 +399,13 @@ def check_text(
     if contact_line and contact_line not in lines:
         errors.append(f"{label} contact line doesn't match the approved one.")
     name_line = f"# {cfg['candidate']['name']}"
-    if not any(line == name_line for line in lines):
+    if not any(line == _matchable(name_line).strip() for line in lines):
         errors.append(f"{label} doesn't open with '{name_line}'.")
 
     # Only the approved contact line itself is exempt from what follows. Any other line is checked, whatever it starts with.
     body = "\n".join(line for line in text.splitlines() if line.strip() != contact_line)
     # The company and role are the one thing that's meant to change.
-    if company:
-        body = body.replace(company, " ")
-    if title:
-        body = body.replace(title, " ")
+    body = _set_aside(_set_aside(body, company), title)
     body = DATE_LINE.sub(" ", body)
     # A confidential term or a disclaimed claim has been dealt with above, so its own words aren't judged again.
     for pattern in guard["forbidden"]:
@@ -303,17 +424,7 @@ def check_text(
 
     # Numbers stay as measured.
     vocab = _vocabulary(sources)
-    known_numbers = _numbers(sources)
-    known_percents = _percents(sources)
-    invented_pct = sorted(_percents(body) - known_percents)
-    if invented_pct:
-        errors.append(f"{label} has percentages not in the fact bank: {', '.join(p + '%' for p in invented_pct)}")
-    invented = sorted(_numbers(body) - known_numbers - set(invented_pct))
-    if invented:
-        errors.append(f"{label} has numbers not in the fact bank: {', '.join(invented)}")
-    spelled = sorted({match.group(0).lower() for match in NUMBER_WORD.finditer(body)} - vocab)
-    if spelled:
-        errors.append(f"{label} spells out numbers that aren't in the fact bank: {', '.join(spelled)}. Write numbers as digits, as measured.")
+    errors += _number_errors(label, body, sources, vocab, "not in the fact bank")
 
     # Specialist terms need a source. A resume can't name a skill you've never claimed, and a title
     # from a job board is no source: on a resume only the exact title was set aside above. A letter
@@ -366,7 +477,7 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
     errors, warnings = [], []
     guard = cfg["guard"]
     errors += _disguises(text, "Brief")
-    text = _matchable(text)
+    text, sources, company, title, posting = (_matchable(part) for part in (text, sources, company, title, posting))
 
     for pattern in guard["forbidden"]:
         match = re.search(pattern, text, re.I)
@@ -376,9 +487,7 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
     unsupported, disclaimed = _unsupported(text, guard, "Brief")
     errors += unsupported
 
-    body = text.replace(company, " ") if company else text
-    if title:
-        body = body.replace(title, " ")
+    body = _set_aside(_set_aside(text, company), title)
     for span in disclaimed:
         body = body.replace(span, " ")
     for line in (line.strip() for line in body.splitlines()):
@@ -389,12 +498,7 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
             errors.append(f"Brief has an unfilled placeholder: {placeholder.group(0)!r}")
 
     known = sources + "\n" + posting
-    invented_pct = sorted(_percents(body) - _percents(known))
-    if invented_pct:
-        errors.append(f"Brief has percentages that aren't in the fact bank or the posting: {', '.join(p + '%' for p in invented_pct)}")
-    invented = sorted(_numbers(body) - _numbers(known) - set(invented_pct))
-    if invented:
-        errors.append(f"Brief has numbers that aren't in the fact bank or the posting: {', '.join(invented)}")
+    errors += _number_errors("Brief", body, known, _vocabulary(known), "that aren't in the fact bank or the posting")
 
     # A term from the posting alone is a requirement, not something you can claim.
     plain = "\n".join(_clean_markup(line) for line in body.splitlines())
@@ -455,6 +559,31 @@ def fingerprints(folder: Path) -> dict[str, str]:
     """A hash of each file a passing check covered: the two sources and the documents built from them."""
     covered = [p for p in sorted(folder.iterdir()) if p.name in ("resume.md", "cover-letter.md") or p.suffix in (".pdf", ".docx")]
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in covered}
+
+
+GUARD_KEY = "search.toml [guard]"
+
+
+def source_fingerprints(cfg: dict) -> dict[str, str]:
+    """A hash of everything a pass was judged against: each approved source, the heading source and the [guard] rules.
+    Taking a fact out of the bank, or a new pattern in [guard], means an earlier pass no longer says the draft is true."""
+    guard = cfg["guard"]
+    prints = {}
+    for rel in dict.fromkeys([*guard["approved_sources"], guard["heading_source"]]):
+        try:
+            prints[rel] = hashlib.sha256((ROOT / rel).read_bytes()).hexdigest()
+        except OSError:
+            prints[rel] = "missing"
+    prints[GUARD_KEY] = hashlib.sha256(json.dumps(guard, sort_keys=True, default=str).encode()).hexdigest()
+    return prints
+
+
+def sources_changed(cfg: dict, recorded: dict | None) -> list[str]:
+    """Which sources or rules changed after a pass. A pass from before these were recorded has nothing to compare."""
+    if not recorded:
+        return []
+    now = source_fingerprints(cfg)
+    return sorted(name for name in set(recorded) | set(now) if recorded.get(name) != now.get(name))
 
 
 def changed_since(folder: Path, checked: dict) -> list[str]:

@@ -252,6 +252,9 @@ class NewWorkspace(unittest.TestCase):
         self.assertEqual(doctor.unguarded_terms(facts, ["Bluebird", r"\bhive\b"]), ["Nightjar"])
         self.assertEqual(doctor.unguarded_terms(facts, [r"project nightjar", "Bluebird", r"\bhive\b"]), [])
         self.assertEqual(doctor.unguarded_terms("# Facts\n- Python\n", []), [])
+        # At any heading level, with its subsections.
+        nested = "# Facts\n\n## Notes\n### Don't use\n- Project Nightjar\n#### Customers\n- Customer: Globex\n### Skills\n- Python Pro\n"
+        self.assertEqual(doctor.unguarded_terms(nested, []), ["Nightjar", "Globex"])
         example = (store.EXAMPLE_ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
         self.assertEqual(doctor.unguarded_terms(example, self.cfg()["guard"]["forbidden"]), [])
         path = self.root / "profile" / "facts.md"

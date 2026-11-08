@@ -113,7 +113,7 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> di
     job["follow_up_due"] = bool(job["next_action_date"] and job["next_action_date"] <= today)
     job["quiet"] = job["status"] == "applied" and (job["days_since_applied"] or 0) >= run["quiet_days"]
     job["url"] = safe_url(job["url"])
-    job["changed_since_check"] = _changed_since_check(job)
+    job["changed_since_check"] = _changed_since_check(job, cfg)
     # Once sent, the documents are a record, not a draft: nothing rebuilds or refreshes them.
     job["frozen"] = bool(job["applied_at"])
     job["changed_after_sending"] = changed_after_sending(row) if job["frozen"] else []
@@ -129,12 +129,14 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False) -> di
     return job
 
 
-def _changed_since_check(job: dict) -> list[str]:
-    """Files that changed after the fact checker passed a draft you haven't sent, so the pass no longer covers them."""
-    checked = (job["check_result"] or {}).get("checked")
+def _changed_since_check(job: dict, cfg: dict) -> list[str]:
+    """Files that changed after the fact checker passed a draft you haven't sent, so the pass no longer covers them.
+    The fact bank and the [guard] rules count too: a pass against a fact since taken back says nothing now."""
+    result = job["check_result"] or {}
+    checked = result.get("checked")
     if job["status"] != "ready" or not checked or not job["app_folder"]:
         return []
-    return checks.changed_since(ROOT / job["app_folder"], checked)
+    return checks.changed_since(ROOT / job["app_folder"], checked) + checks.sources_changed(cfg, result.get("checked_sources"))
 
 
 def _scam_alerts(alerts: list[dict]) -> dict[int, dict]:
@@ -434,7 +436,7 @@ def job_detail(conn, job_id: int, cfg: dict) -> dict:
     return job
 
 
-def _reopen_target(job) -> str:
+def _reopen_target(job, cfg: dict) -> str:
     """Where a reopened job goes back to. Ready only if the assay's last verdict was a pass and nothing has changed since:
     having once been ready says nothing about the draft on disk now."""
     if job["applied_at"]:
@@ -445,7 +447,8 @@ def _reopen_target(job) -> str:
     result = (json.loads(raw) if isinstance(raw, str) and raw else raw) or {}
     if not result:
         return "shortlisted"
-    passed = result.get("ok") and result.get("checked") and not checks.changed_since(ROOT / job["app_folder"], result["checked"])
+    passed = (result.get("ok") and result.get("checked") and not checks.changed_since(ROOT / job["app_folder"], result["checked"])
+              and not checks.sources_changed(cfg, result.get("checked_sources")))
     return "ready" if passed else "needs_fix"
 
 
@@ -500,7 +503,7 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
     elif action == "interview_prep":
         prep.start(conn, job_id)
     elif action == "reopen":
-        set_status(conn, job_id, _reopen_target(job), "Reopened", follow_up)
+        set_status(conn, job_id, _reopen_target(job, cfg), "Reopened", follow_up)
     elif action == "unpass":
         before = _status_before_pass(conn, job_id) if job["status"] == "passed" else None
         if before is None:

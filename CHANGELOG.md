@@ -44,6 +44,16 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - Notes and a next step typed in the job panel but not saved are no longer thrown away when another button redraws the panel, when you step to the next job or when you close it. They show "Not saved yet" until saved, and leaving the page asks first.
 - A double click or a held key can no longer send the same action twice: the job panel's buttons, the Prospects row's Tailor and Pass, and Add a posting wait for the first one to finish.
 - Escape in the Add a posting form no longer closes the job panel behind it as well.
+- The assay judges every mention of an unsupported claim in a sentence, not only the first, so "I have not worked under X, but led X audits" is blocked.
+- Praise after a claim is no longer read as a denial: "Led X, and I could not be prouder of it" or "...and I never missed one" is a claim of X. A negative before a new subject, as in "With no budget I led X", denies nothing either.
+- A number keeps its scale: $3M, 212K and "3 million" are checked as those values, not as 3 and 212, in a resume, a letter and a brief alike. 1.5M and 1,500,000 are the same number.
+- "35 percent" is checked as a percentage, as 35% is, and a number the fact bank holds only as a percentage no longer approves a count such as "35 engineers".
+- "Doubled", "tenfold", "double-digit" and "an order of magnitude" must come from the fact bank, as numbers do.
+- The interview brief is checked for spelled-out numbers and multiples, as the resume and letter are.
+- An accent or a look-alike letter from another alphabet, such as Cyrillic or Latin small capitals, can no longer hide a confidential name or an unsupported claim. A word spelled in look-alike letters is blocked. Names with letters of their own, such as Søren or Işık, pass as before.
+- A "Do not use" or "Unsupported" section in `facts.md` approves nothing at any heading level, subsections included. Before, only a `##` heading was set aside. `pyrite doctor` reads "Do not use" the same way.
+- The company and role a draft is allowed to name are set aside only as whole words, so a company called Meta no longer hides part of "Metadata" from the checks.
+- A passed draft shows as changed since checked when `facts.md`, another approved source or the `[guard]` rules change after it passed, and reopening it no longer puts it back to ready. Passes from before this keep their verdict.
 
 ## [0.1.0] - 2026-11-09
 
