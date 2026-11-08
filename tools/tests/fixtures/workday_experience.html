@@ -103,6 +103,9 @@ const ROUND_TRIP_MS = 300;
 // Some tenants show the picker's whole list, A to Z, the moment a search is sent, and put the answer in its place when it
 // arrives, opening the list again if it was closed meanwhile. Set window.fullListFirst to build pickers that way.
 window.fullListFirst = false;
+// Others keep the last search's results on show under a spinner until the answer arrives, and the answer opens the list
+// again if it was closed meanwhile. Set window.keepListWhileLoading to build pickers that way.
+window.keepListWhileLoading = false;
 function searchPicker(input, names, single, roundTrip = ROUND_TRIP_MS) {
   const list = input.nextElementSibling;
   input.addEventListener("keydown", (ev) => {
@@ -114,11 +117,11 @@ function searchPicker(input, names, single, roundTrip = ROUND_TRIP_MS) {
     const words = q.split(/\s+/).filter((w) => w.length > 2);
     const score = (s) => (s.toLowerCase().includes(q) ? 100 : 0) + words.filter((w) => s.toLowerCase().split(/\W+/).includes(w)).length;
     const hits = names.filter((s) => score(s) > 0).sort((a, b) => score(b) - score(a));
-    list.innerHTML = window.fullListFirst
+    if (!window.keepListWhileLoading) list.innerHTML = window.fullListFirst
       ? [...names].sort().map((s) => `<li role="option" aria-label="${s}">${s}</li>`).join("") : "";
     list.hidden = false;
     setTimeout(() => {
-      if (window.fullListFirst) { list.innerHTML = ""; list.hidden = false; }
+      if (window.fullListFirst || window.keepListWhileLoading) { list.innerHTML = ""; list.hidden = false; }
       if (!hits.length) { list.innerHTML = "<li>No Items.</li>"; return; }
       const exact = hits.find((s) => s.toLowerCase() === q);
       if (single && exact) { selectSingle(input, list, exact); return; }
