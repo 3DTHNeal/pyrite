@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1138" role="img">
+  <title>A hand-written fact bank and an untrusted job posting feed a drafter with no tools. Its draft goes to the assay, plain code with no model, which checks it against the fact bank. A blocked draft goes back to the drafter with the errors. A passed draft is sealed with a hash, and a person reads it and sends it.</title>
+  <rect width="960" height="1138" rx="18" fill="#110f0b"/>
+  <g transform="translate(24 24)">
+  <defs>
+    <marker id="pat-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path fill="#a39a89" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="pat-arrow-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path fill="#f28b7b" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <path fill="none" stroke="#a39a89" stroke-width="2.5" d="M290,140 L290,238" marker-end="url(#pat-arrow)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#a39a89" x="304" y="197">facts</text>
+  <path fill="none" stroke="#a39a89" stroke-width="2.5" d="M622,140 L622,238" marker-end="url(#pat-arrow)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#a39a89" x="636" y="197">untrusted text</text>
+  <path fill="none" stroke="#a39a89" stroke-width="2.5" d="M456,370 L456,478" marker-end="url(#pat-arrow)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#a39a89" x="470" y="432">draft</text>
+  <path fill="none" stroke="#a39a89" stroke-width="2.5" d="M100,140 L100,555 L174,555" marker-end="url(#pat-arrow)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#a39a89" x="86" y="350" text-anchor="middle" transform="rotate(-90 86 350)">checked against the facts</text>
+  <path fill="none" stroke="#f28b7b" stroke-width="2.5" stroke-dasharray="9 7" d="M736,555 L840,555 L840,305 L738,305" marker-end="url(#pat-arrow-bad)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#f28b7b" x="866" y="430" text-anchor="middle" transform="rotate(90 866 430)">blocked: errors go back</text>
+  <path fill="none" stroke="#a39a89" stroke-width="2.5" d="M456,630 L456,738" marker-end="url(#pat-arrow)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#a39a89" x="470" y="692">passed</text>
+  <path fill="none" stroke="#a39a89" stroke-width="2.5" d="M456,860 L456,958" marker-end="url(#pat-arrow)"/>
+  <text font-family="Cascadia Mono, Consolas, ui-monospace, Menlo, monospace" font-size="20" fill="#a39a89" x="470" y="917">ready</text>
+
+  <rect fill="#1a1712" stroke="#3a3328" stroke-width="2" x="40" y="10" width="360" height="130" rx="10"/>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="31" font-weight="650" fill="#f3eee3" x="220" y="60" text-anchor="middle">Fact bank</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="220" y="94" text-anchor="middle">written by a person</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="220" y="121" text-anchor="middle">the only source of truth</text>
+
+  <rect fill="#1a1712" stroke="#3a3328" stroke-width="2" x="512" y="10" width="360" height="130" rx="10"/>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="31" font-weight="650" fill="#f3eee3" x="692" y="60" text-anchor="middle">Job posting</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="692" y="94" text-anchor="middle">from the internet</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="692" y="121" text-anchor="middle">data, never instructions</text>
+
+  <rect fill="#1a1712" stroke="#3a3328" stroke-width="2" x="176" y="240" width="560" height="130" rx="10"/>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="31" font-weight="650" fill="#f3eee3" x="456" y="296" text-anchor="middle">The drafter (Claude)</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="456" y="336" text-anchor="middle">no shell, no web, no say in the verdict</text>
+
+  <rect fill="#201b12" stroke="#d2b04e" stroke-width="3" x="176" y="480" width="560" height="150" rx="10"/>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="31" font-weight="650" fill="#f0dc93" x="456" y="538" text-anchor="middle">The assay</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="456" y="576" text-anchor="middle">plain code, no model</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="456" y="604" text-anchor="middle">same input, same verdict</text>
+
+  <rect fill="#1a1712" stroke="#3a3328" stroke-width="2" x="176" y="740" width="560" height="120" rx="10"/>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="31" font-weight="650" fill="#f3eee3" x="456" y="792" text-anchor="middle">A sealed pass</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="456" y="830" text-anchor="middle">SHA-256 of the draft, the facts and the rules</text>
+
+  <rect fill="#1a1712" stroke="#3a3328" stroke-width="2" x="176" y="960" width="560" height="120" rx="10"/>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="31" font-weight="650" fill="#f3eee3" x="456" y="1012" text-anchor="middle">A person reads it and sends it</text>
+  <text font-family="Segoe UI, system-ui, -apple-system, sans-serif" font-size="22" fill="#cdc4b2" x="456" y="1050" text-anchor="middle">nothing is ever submitted for them</text>
+  </g>
+</svg>
