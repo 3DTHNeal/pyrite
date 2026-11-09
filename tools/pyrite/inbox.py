@@ -79,6 +79,8 @@ ANSWER_TEXT = re.compile(
 )
 UNSAFE_WHITESPACE = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
 DOMAIN_SHAPE = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
+# What the part of an address before the @ may hold, so an o'brien isn't dropped.
+LOCAL_PART = re.compile(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+")
 
 
 class NotConfigured(Exception):
@@ -159,6 +161,11 @@ def load_credentials(path: Path) -> Credentials:
     user, password = values.get("IMAP_USER", ""), values.get("IMAP_PASSWORD", "")
     if not user or not password:
         raise NotConfigured(f"{path} needs both IMAP_USER and IMAP_PASSWORD filled in.")
+    # IMAP sends the login as plain ASCII, so anything else can't be sent at all. The value itself is never repeated.
+    for key, value in (("IMAP_USER", user), ("IMAP_PASSWORD", password)):
+        if not value.isascii():
+            raise UnsafeCredentials(f"{key} in {path} has a character IMAP can't send, such as an accented letter or a curly "
+                                    "quote. An app password is plain letters: copy it again.")
     host = values.get("IMAP_HOST") or DEFAULT_HOST
     if host == DEFAULT_HOST:
         password = password.replace(" ", "")  # Google displays app passwords in groups of four.
@@ -193,7 +200,7 @@ def parse_headers(raw: bytes) -> Message | None:
         bulk = parsed["list-unsubscribe"] is not None
     except (ValueError, TypeError, AttributeError, IndexError, LookupError):
         return None
-    if not DOMAIN_SHAPE.fullmatch(domain) or not re.fullmatch(r"[a-z0-9._%+=-]+", local):
+    if not DOMAIN_SHAPE.fullmatch(domain) or not LOCAL_PART.fullmatch(local):
         return None
     if date.tzinfo is None:
         date = date.replace(tzinfo=UTC)
@@ -422,7 +429,7 @@ def run(conn, cfg: dict, path: Path | None = None, client_factory=open_client) -
     try:
         # Nothing is written until the network is done, so a slow mailbox never holds the database.
         messages, folder = _read_mailbox(creds, jobs, cfg, client_factory)
-    except (imaplib.IMAP4.error, OSError, EOFError) as err:
+    except (imaplib.IMAP4.error, OSError, EOFError, UnicodeError) as err:
         message = _describe(err, creds)
         _record_status(conn, error=message)
         conn.commit()

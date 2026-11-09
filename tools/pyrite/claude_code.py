@@ -1,13 +1,17 @@
 """Running Claude Code for one narrow job, and keeping count of what each run used.
 
-Refresh resume and interview prep both start Claude here, so they share the same limits: no shell,
-no web access and no tool that writes. Each hands its document back in its closing message, and the
-code writes it.
+Every Claude run Pyrite starts is timed and counted here. The ones that work on a posting also share the same
+limits: no shell and no web access. Judging a posting, Refresh resume and interview prep get no tools at all,
+and hand back what they wrote in their closing message for the code to save. Tailoring gets Read, Write and
+Edit, with rules that let it edit only the application's own drafts and never read or change the private
+parts of the workspace.
 """
+import hashlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -34,10 +38,19 @@ def sign_in_help(claude: str) -> str:
 KIND_LABELS = {"refresh": "Refresh resume", "prep": "Interview prep", "triage": "Judging postings", "tailor": "Tailoring resumes",
                "mail": "Checking mail", "outlook": "Industry outlook"}
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+# The longest a single Claude run of a judging or writing job may take. How long a task can go quiet before it
+# counts as dead is worked out from this, so it covers one step, not a whole job.
+ASK_MINUTES = 15
+# Asking with less time than this left would only start a run that gets cut off, so the job stops there instead.
+MIN_ASK_SECONDS = 60
 
 
 class ClaudeFailed(Exception):
     pass
+
+
+class OutOfTime(ClaudeFailed):
+    """Too little of the run's time was left to ask Claude again."""
 
 
 def find_claude() -> str | None:
@@ -148,37 +161,54 @@ def files_section(root: Path, folder: str, drafts: tuple[str, ...], models: bool
 # What a run may never read, even though it can read the rest of the workspace. A writing run reads because Edit
 # needs a file read first, and a posting could try to steer it into copying something private into a draft that goes
 # to an employer: the database and browser sign-ins, sent applications, the address and phone the Workday sheets
-# hold, the terms the privacy check guards, and the workspace's own history.
+# hold wherever a copy of one sits, the terms the privacy check guards, the workspace's own history and its Claude
+# settings.
 NEVER_READ = (
     "Read(./data/**)",
     "Read(./archive/**)",
     "Read(./.git/**)",
-    "Read(./profile/workday-paste.md)",
-    "Read(./profile/public-denylist.txt)",
-    "Read(./applications/**/fill-sheet*)",
-    "Read(./applications/**/autofill-log.txt)",
+    "Read(./.claude/**)",
+    "Read(./**/workday-paste.md)",
+    "Read(./**/public-denylist.txt)",
+    "Read(./**/fill-sheet*)",
+    "Read(./**/autofill-log.txt)",
 )
+# What a run may never change. Deny beats allow, so these hold even if the workspace's own .claude/settings.json
+# allows more: the fact bank and the rest of profile/, which the assay checks drafts against, the database, the
+# workspace's Claude settings and its instructions to Claude.
+NEVER_WRITE = tuple(f"{tool}(./{path})" for path in ("profile/**", "data/**", ".claude/**", "CLAUDE.md") for tool in ("Edit", "Write"))
 
 
 def command(claude: str, editable: list[str]) -> list[str]:
     """Reading and writing only. dontAsk refuses anything these rules don't allow, and your user settings can't widen them.
 
-    With nothing editable, Claude gets no tools at all, so everything it needs must be in the prompt.
-    The workspace's own .claude/settings.json is still read, so don't grant extra permissions there.
+    With nothing editable, Claude gets no tools at all, so everything it needs must be in the prompt. The workspace's
+    own .claude/settings.json is still read, so it could allow more, which is why what a run must never read or change
+    is denied outright as well.
     """
     limits = ["--tools", "Read,Write,Edit", "--allowedTools", ",".join(f"Edit(./{path})" for path in editable)] if editable else ["--tools", ""]
     return [
         claude, "-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config",
         "--setting-sources", "project", "--permission-mode", "dontAsk", "--max-turns", "30",
         *limits,
-        "--disallowedTools", ",".join(NEVER_READ),
+        "--disallowedTools", ",".join(NEVER_READ + NEVER_WRITE),
     ]
 
 
-# A run that writes one document hands it back in its closing message, and the code saves it. A path-scoped Edit
-# rule isn't honored in headless dontAsk on every platform: on Windows it was refused in every spelling, and a bare
-# Write would have let the run write anywhere. So these runs get no tools, and nothing on disk changes unless the
-# code writes it.
+def profile_digest(root: Path) -> str:
+    """A fingerprint of every file under profile/, so a writing run that changed the fact bank is caught before its
+    draft is checked against it."""
+    digest = hashlib.sha256()
+    folder = root / "profile"
+    for path in sorted(folder.rglob("*")) if folder.is_dir() else ():
+        if path.is_file():
+            digest.update(path.relative_to(folder).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+# Refresh resume and interview prep write one document each, so they get no tools: the document comes back in the
+# closing message, and nothing on disk changes unless the code writes it. Tailoring, which writes up to three files,
+# edits them itself under path-scoped Edit rules, which headless dontAsk honors in the ./path spelling used here.
 DOCUMENT = re.compile(r"""<document\s+name\s*=\s*["']([^"'<>]+)["']\s*>(.*?)</document\s*>""", re.I | re.S)
 OPEN_DOCUMENT = re.compile(r"<document\b", re.I)
 WRAPPING_FENCE = re.compile(r"\A(`{3,}|~{3,})[^\n]*\n(.*?)\n?\1\Z", re.S)
@@ -289,34 +319,79 @@ def _count(value) -> float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def record(conn, job_id: int | None, kind: str, result: dict, seconds: float, ok: bool) -> None:
-    """Keep what one run used. Committed straight away, so a run that fails and rolls back is still counted."""
+def record(conn, job_id: int | None, kind: str, result: dict, seconds: float, ok: bool) -> int:
+    """Keep what one run used, and return its row. Committed straight away, so a run that fails and rolls back is still counted."""
     raw_usage = result.get("usage")
     usage = raw_usage if isinstance(raw_usage, dict) else {}
     tokens_in = [count for count in (_count(usage.get(key)) for key in INPUT_KEYS) if count is not None]
-    conn.execute(
+    row = conn.execute(
         """INSERT INTO claude_runs (job_id, ts, kind, ok, seconds, turns, input_tokens, output_tokens, cost_usd)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (job_id, now(), kind, int(ok), round(seconds, 1), _count(result.get("num_turns")),
          sum(tokens_in) if tokens_in else None, _count(usage.get("output_tokens")), _count(result.get("total_cost_usd"))),
+    ).lastrowid
+    conn.commit()
+    return row
+
+
+class Answer(str):
+    """A run's closing message, which remembers the row that counts the run, so that row can be marked failed later."""
+    run_id: int | None = None
+
+
+def mark_failed(conn, answer: str) -> None:
+    """Count the run that gave this answer as failed. For a run Claude Code finished cleanly whose answer was no use.
+
+    It's the run's own row, not the latest of its kind, since another job's run may have finished in between.
+    """
+    run_id = getattr(answer, "run_id", None)
+    if run_id is not None:
+        conn.execute("UPDATE claude_runs SET ok = 0 WHERE id = ?", (run_id,))
+        conn.commit()
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """End a run and everything it started. On Windows `claude` is often an npm .cmd shim, so killing the process
+    itself would end only cmd.exe and leave Claude Code running on in node."""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, timeout=30, creationflags=NO_WINDOW)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass  # Already gone, or no taskkill: the kill below still ends the process itself.
+    process.kill()
+
+
+def run_process(cmd: list[str], input: str, cwd: Path, timeout: float) -> subprocess.CompletedProcess:
+    """subprocess.run with a time limit, except that running out of time ends the whole process tree, not just its top."""
+    process = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, encoding="utf-8",
+        errors="replace", creationflags=NO_WINDOW | NEW_GROUP, start_new_session=sys.platform != "win32",
     )
-    conn.commit()
+    with process:
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(process)
+            try:
+                process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass  # Something outside the tree kept the pipes open. The run is over either way.
+            raise
+    return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
-def mark_last_failed(conn, kind: str) -> None:
-    """Count the latest run of this kind as failed. For a run Claude Code finished cleanly whose answer was no use."""
-    conn.execute("UPDATE claude_runs SET ok = 0 WHERE id = (SELECT MAX(id) FROM claude_runs WHERE kind = ?)", (kind,))
-    conn.commit()
+def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Path, seconds: float, limit_minutes: int) -> Answer:
+    """One Claude run. Returns its closing message, and records what the run used.
 
-
-def ask(conn, job_id: int, kind: str, cmd: list[str], text: str, cwd: Path, seconds: float, limit_minutes: int) -> str:
-    """One Claude run. Returns its closing message, and records what the run used."""
+    Raises OutOfTime without starting anything if less than a minute is left of `seconds`.
+    """
+    if seconds < MIN_ASK_SECONDS:
+        raise OutOfTime("Time ran out before Claude could be asked again.")
     began = time.monotonic()
     try:
-        out = subprocess.run(
-            cmd, input=text, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace",
-            timeout=max(seconds, 1), creationflags=NO_WINDOW,
-        )
+        out = run_process(cmd, input=text, cwd=cwd, timeout=seconds)
     except subprocess.TimeoutExpired as err:
         record(conn, job_id, kind, {}, time.monotonic() - began, ok=False)
         raise ClaudeFailed(f"Claude hadn't finished after {limit_minutes} minutes.") from err
@@ -324,12 +399,14 @@ def ask(conn, job_id: int, kind: str, cmd: list[str], text: str, cwd: Path, seco
         raise ClaudeFailed(f"Couldn't run Claude Code: {err}") from err
     message, result = _read_result(out.stdout or out.stderr or "")
     failed = bool(out.returncode or result.get("is_error"))
-    record(conn, job_id, kind, result, time.monotonic() - began, ok=not failed)
+    run_id = record(conn, job_id, kind, result, time.monotonic() - began, ok=not failed)
     if failed:
         if "not logged in" in message.lower():
             raise ClaudeFailed(sign_in_help(cmd[0]))
         raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
-    return message
+    answer = Answer(message)
+    answer.run_id = run_id
+    return answer
 
 
 def _totals(row) -> dict:

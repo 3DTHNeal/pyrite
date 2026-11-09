@@ -18,7 +18,7 @@ The dashboard listens on localhost only. Nothing on it is reachable from another
 |---|---|---|
 | Morning pan | Each job board you list | Ordinary requests for public job feeds. The board sees your IP address and Pyrite's user agent. Nothing about you is sent. |
 | Triage, drafting, Refresh resume, interview prep | Anthropic, through Claude Code | The posting, and for drafting, refreshes and prep, your fact bank, run notes, approved terms, model documents and existing drafts. Anthropic's terms and privacy policy apply, under your own account. |
-| Gmail connector | Google and Anthropic, through Claude Code | Claude reads recent mail through your connected Gmail account and returns the sender, subject, date and a short snippet of each. Pyrite stores only the matches. |
+| Gmail connector | Google and Anthropic, through Claude Code | Claude reads recent mail through your connected Gmail account and returns the sender, subject, date and a short snippet of each. It's told the names of the companies you've applied to or listed under `[inbox.domains]`, so it knows which mail to read further. Pyrite stores only the matches. |
 | IMAP reply detection | Your mail provider | Your credentials, to sign in read-only. Only message headers (sender, subject, date) are requested, never message bodies. |
 | Workday autofill | The employer's Workday site | What your answer sheet and tailored documents say, typed into a browser window you watch. Nothing is submitted. |
 | Building `.docx` and `.pdf` | LibreOffice or Word on your computer | Nothing leaves your computer. |

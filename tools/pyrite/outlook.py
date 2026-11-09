@@ -13,9 +13,11 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import claude_code
 from .claude_code import NEW_GROUP, NO_WINDOW, ClaudeFailed, find_claude, sign_in_help
@@ -184,19 +186,54 @@ def prompt(name: str, industry: dict, places: dict, official: list[dict], today:
     return "\n".join(parts)
 
 
-def _strings(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
+def _list(value: Any) -> list:
+    """A list from Claude's JSON, or an empty one for anything else it wrote there."""
+    return value if isinstance(value, list) else []
+
+
+def _dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _urls(value: Any) -> list[str]:
+    """Every "url" field anywhere in a search result."""
     if isinstance(value, dict):
-        return [text for item in value.values() for text in _strings(item)]
+        own = [value["url"]] if isinstance(value.get("url"), str) else []
+        return own + [url for item in value.values() for url in _urls(item)]
     if isinstance(value, list):
-        return [text for item in value for text in _strings(item)]
+        return [url for item in value for url in _urls(item)]
     return []
 
 
-def read_stream(output: str) -> tuple[str, dict, str]:
-    """Claude's closing message, the run's result, and everything its tools fetched or returned."""
-    seen: list[str] = []
+def _search_links(text: str) -> list[str]:
+    """The links a WebSearch result lists, from the JSON after "Links:" in its text."""
+    found = []
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"Links:\s*", text):
+        try:
+            value, _ = decoder.raw_decode(text, match.end())
+        except ValueError:
+            continue
+        found += _urls(value)
+    return found
+
+
+def _texts(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _texts(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _texts(item)]
+    return []
+
+
+def read_stream(output: str) -> tuple[str, dict, set[str]]:
+    """Claude's closing message, the run's result, and the pages this run came across: each address WebFetch was asked
+    to open, and each link a WebSearch result listed. An address that only appears inside a fetched page isn't one, since
+    the page's author wrote it."""
+    seen: set[str] = set()
+    searches: set[str] = set()
     result: dict = {}
     for line in output.splitlines():
         try:
@@ -209,22 +246,31 @@ def read_stream(output: str) -> tuple[str, dict, str]:
         if kind == "result":
             result = event
         elif kind == "assistant":
-            for block in (event.get("message") or {}).get("content") or []:
-                if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "WebFetch":
-                    seen += _strings((block.get("input") or {}).get("url"))
+            for block in _list(_dict(event.get("message")).get("content")):
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") == "WebFetch" and isinstance(_dict(block.get("input")).get("url"), str):
+                    seen.add(block["input"]["url"])
+                elif block.get("name") == "WebSearch" and isinstance(block.get("id"), str):
+                    searches.add(block["id"])
         elif kind == "user":
-            seen += _strings(event)
-    return str(result.get("result") or "").strip(), result, "\n".join(seen)
+            for block in _list(_dict(event.get("message")).get("content")):
+                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id") in searches:
+                    seen.update(link for text in _texts(block.get("content")) for link in _search_links(text))
+                    # Claude Code also gives the result as data beside the message, links and all.
+                    seen.update(_urls(_dict(event.get("tool_use_result")).get("results")))
+    return str(result.get("result") or "").strip(), result, seen
 
 
 def _bare(url: str) -> str:
-    return re.sub(r"^https?://(www\.)?", "", url.strip().lower()).split("#")[0].rstrip("/")
-
-
-def _found(url: str, corpus: str) -> bool:
-    """Whether this run's tools came across the URL. The corpus has the same scheme and www. removed."""
-    bare = _bare(url)
-    return len(bare) > 4 and bare in corpus
+    """A URL as compared with the pages a run came across: without its scheme, a leading www., a fragment or a closing slash."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return ""
+    host = (parts.netloc or "").lower().removeprefix("www.")
+    path = parts.path.rstrip("/")
+    return f"{host}{path}{'?' + parts.query if parts.query else ''}".lower()
 
 
 def _text(value, limit: int) -> str:
@@ -244,20 +290,24 @@ def _json(answer: str) -> dict:
     return data
 
 
-def vet(answer: str, seen: str) -> tuple[list[dict], list[dict], dict]:
-    """Keep the points whose sources this run's own tools came across. Returns sections, sources and what was dropped."""
+def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict], list[dict], dict]:
+    """Keep the points whose sources this run's own tools came across. Returns sections, sources and what was dropped.
+
+    A source counts only if its whole address, give or take its scheme, a www., a fragment or a closing slash, is one
+    the run opened or its searches listed: not a site's home page, a shortened address, or one a fetched page mentioned.
+    Anything in the answer of the wrong shape is left out rather than trusted."""
     data = _json(answer)
-    corpus = re.sub(r"https?://(www\.)?", "", seen.lower())
+    pages = {bare for bare in map(_bare, seen) if bare}
     sources: dict[int, dict] = {}
     unconfirmed = 0
-    for raw in data.get("sources") or []:
+    for raw in _list(data.get("sources")):
         if not isinstance(raw, dict) or isinstance(raw.get("id"), bool) or not isinstance(raw.get("id"), int):
             continue
         url = _text(raw.get("url"), 600)
         if not re.match(r"https?://[^\s/]+\.[^\s]+$", url):
             unconfirmed += 1
             continue
-        if not _found(url, corpus):
+        if _bare(url) not in pages:
             unconfirmed += 1
             continue
         published = _text(raw.get("date"), 10)
@@ -265,14 +315,14 @@ def vet(answer: str, seen: str) -> tuple[list[dict], list[dict], dict]:
                               "url": url, "date": published if DATE.fullmatch(published) else ""}
     numbers: dict[int, int] = {}
     sections, dropped = [], 0
-    by_heading = {s.get("heading"): s for s in data.get("sections") or [] if isinstance(s, dict)}
+    by_heading = {s["heading"]: s for s in _list(data.get("sections")) if isinstance(s, dict) and isinstance(s.get("heading"), str)}
     for heading in HEADINGS:
         points: list[dict] = []
-        for raw in (by_heading.get(heading) or {}).get("points") or []:
+        for raw in _list(by_heading.get(heading, {}).get("points")):
             if not isinstance(raw, dict):
                 continue
             text = _text(raw.get("text"), MAX_TEXT)
-            cited = [i for i in raw.get("sources") or [] if isinstance(i, int) and not isinstance(i, bool) and i in sources]
+            cited = [i for i in _list(raw.get("sources")) if isinstance(i, int) and not isinstance(i, bool) and i in sources]
             if not text or not cited or len(points) >= MAX_POINTS:
                 dropped += 1
                 continue
@@ -315,8 +365,7 @@ def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
         began = time.monotonic()
         cmd = command(claude, model)
         try:
-            out = subprocess.run(cmd, input=text, cwd=ROOT, capture_output=True, encoding="utf-8", errors="replace",
-                                 timeout=TIME_LIMIT_MINUTES * 60, creationflags=NO_WINDOW)
+            out = claude_code.run_process(cmd, input=text, cwd=ROOT, timeout=TIME_LIMIT_MINUTES * 60)
         except subprocess.TimeoutExpired as err:
             claude_code.record(conn, None, KIND, {}, time.monotonic() - began, ok=False)
             raise ClaudeFailed(f"Claude hadn't finished after {TIME_LIMIT_MINUTES} minutes.") from err
@@ -338,4 +387,7 @@ def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
         return report
     except ClaudeFailed as err:
         finish(name, False, str(err))
+        raise
+    except Exception as err:  # Anything else would leave the dashboard saying "researching" until the run went stale.
+        finish(name, False, f"The research stopped on something unexpected: {type(err).__name__}: {err}"[:500])
         raise

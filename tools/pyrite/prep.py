@@ -106,7 +106,7 @@ def _write(conn, cfg, job_id: int, folder: str, claude: str) -> tuple[str, list[
         try:
             found, summary = claude_code.documents(answer, BRIEF)
         except NoDocument as err:
-            claude_code.mark_last_failed(conn, "prep")
+            claude_code.mark_failed(conn, answer)
             missing, last = err, ""
             feedback = f"- Your answer had no {BRIEF} block. Hand back the whole brief, as the end of these instructions says."
             continue

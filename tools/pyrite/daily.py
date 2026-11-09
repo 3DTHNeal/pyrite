@@ -19,8 +19,9 @@ from .store import ROOT, get_job, log_event, now, shorten
 FITS = ("strong", "good", "stretch", "skip")
 # A first draft and two fixes, as the instructions for a hand-run session allow.
 ATTEMPTS = 3
-ASK_MINUTES = 15
+ASK_MINUTES = claude_code.ASK_MINUTES
 TIME_LIMIT_MINUTES = 120
+TAILORING = ("shortlisted", "needs_fix")
 TRIAGE_INSTRUCTIONS = Path(__file__).parent / "triage.md"
 TAILOR_INSTRUCTIONS = Path(__file__).parent / "tailor.md"
 LETTER_SECTION = """## `{folder}/cover-letter.md`
@@ -40,6 +41,11 @@ class NotSignedIn(ClaudeFailed):
     """Nothing else in the run can work either, so it stops here."""
 
 
+class ProfileChanged(ClaudeFailed):
+    """Something under profile/ changed while Claude was writing. Every draft is checked against the fact bank there,
+    so the run stops rather than check any more of them against something it didn't start with."""
+
+
 def parse_verdict(message: str) -> tuple[str, str] | None:
     """The fit and reason from Claude's reply, or None if it didn't give a usable one. The last JSON object wins."""
     found = None
@@ -54,11 +60,22 @@ def parse_verdict(message: str) -> tuple[str, str] | None:
     return found
 
 
-def triage_prompt(job) -> str:
+def markings(marks: dict | None) -> str:
+    """Pyrite's own read of a listing: whether it may be a ghost, and any scam signs in its text. The code words these
+    from the listing's dates, reposts and fixed patterns, so they go outside the posting's fence."""
+    if not marks:
+        return ""
+    ghost = f"yes, {marks.get('ghost_reason') or 'from its dates and reposts'}" if marks.get("ghost_risk") else "no"
+    scam = ", ".join(str(sign) for sign in marks.get("scam_signs") or ()) or "none"
+    return ("\n\n## Pyrite's markings\n\nFrom Pyrite's own checks of this listing's dates, reposts and wording, not from the job board:\n\n"
+            f"- Possible ghost: {ghost}\n- Scam signs: {scam}\n")
+
+
+def triage_prompt(job, marks: dict | None = None) -> str:
     board = {key: job[key] for key in BOARD_FIELDS}
     # Triage runs with no tools, so a posting can't steer it into reading anything: the two files it judges by come with it.
     return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.profile_section(ROOT, claude_code.PROFILE_FILES[:2])
-            + claude_code.job_line(job) + "\n"
+            + markings(marks) + claude_code.job_line(job) + "\n"
             + claude_code.posting_block(board, job["description"]) + "\n")
 
 
@@ -93,12 +110,14 @@ def _ask(conn, job_id: int, kind: str, cmd: list[str], text: str, deadline: floa
         raise
 
 
-def judge(conn, job_id: int, claude: str, deadline: float) -> str | None:
-    """Have Claude judge one posting, and record the verdict here. Returns the fit, or None if it couldn't be judged."""
+def judge(conn, job_id: int, claude: str, deadline: float, marks: dict | None = None) -> str | None:
+    """Have Claude judge one posting, and record the verdict here. Returns the fit, or None if it couldn't be judged.
+
+    `marks` is the posting as the queue ranked it, whose ghost and scam markings go to Claude with it."""
     job = get_job(conn, job_id)
     if job["status"] != "new" or not job["description"].strip():
         return None  # Moved on meanwhile, or nothing to read. An empty posting is left for you.
-    reply = _ask(conn, job_id, "triage", claude_code.command(claude, []), triage_prompt(job), deadline)
+    reply = _ask(conn, job_id, "triage", claude_code.command(claude, []), triage_prompt(job, marks), deadline)
     verdict = parse_verdict(reply)
     if not verdict or get_job(conn, job_id)["status"] != "new":
         return None
@@ -107,21 +126,55 @@ def judge(conn, job_id: int, claude: str, deadline: float) -> str | None:
     return verdict[0]
 
 
-def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float) -> bool:
-    """Have Claude write one application, and let the fact checker decide. Returns whether it's ready."""
+def _keep(files: list[Path]) -> dict[Path, bytes]:
+    return {path: path.read_bytes() for path in files if path.exists()}
+
+
+def _put_back(files: list[Path], kept: dict[Path, bytes]) -> None:
+    """The drafts as they were before a run, with any file the run added taken away again."""
+    for path in files:
+        if path in kept:
+            path.write_bytes(kept[path])
+        elif path.exists():
+            path.unlink()
+
+
+def _profile_unchanged(profile: str, files: list[Path], kept: dict[Path, bytes]) -> None:
+    """Raise ProfileChanged, with what this run wrote undone, if anything under profile/ changed since `profile`."""
+    if claude_code.profile_digest(ROOT) != profile:
+        _put_back(files, kept)
+        raise ProfileChanged("Something in profile/ changed while Claude was writing, so the run stopped and the draft it was "
+                             "working on went back as it was. Look over profile/ for a change you didn't make.")
+
+
+def _time_left(deadline: float) -> bool:
+    return deadline - time.monotonic() >= claude_code.MIN_ASK_SECONDS
+
+
+def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambda step: None) -> bool:
+    """Have Claude write one application, and let the fact checker decide. Returns whether it's ready.
+
+    `say` hears each step before it starts, so a long job keeps showing signs of life on the dashboard."""
     folder = ensure_folder(conn, job_id)
     cmd = claude_code.command(claude, tailor_files(folder, cfg))
+    files = [ROOT / path for path in tailor_files(folder, cfg)]
+    profile = claude_code.profile_digest(ROOT)
     feedback = ""
-    for _ in range(ATTEMPTS):
+    for attempt in range(1, ATTEMPTS + 1):
         job = get_job(conn, job_id)
-        if job["status"] not in ("shortlisted", "needs_fix") or time.monotonic() > deadline:
+        if job["status"] not in TAILORING or not _time_left(deadline):
             return False  # You moved it on during the run, or time ran out. Either way it's left as it is.
+        kept = _keep(files)
+        say(f"writing draft {attempt}")
         _ask(conn, job_id, "tailor", cmd, tailor_prompt(job, folder, cfg, feedback), deadline)
-        if get_job(conn, job_id)["status"] not in ("shortlisted", "needs_fix"):
+        _profile_unchanged(profile, files, kept)
+        if get_job(conn, job_id)["status"] not in TAILORING:
+            _put_back(files, kept)  # You moved it on while Claude wrote, so what it wrote, unchecked, is undone.
             return False
+        say(f"checking draft {attempt}")
         report = finish_job(conn, cfg, job_id)
         if report["ok"]:
-            polish(conn, cfg, job_id, folder, cmd, report, deadline)
+            polish(conn, cfg, job_id, folder, cmd, report, deadline, profile, say)
             return True
         if any(error.startswith("Build failed") for error in report["errors"]):
             return False  # Not something a rewrite can fix.
@@ -129,35 +182,43 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float) -> bool:
     return False
 
 
-def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: dict, deadline: float) -> None:
+def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: dict, deadline: float, profile: str,
+           say=lambda step: None) -> None:
     """One more pass over a draft that passed with warnings a rewrite can clear, such as a letter naming unapproved
-    terms or a resume that copies the posting's skill terms. If that pass fails the assay, the passing draft goes back."""
+    terms or a resume that copies the posting's skill terms. Unless that pass passes the assay, the passing draft goes
+    back: when it fails, when Claude does, when you move the job on meanwhile, and when anything else goes wrong."""
     asks = checks.polish_requests(report, letter=cfg["run"].get("cover_letters", True))
-    if not asks or time.monotonic() > deadline:
+    if not asks or not _time_left(deadline):
         return
     files = [ROOT / path for path in tailor_files(folder, cfg)]
-    kept = {path: path.read_bytes() for path in files if path.exists()}
+    kept = _keep(files)
+    failure: Exception | None = None
     try:
         text = tailor_prompt(get_job(conn, job_id), folder, cfg, polish="\n".join(f"- {ask}" for ask in asks))
+        say("clearing the assay's warnings")
         _ask(conn, job_id, "tailor", cmd, text, deadline)
-        if get_job(conn, job_id)["status"] != "ready":
-            return  # You moved it on during the pass, so its files are yours now.
-        if finish_job(conn, cfg, job_id)["ok"]:
-            log_event(conn, job_id, "polished", "Passed the assay with warnings, so one more pass cleared what it could: " + "; ".join(asks)[:400])
-            conn.commit()
-            return
-    except NotSignedIn:
-        raise
-    except ClaudeFailed:
-        pass
-    for path in files:
-        if path in kept:
-            path.write_bytes(kept[path])
-        elif path.exists():
-            path.unlink()  # Added by the pass that failed.
-    finish_job(conn, cfg, job_id)
-    log_event(conn, job_id, "polished", "A pass to clear the assay's warnings failed it instead, so the draft that passed is back.")
+        _profile_unchanged(profile, files, kept)
+        if get_job(conn, job_id)["status"] == "ready":
+            say("checking the cleared draft")
+            if finish_job(conn, cfg, job_id)["ok"]:
+                log_event(conn, job_id, "polished", "Passed the assay with warnings, so one more pass cleared what it could: " + "; ".join(asks)[:400])
+                conn.commit()
+                return
+    except Exception as err:  # Whatever it was, the draft that passed goes back first.
+        failure = err
+    _put_back(files, kept)
+    if isinstance(failure, ProfileChanged):
+        raise failure
+    if get_job(conn, job_id)["status"] in ("ready", "needs_fix"):
+        say("putting the passing draft back")
+        finish_job(conn, cfg, job_id)
+        log_event(conn, job_id, "polished", "A pass to clear the assay's warnings failed it instead, so the draft that passed is back.")
+    else:
+        # A sent job's folder is a record of what went, which is the draft that passed, so nothing is rebuilt.
+        log_event(conn, job_id, "polished", "You moved this job on during a pass to clear the assay's warnings, so the draft that passed is back as it was.")
     conn.commit()
+    if failure is not None and (isinstance(failure, NotSignedIn) or not isinstance(failure, ClaudeFailed)):
+        raise failure
 
 
 def _count(number: int, one: str, many: str | None = None) -> str:
@@ -202,7 +263,7 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
             continue
         report(f"Judging posting {index} of {len(waiting)}: {job['company']}")
         try:
-            fit = judge(conn, job["id"], claude, deadline)
+            fit = judge(conn, job["id"], claude, deadline, job)
         except NotSignedIn:
             raise
         except ClaudeFailed:
@@ -222,10 +283,11 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
         if time.monotonic() > deadline:
             break
         name = f"{job['company']} ({job['title']})"
-        report(f"Tailoring {index} of {len(drafts)}: {job['company']}")
+        doing = f"Tailoring {index} of {len(drafts)}: {job['company']}"
+        report(doing)
         try:
-            done = tailor(conn, cfg, job["id"], claude, deadline)
-        except NotSignedIn:
+            done = tailor(conn, cfg, job["id"], claude, deadline, lambda step, doing=doing: report(f"{doing}, {step}"))
+        except (NotSignedIn, ProfileChanged):
             raise
         except ClaudeFailed:
             done = False
@@ -266,10 +328,11 @@ def tailor_batch(conn, cfg: dict, report=lambda text: None, claude: str | None =
             left += 1
             continue
         name = f"{job['company']} ({job['title']})"
-        report(f"Tailoring {index} of {len(drafts)}: {job['company']}")
+        doing = f"Tailoring {index} of {len(drafts)}: {job['company']}"
+        report(doing)
         try:
-            done = tailor(conn, cfg, job["id"], claude, deadline)
-        except NotSignedIn:
+            done = tailor(conn, cfg, job["id"], claude, deadline, lambda step, doing=doing: report(f"{doing}, {step}"))
+        except (NotSignedIn, ProfileChanged):
             raise
         except ClaudeFailed:
             done = False

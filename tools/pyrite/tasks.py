@@ -14,7 +14,11 @@ SWEEP, CLAUDE, TAILOR = "sweep", "claude", "tailor"
 LABELS = {SWEEP: "pan", CLAUDE: "Claude run", TAILOR: "tailoring batch"}
 WRITERS = (CLAUDE, TAILOR)  # both write drafts, so they take turns
 # With no word from a run for this long it must have died, for instance when the PC went to sleep or restarted.
-STALE_MINUTES = {SWEEP: 60, CLAUDE: 25, TAILOR: 25}
+# The Claude run and the tailoring batch say what they're doing before every step, and the longest step is one Claude
+# run or one build of the documents (five minutes at most), so their limit is that step with room to spare. A limit
+# for a whole job would let a long tailoring job look dead while it still writes, and a second writer start beside it.
+STEP_MINUTES = claude_code.ASK_MINUTES + 10
+STALE_MINUTES = {SWEEP: 60, CLAUDE: STEP_MINUTES, TAILOR: STEP_MINUTES}
 DIED = "The run stopped without finishing."
 
 
@@ -140,7 +144,8 @@ def _sweep(conn, cfg: dict, task_id: int) -> str:
     try:
         result = mail.check(conn, cfg)
     except Exception as err:  # Trouble reading mail never fails a sweep. It shows on the Sources tab instead.
-        result = {"state": "error", "message": f"{type(err).__name__}: {err}"}
+        conn.rollback()
+        result = mail.failed(conn, cfg, f"The mail check stopped with {type(err).__name__}: {err}")
     return f"{said} {mail.summary(result)}"
 
 
