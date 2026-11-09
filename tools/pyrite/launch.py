@@ -17,6 +17,10 @@ from pathlib import Path
 
 from .store import CODE_ROOT, ROOT
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 DEFAULT_PORT = 8787
 TITLE = b"<title>Pyrite</title>"
 # A first start reads the whole database, so it gets a while. Pyrite.cmd waited about as long.
@@ -52,7 +56,7 @@ def answering(port: int, timeout: float = 3) -> bool:
 
 def _output(command: list[str]) -> str:
     try:
-        return subprocess.run(command, capture_output=True, text=True, timeout=15).stdout or ""
+        return subprocess.run(command, capture_output=True, text=True, timeout=15, creationflags=NO_WINDOW).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return ""
 

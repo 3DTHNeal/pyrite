@@ -17,6 +17,10 @@ from pathlib import Path
 from . import doctor
 from .steps import EMAIL, LINK, PHONE
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 SEPARATOR = " · "
 DATE_SEP = " – "
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -312,7 +316,8 @@ def _pdf_text(path: Path) -> str:
 
 def _pdftotext(path: Path, *options: str) -> str:
     try:
-        done = subprocess.run(["pdftotext", "-enc", "UTF-8", *options, str(path), "-"], capture_output=True, timeout=60, check=False)
+        done = subprocess.run(["pdftotext", "-enc", "UTF-8", *options, str(path), "-"], capture_output=True, timeout=60, check=False,
+                              creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired as err:
         raise Refused(f"pdftotext took over a minute on {path.name}, so it was stopped.") from err
     if done.returncode:

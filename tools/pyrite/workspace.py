@@ -9,6 +9,10 @@ from pathlib import Path
 
 from . import store, tomledit
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # A real folder rather than <folder>, which a shell reads as redirection when it's copied as it is.
 INIT_EXAMPLE = 'pyrite init ../my-job-search --name "Your Name"'
 # Copied from the example by `pyrite init`, and changed on the way. Each line is checked to be in the example's
@@ -160,7 +164,7 @@ def _copy_example(profile: Path, name: str) -> None:
 
 
 def _git(folder: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(folder), *args], capture_output=True, text=True, timeout=60)
+    return subprocess.run(["git", "-C", str(folder), *args], capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
 
 
 def set_up_git(folder: Path) -> list[str]:
