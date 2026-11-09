@@ -1,5 +1,6 @@
 """The dashboard's Settings and Facts tabs, and opening a database made by an older version."""
 import json
+import re
 import tempfile
 import threading
 import unittest
@@ -117,6 +118,29 @@ class Settings(SettingsBase):
         self.path.write_bytes(SETTINGS_TOML.replace("\n", "\r\n").encode("utf-8"))
         settings.save(self.body(city_points=7))
         self.assertNotIn("\n", self.text().replace("\r\n", ""))
+
+    def test_a_file_with_a_byte_order_mark_reads_and_saves(self):
+        # Windows PowerShell 5.1 writes one, and TOML can't read it.
+        self.path.write_bytes(b"\xef\xbb\xbf" + SETTINGS_TOML.encode("utf-8"))
+        self.assertEqual(settings.view()["promote"]["city_points"], 10)
+        settings.save(self.body(city_points=7))
+        self.assertEqual(store.load_config()["promote"]["city_points"], 7)
+
+    def test_settings_the_form_cant_show_stop_the_save_instead_of_being_lost(self):
+        cases = {
+            "[promote.extra]": SETTINGS_TOML.replace("# A comment inside the section\n", "[promote.extra]\nx = 1\n"),
+            "points on the skill Firmware of Robotics": SETTINGS_TOML.replace(
+                "terms = ['\\brobots?\\b']", "terms = ['\\brobots?\\b']\nwants = [{ name = \"Firmware\", points = 3 }]"),
+            "note on the city Springfield": SETTINGS_TOML.replace('{ name = "Springfield" }', '{ name = "Springfield", note = "x" }'),
+            "radius": SETTINGS_TOML.replace("mentions_needed = 3", "mentions_needed = 3\nradius = 30"),
+        }
+        for named, text in cases.items():
+            with self.subTest(named):
+                self.assertNotEqual(text, SETTINGS_TOML)
+                self.path.write_text(text, encoding="utf-8", newline="\n")
+                with self.assertRaisesRegex(ValueError, rf"has {re.escape(named)},.*Nothing was saved"):
+                    settings.save(self.body(city_points=7))
+                self.assertEqual(self.text(), text)
 
     def test_a_section_is_added_if_there_is_none(self):
         self.path.write_text("[run]\nmin_score = 40\n", encoding="utf-8", newline="\n")

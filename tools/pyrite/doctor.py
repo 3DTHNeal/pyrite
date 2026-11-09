@@ -13,7 +13,7 @@ import tomllib
 from contextlib import closing
 from pathlib import Path
 
-from . import inbox
+from . import discover, inbox, score
 from .checks import listed_terms, uncommented
 from .claude_code import find_claude, signed_in
 from .store import DB_PATH, EXAMPLE_ROOT
@@ -230,6 +230,12 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         todos.append({"what": "profile/search.toml watches no companies, so a pan reads no job boards.",
                       "fix": 'Add each company under [watch.greenhouse], [watch.lever], [watch.ashby] or [watch.workday]. See '
                              '"Adding companies" in docs/operating.md.', "step": "companies"})
+    for problem in discover.watch_problems(cfg):
+        todos.append({"what": problem, "fix": 'Until then a pan skips that company and lists it as failing. See "Adding companies" '
+                                              "in docs/operating.md.", "step": "companies"})
+    for problem in score.pattern_problems(cfg):
+        todos.append({"what": problem, "fix": "Until it's fixed, a pan stops before reading any job board. A literal character "
+                                              "such as ( or + needs a backslash before it.", "severity": "bad"})
     todos += _master_todos(root, cfg)
     todos += _unguarded_todos(root, cfg)
     todos += _seed_todos(root)

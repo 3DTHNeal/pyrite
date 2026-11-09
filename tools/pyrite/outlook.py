@@ -152,7 +152,7 @@ def prompt(name: str, industry: dict, places: dict, official: list[dict], today:
         f"Industry: {name}",
     ]
     if industry.get("naics"):
-        parts.append(f"Official industry codes (NAICS): {', '.join(industry['naics'])}")
+        parts.append(f"Official industry codes (NAICS): {', '.join(str(code) for code in industry['naics'])}")
     parts += [f"Where they live: {where}"]
     if employers:
         parts.append(f"Employers they follow in this industry, for context. You don't need to cover each one: {', '.join(employers)}")
@@ -357,7 +357,7 @@ def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
                     places[place["level"]] = place["name"]
                 if industry.get("naics"):
                     numbers = market.area_numbers(place["code"])
-                    official.append({**place, "quarter": numbers["quarter"], **market.combine(numbers["rows"], industry["naics"])})
+                    official.append({**place, "quarter": numbers["quarter"], **market.combine(numbers["rows"], market.naics_codes(industry))})
         except (market.Unavailable, ValueError):
             places.update({k: settings.get(k) for k in ("metro", "state") if settings.get(k)})
         text = prompt(name, industry, places, official, datetime.now().date().isoformat())

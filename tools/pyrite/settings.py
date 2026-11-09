@@ -33,8 +33,9 @@ class Conflict(ValueError):
 
 
 def _read() -> str:
-    # newline="" keeps the file's own line endings, so a save doesn't rewrite every line.
-    with open(store.CONFIG_PATH, encoding="utf-8", newline="") as handle:
+    # newline="" keeps the file's own line endings, so a save doesn't rewrite every line. utf-8-sig skips the byte-order
+    # mark Windows PowerShell 5.1 writes, which TOML can't read; the file is saved without one.
+    with open(store.CONFIG_PATH, encoding="utf-8-sig", newline="") as handle:
         return handle.read()
 
 
@@ -246,6 +247,40 @@ def render(promote: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# What the form shows and render writes back, at each level of [promote]. Anything else would be lost by a save.
+KEPT = {
+    "promote": {"city_points", "industry_points", "mentions_needed", "cities", "industry"},
+    "city": {"name", "points", "match"},
+    "industry": {"name", "points", "terms", "companies", "wants", "naics"},
+    "want": {"name", "match"},
+}
+
+
+def _and(items: list[str]) -> str:
+    return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else "".join(items)
+
+
+def unkept(promote: dict) -> list[str]:
+    """The settings in [promote] that a save from the form would drop, as they'd be found in search.toml, such as
+    "[promote.extra]" or "points on the skill Firmware"."""
+    lost = []
+    for key, value in promote.items():
+        if key not in KEPT["promote"]:
+            lost.append(f"[promote.{key}]" if isinstance(value, dict) else key)
+    for city in promote.get("cities") or []:
+        if isinstance(city, dict):
+            lost += [f"{key} on the city {city.get('name', '?')}" for key in city if key not in KEPT["city"]]
+    for industry in promote.get("industry") or []:
+        if not isinstance(industry, dict):
+            continue
+        name = industry.get("name", "?")
+        lost += [f"{key} on the industry {name}" for key in industry if key not in KEPT["industry"]]
+        for want in industry.get("wants") or []:
+            if isinstance(want, dict):
+                lost += [f"{key} on the skill {want.get('name', '?')} of {name}" for key in want if key not in KEPT["want"]]
+    return lost
+
+
 def _is_promote(name: str) -> bool:
     return name == "promote" or name.startswith("promote.")
 
@@ -298,6 +333,12 @@ def save(body: dict) -> dict:
         current = tomllib.loads(text)
         if body.get("version") != _version(current.get("promote")):
             raise Conflict("These settings changed after you opened them, so nothing was saved. Reload Settings to see the latest.")
+        lost = unkept(current.get("promote") or {})
+        if lost:
+            them = "it" if len(lost) == 1 else "them"
+            raise ValueError(f"[promote] in search.toml has {_and(lost)}, which this tab can't show, so saving here would "
+                             f"remove {them}. Nothing was saved. Change {them} in profile/search.toml itself, or take {them} "
+                             "out and save again.")
         promote = validate(body.get("promote"))
         updated = _replace_section(text, render(promote))
         parsed = tomllib.loads(updated)

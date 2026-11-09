@@ -217,11 +217,78 @@ def today_plus(days: int) -> str:
     return (datetime.now().astimezone() + timedelta(days=days)).date().isoformat()
 
 
+class ConfigError(ValueError):
+    """search.toml can't be used as it is. The message is one line that names the setting or line to fix."""
+
+
+# The settings that must be numbers, by table. Written as text, such as min_score = "forty", each would otherwise fail
+# far from here, as a TypeError in the middle of a pan or a rescore.
+NUMBERS = {
+    "run": ("triage_per_day", "tailor_per_day", "min_score", "tailor_min_score", "follow_up_days", "quiet_days",
+            "ghost_after_down_days", "fix_attempts"),
+    "freshness": ("new_days", "older_points", "repost_penalty", "redate_penalty", "max_penalty", "redate_tolerance_days",
+                  "came_back_after_days", "ghost_age_days", "ghost_repost_count", "ghost_age_if_reposted"),
+    "promote": ("city_points", "industry_points", "mentions_needed"),
+}
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def config_problems(cfg: dict) -> list[str]:
+    """Settings of the wrong kind, each as a sentence naming it: a number written as text, or a [scoring] list whose
+    entries aren't the [pattern, points] pairs it needs."""
+    problems = []
+    for table, keys in NUMBERS.items():
+        section = cfg.get(table)
+        if not isinstance(section, dict):
+            continue
+        for key in keys:
+            if key in section and not _is_number(section[key]):
+                problems.append(f"{key} under [{table}] is {json.dumps(section[key])}, which needs to be a number, written without quotes.")
+    ages = (cfg.get("freshness") or {}).get("age_points", [])
+    if not isinstance(ages, list) or not all(isinstance(row, list) and len(row) == 2 and all(map(_is_number, row)) for row in ages):
+        problems.append("age_points under [freshness] needs pairs of numbers, such as [[3, 30], [7, 20]].")
+    scoring = cfg.get("scoring") or {}
+    for key, shape, size in (("keywords", "['pattern', points]", 2), ("flags", "['Label', 'pattern', points]", 3)):
+        for entry in scoring.get(key) or []:
+            if not (isinstance(entry, list) and len(entry) == size and all(isinstance(part, str) for part in entry[:-1])
+                    and _is_number(entry[-1])):
+                problems.append(f"{key} under [scoring] has {json.dumps(entry)}, where each entry needs to be {shape}.")
+                break
+    return problems
+
+
+def _relative(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def read_config(path: Path) -> dict:
+    """A search.toml, read. A byte-order mark is skipped, since Windows PowerShell 5.1 writes one. A file that isn't
+    valid TOML raises ConfigError naming the line, such as "profile/search.toml line 28: Expected '=' after a key"."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        return tomllib.loads(text)
+    except UnicodeDecodeError as err:
+        raise ConfigError(f"{_relative(path)} isn't saved as UTF-8 ({err.reason}). Save it as UTF-8 and try again.") from None
+    except tomllib.TOMLDecodeError as err:
+        found = re.fullmatch(r"(.*) \(at line (\d+), column \d+\)", str(err), re.S)
+        where, why = (f"{_relative(path)} line {found[2]}", found[1]) if found else (_relative(path), str(err))
+        raise ConfigError(f"{where}: {why}. Fix that line and try again.") from None
+
+
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
         raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/ into your workspace to start, then run `pyrite doctor`.")
-    with CONFIG_PATH.open("rb") as handle:
-        return tomllib.load(handle)
+    cfg = read_config(CONFIG_PATH)
+    problems = config_problems(cfg)
+    if problems:
+        raise ConfigError(f"{_relative(CONFIG_PATH)}: {problems[0]}")
+    return cfg
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:

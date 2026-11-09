@@ -55,9 +55,8 @@ def enabled() -> bool:
     The dashboard's Settings tab edits only [promote], so a page can't turn this on.
     """
     try:
-        with open(store.ROOT / "profile" / "search.toml", "rb") as handle:
-            return tomllib.load(handle).get("workday", {}).get("autofill") is True
-    except (OSError, tomllib.TOMLDecodeError):
+        return store.read_config(store.ROOT / "profile" / "search.toml").get("workday", {}).get("autofill") is True
+    except (OSError, store.ConfigError):
         return False
 
 

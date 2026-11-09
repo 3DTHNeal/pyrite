@@ -28,12 +28,19 @@ COMP = re.compile(
 BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "table", "section"}
 VOID_TAGS = {"br", "img", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 # Inline styles that hide text from a reader but not from a model. Whitespace and CSS comments are removed first, so
-# "display:\tnone" and "display:/**/none" count. Only an exact zero counts: font-size:0.9em and opacity:0.5 are visible.
+# "display:\tnone" and "display:/**/none" count. Text too small or faint to read, and text the color of its own
+# background, are judged in _unreadable, since those take numbers and colors rather than one fixed spelling.
 HIDING_STYLE = re.compile(
-    r"display:none|visibility:(?:hidden|collapse)|font-size:0(?:\.0*)?(?:px|em|rem|pt|%)?(?![.\d])|opacity:0(?:\.0*)?(?![.\d])"
+    r"display:none|visibility:(?:hidden|collapse)|(?:^|;)color:transparent"
     r"|(?:height|width|max-height|max-width):0(?:px)?(?![.\d]).*overflow:hidden|overflow:hidden.*(?:height|width):0(?:px)?(?![.\d])"
     r"|clip(?:-path)?:(?:rect\(0|inset\(50%)|text-indent:-\d{3,}|(?:left|top):-\d{4,}"
+    r"|transform:[^;]*scale(?:x|y|3d)?\((?:0|0?\.0+)[,)]"
 )
+# Below these no one reads the text, though a model still does. font-size:0.9em and opacity:0.5 stay visible.
+TINY_FONT = {"px": 2, "pt": 1.5, "em": 0.15, "rem": 0.15, "%": 15}
+FAINT_OPACITY = 0.05
+# Colors written by name that a hiding trick uses most, as the hex they stand for.
+NAMED_COLORS = {"white": "#ffffff", "black": "#000000"}
 
 
 def strip_invisible(text: str) -> str:
@@ -74,8 +81,13 @@ class _Text(HTMLParser):
         if tag in ("script", "style", "noscript", "template", "head"):
             return True
         attr = dict(attrs)
+        if "hidden" in attr or attr.get("aria-hidden") == "true":
+            return True
+        # An old <font color="white"> is white on a posting's white page.
+        if tag == "font" and _color(attr.get("color") or "") == NAMED_COLORS["white"]:
+            return True
         style = re.sub(r"/\*.*?\*/|\s+", "", attr.get("style") or "", flags=re.S).lower()
-        return "hidden" in attr or attr.get("aria-hidden") == "true" or HIDING_STYLE.search(style) is not None
+        return HIDING_STYLE.search(style) is not None or _unreadable(style)
 
     def handle_starttag(self, tag, attrs):
         if tag in VOID_TAGS:
@@ -104,11 +116,47 @@ class _Text(HTMLParser):
             self.parts.append(data)
 
 
-def html_to_text(markup: str) -> str:
+def _color(value: str) -> str:
+    """A CSS color as lowercase six-digit hex, or the value as written if it's some other form."""
+    value = value.strip().lower().removesuffix("!important")
+    value = NAMED_COLORS.get(value, value)
+    if re.fullmatch(r"#[0-9a-f]{3}", value):
+        return "#" + "".join(ch * 2 for ch in value[1:])
+    rgb = re.fullmatch(r"rgba?\((\d+),(\d+),(\d+)(?:,[\d.]+)?\)", value.replace(" ", ""))
+    if rgb:
+        return "#" + "".join(f"{min(int(part), 255):02x}" for part in rgb.groups())
+    return value
+
+
+def _number(value: str) -> tuple[float, str] | None:
+    """A CSS number and its unit, such as (0.01, "px") from "0.01px" or (0.0, "") from ".0"."""
+    found = re.fullmatch(r"(\d*\.?\d+)([a-z%]*)", value.removesuffix("!important"))
+    return (float(found[1]), found[2]) if found else None
+
+
+def _unreadable(style: str) -> bool:
+    """Whether an inline style, with its spaces taken out, leaves its text too small or faint to read, or the color of
+    its own background."""
+    rules = dict(part.split(":", 1) for part in style.split(";") if ":" in part)
+    size = _number(rules.get("font-size", ""))
+    if size and (size[0] == 0 or size[0] < TINY_FONT.get(size[1], 0)):
+        return True
+    opacity = _number(rules.get("opacity", ""))
+    if opacity and opacity[0] / (100 if opacity[1] == "%" else 1) <= FAINT_OPACITY:
+        return True
+    color = _color(rules.get("color", ""))
+    background = _color(rules.get("background-color") or rules.get("background") or "")
+    return bool(color) and color == background
+
+
+def html_to_text(markup: str, escaped: bool = False) -> str:
+    """The visible text of a posting's HTML. `escaped` is for a board that sends its HTML escaped, as Greenhouse does:
+    only then is it unescaped first. Unescaping real HTML would turn text such as "&lt;/div&gt;" into tags, and let
+    text hidden inside an element out of it."""
     if not markup:
         return ""
     parser = _Text()
-    parser.feed(html.unescape(markup) if "&lt;" in markup else markup)
+    parser.feed(html.unescape(markup) if escaped else markup)
     parser.close()
     text = strip_invisible("".join(parser.parts))
     text = re.sub(r"[ \t\xa0]+", " ", text)
@@ -158,7 +206,8 @@ def fetch_greenhouse(board: str, company: str) -> list[Posting]:
 
 def greenhouse_detail(board: str, company: str, job_id: str) -> Posting:
     job = cast(dict, _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job_id}", retries=1))
-    description = html_to_text(job.get("content", ""))
+    # Greenhouse sends the description's HTML escaped, as "&lt;p&gt;".
+    description = html_to_text(job.get("content", ""), escaped=True)
     return Posting(
         f"greenhouse:{board}", str(job["id"]), company, job["title"].strip(),
         (job.get("location") or {}).get("name", ""), "", job.get("absolute_url", ""),

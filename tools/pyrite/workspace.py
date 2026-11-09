@@ -60,6 +60,8 @@ BLANK_COMMENTS = (
     ("# dropped: to accept a city at all, add it under [location] too. These towns already pass",
      "# dropped: to accept a city at all, add it under [location] too."),
     ('# as "local", because [location] accepts anywhere in Wisconsin.', None),
+    ("# Either or both will do. Madison is tied to Wisconsin here, so Madison, Alabama isn't local.",
+     "# Either or both will do."),
 )
 
 # What `pyrite init --git` keeps out of the workspace's repository. pyrite.db isn't among it: it can't be regenerated,

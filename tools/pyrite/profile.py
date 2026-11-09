@@ -123,11 +123,12 @@ def _history_dir() -> Path:
 
 
 def read(key: str) -> str:
-    """A profile file's text exactly as it is on disk, line endings included, or "" if it doesn't exist."""
+    """A profile file's text exactly as it is on disk, line endings included, or "" if it doesn't exist. A byte-order
+    mark, which Windows PowerShell 5.1 adds, is left out, since search.toml won't read as TOML with one."""
     path = _path(key)
     if not path.exists():
         return ""
-    with open(path, encoding="utf-8", newline="") as handle:
+    with open(path, encoding="utf-8-sig", newline="") as handle:
         return handle.read()
 
 

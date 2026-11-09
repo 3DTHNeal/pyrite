@@ -610,11 +610,16 @@ def cmd_add(args, conn):
             description = Path(args.description_file).read_text(encoding="utf-8")
         except OSError as err:
             sys.exit(f"Can't read the posting from {args.description_file}: {err.strerror or err}. Nothing was added.")
+    newest = conn.execute("SELECT COALESCE(MAX(id), 0) FROM jobs").fetchone()[0]
     try:
         job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description)
     except ValueError as err:
         sys.exit(str(err))
     conn.commit()
+    if job_id <= newest:  # It was tracked already, so it came back as it was.
+        job = get_job(conn, job_id)
+        print(f"Already tracked as job {job_id}: {job['company']}, {job['title']}, {job['status']}. Nothing was changed.")
+        return
     print(f"Job {job_id}: {args.company.strip()}, {args.title.strip()}. `pyrite folder {job_id}` makes its application folder.")
 
 
@@ -797,10 +802,14 @@ def cmd_doctor(args):
 
     print(f"Workspace: {ROOT}")
     try:
-        cfg = load_config()
+        cfg, todos = load_config(), None
     except SystemExit:
-        cfg = None
-    todos = doctor.workspace_todos(ROOT, cfg)
+        cfg, todos = None, None
+    except store.ConfigError as err:
+        # The rest of the workspace is judged from the settings, so until they read, that's the one thing to do.
+        cfg, todos = None, [{"what": str(err), "fix": "Pyrite reads every setting from it, so nothing else runs until it's fixed."}]
+    if todos is None:
+        todos = doctor.workspace_todos(ROOT, cfg)
     for todo in todos:
         print(_doctor_line("TO DO", todo["what"], todo["fix"]))
     if not todos:
@@ -1065,6 +1074,8 @@ def main(argv=None):
         )
     try:
         args.func(args)
+    except store.ConfigError as err:
+        sys.exit(str(err))  # One line naming the setting to fix says more than a traceback.
     except store.JobNotFound as err:
         # Only a number the user typed gets the one-line answer. A JobNotFound from a command
         # they gave no number to is a bug, and its traceback explains it.

@@ -8,9 +8,11 @@ name = "Alex Rivera"
 [location]
 # A posting is "local" if its location matches any of these (case-insensitive). These are
 # patterns; `places` takes plain names instead, each matched as whole words in any case, with
-# any spacing or commas: places = ["Springfield, IL", "Oak Park"]. Either or both will do.
+# any spacing or commas: places = ["Springfield, IL", "Oak Park"]. A place that ends in a state
+# also matches the state written out or first, as "Springfield, Illinois" or "US-IL-Springfield".
+# Either or both will do. Madison is tied to Wisconsin here, so Madison, Alabama isn't local.
 local = [
-  'madison', 'sun prairie', 'middleton', 'verona', 'waunakee', 'wisconsin', 'rockford,?\s*(il|illinois)',
+  'madison[\s,(-]*(wi|wisconsin)\b', 'sun prairie', 'middleton', 'verona', 'waunakee', 'wisconsin', 'rockford,?\s*(il|illinois)',
 ]
 # Also local: the state abbreviation, matched case-sensitively.
 local_exact = [', WI\b', '\bWI, US', '\bUS-WI\b', 'Remote\s*[-–]\s*WI\b']
@@ -110,7 +112,7 @@ naics = ["334413", "333242"]
 # through at the employers you care most about without opening it up everywhere.
 [[track]]
 name = "AI systems"
-title = ['\b(ai|ml|a\.i\.|machine learning|llm|genai|gen ai|agents?|agentic|ai/ml|ml/ai|applied ai|inference)\b', '\bdeveloper (productivity|experience|tools)\b', '\b(engineering|developer) (productivity|acceleration)\b']
+title = ['\b(ai|ml|a\.i\.|machine learning|llm|genai|gen ai|agentic|ai/ml|ml/ai|applied ai|inference)\b', '\b(engineer|engineering|developer|architect)\b.*\bagents?\b|\bagents?\b.*\b(engineer|engineering|developer|platform)\b', '\bdeveloper (productivity|experience|tools)\b', '\b(engineering|developer) (productivity|acceleration)\b']
 needs_level = true
 
 [[track]]
@@ -141,8 +143,8 @@ exclude_titles = [
   'forward deployed', 'field service', 'service technician', 'technicians?', 'technologist',
   'mechanical engineer', 'manufacturing engineer', 'process engineer', 'chemist', 'physicist',
   'research scientist', 'data entry', 'facilities', 'security guard', 'procurement', 'supply chain',
-  'analysts?', 'writer', 'editor', 'designer', 'nurse', 'clinical', 'pharmac\w*', 'retail', 'store', 'merchandis\w*',
-  'gtm', 'go-to-market', 'crm', 'delivery lead', 'cost management', 'capacity', 'field', 'regional', 'analytics',
+  'analysts?', 'writer', 'editor', 'designer', 'nurse', 'clinical', 'pharmac\w*', 'retail', 'store (manager|associate|operations|director)', 'merchandis\w*',
+  'gtm', 'go-to-market', 'crm', 'delivery lead', 'cost management', 'capacity', 'field (engineer\w*|application\w*|sales|marketing|operations|support)', 'regional', 'analytics',
   'data scientist', 'reporting', 'deployment manager', 'device development', 'partner\w*', 'alliances', 'enablement',
   'community', 'developer relations', 'devrel', 'advocate', 'evangelist', 'business development', 'payments?',
 ]

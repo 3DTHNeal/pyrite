@@ -88,6 +88,16 @@ class Dashboard(Base):
         self.assertNotEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", "https://jobs.example.com/acme/R-200"), sent)
         self.assertIsNone(server.tracked_by_url(self.conn, ""))
 
+    def test_without_a_link_another_place_or_text_is_another_opening(self):
+        first = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors.")
+        self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
+        elsewhere = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Remote - US", "Builds sensors.")
+        other_text = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds motors.")
+        self.assertEqual(len({first, elsewhere, other_text}), 3)
+        # One added before the place and text counted, under the old number, is still found.
+        self.conn.execute("UPDATE jobs SET source_id = 'old-form' WHERE id = ?", (first,))
+        self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
+
 
 class Outreach(Base):
     """Reaching out after applying: logged as an event, due on the to-do list a day or so in, and the follow-up keyed to it."""

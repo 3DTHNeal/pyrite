@@ -1,4 +1,5 @@
 """The Industries tab: official numbers from the BLS, what Pyrite has seen, and Claude's sourced outlook."""
+import contextlib
 import json
 import subprocess
 import tempfile
@@ -197,6 +198,21 @@ class Seen(Base):
             view = market.view(self.conn, cfg)
         self.assertEqual([i["name"] for i in view["industries"]], ["Robotics"])
         self.assertEqual(view["industries"][0]["official"], [])
+
+    def test_codes_written_as_numbers_read_as_codes(self):
+        # naics = [333998], without quotes, is what someone writing search.toml by hand often types.
+        cfg = {**CFG, "promote": {**CFG["promote"], "industry": [{"name": "Robotics", "terms": ["robot"], "naics": [333998]}]}}
+        fakes = {"areas": lambda cfg: ([{"code": "55000", "level": "state", "name": "Wisconsin"}], []),
+                 "industry_titles": lambda: {"333998": "NAICS 333998 All other general purpose machinery manufacturing"},
+                 "area_numbers": lambda code, today=None: {"quarter": "2026Q1", "rows": market._detail(csv(row("55000", "5", "333998")))}}
+        with contextlib.ExitStack() as stack:
+            for name, fake in fakes.items():
+                stack.enter_context(mock.patch.object(market, name, fake))
+            view = market.view(self.conn, cfg)
+        robotics = view["industries"][0]
+        self.assertEqual(robotics["codes"], [{"code": "333998", "title": "All other general purpose machinery manufacturing"}])
+        self.assertEqual(robotics["official"][0]["jobs"], 100)
+        self.assertIn("(NAICS): 333998", outlook.prompt("Robotics", cfg["promote"]["industry"][0], {}, [], "2026-11-08"))
 
     def test_a_rejection_isnt_a_reply_here_either(self):
         # The same rule as the dashboard's Reply rate, so the two never disagree.

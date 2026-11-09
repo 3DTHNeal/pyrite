@@ -862,7 +862,7 @@ function renderSettings() {
       h("p", { class: "muted" }, "Preferred cities and industries move postings up your prospects. They don't change what's kept or tailored. Each panel saves by itself."),
       h("button", { class: "btn", type: "button", onclick: reloadSettings }, "Reload")),
     h("details", { class: "more" }, h("summary", {}, "How this works"),
-      h("p", { class: "muted" }, "A match adds points to a posting's priority, which only changes the order you and the daily run see things in. It can't bring back a posting the filters dropped: to accept a new city at all, add it under [location] in profile/search.toml too. An industry counts when the employer is listed, a word is in the employer's name or the title, or the words appear often enough in the description. Filters and everything else stay in profile/search.toml.")),
+      h("p", { class: "muted" }, "A match adds points to a posting's priority, which only changes the order you and the daily run see things in. It can't bring back a posting the filters dropped: to accept a new city at all, add it under [location] in profile/search.toml too. An industry counts when the employer is listed, a word is in the employer's name or the title, or the words appear often enough in the description. Filters and everything else stay in profile/search.toml. Saving writes the [promote] section of that file out again in its usual layout, so comments of your own in that section are replaced. A setting there that this tab doesn't show stops the save instead of being lost.")),
     pointsPanel(),
     citiesPanel(),
     h("div", { class: "settings-heading-row" }, h("h2", { class: "settings-heading" }, "Industries"),

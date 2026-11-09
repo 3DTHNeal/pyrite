@@ -127,7 +127,8 @@ def _text(body: dict, key: str, label: str, limit: int) -> str:
 
 def add_manual_job(conn, cfg, company, title, url="", location="", description="") -> int:
     """A posting you found yourself always goes in, whatever the filters think, at the front of the line. One already
-    tracked at the same link isn't added twice: that job's number comes back instead."""
+    tracked at the same link isn't added twice: that job's number comes back instead. Without a link, the same company,
+    title, place and text is the same posting, but another place or other text is another opening, so it goes in too."""
     company, title = company.strip(), title.strip()
     if not company or not title:
         raise ValueError("Company and title are required.")
@@ -138,9 +139,12 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     known = tracked_by_url(conn, url)
     if known:
         return known["id"]
-    source_id = hashlib.sha1(f"{company}|{title}|{url}".encode(), usedforsecurity=False).hexdigest()[:16]
+    text = hashlib.sha1(description.encode(), usedforsecurity=False).hexdigest()
+    source_id = hashlib.sha1(f"{company}|{title}|{url}|{location}|{text}".encode(), usedforsecurity=False).hexdigest()[:16]
     existing = conn.execute(
-        "SELECT id FROM jobs WHERE source_key = 'manual' AND source_id = ?", (source_id,)
+        """SELECT id FROM jobs WHERE source_key = 'manual' AND (source_id = ?
+               OR (company = ? AND title = ? AND url = ? AND location = ? AND description = ?))""",
+        (source_id, company, title, url, location, description),
     ).fetchone()
     if existing:
         return existing["id"]
@@ -177,9 +181,10 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept
                          if job["frozen"] and job["app_folder"] else [])
     # The whole row, because priority reads the description even when the page isn't sent it.
     job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today), swept_at))
-    # The posting's own closing date first; the notes written from it are the fallback.
+    # A deadline in the notes wins: it was read from the whole posting, or set by you, where the posting's own words
+    # are matched by pattern. The posting's is the fallback for a job with no notes yet.
     noted, blockers = deadline.read_notes(ROOT / job["app_folder"]) if job["app_folder"] else (None, [])
-    job["deadline"] = deadline.from_posting(row["description"] or "") or noted
+    job["deadline"] = noted or deadline.from_posting(row["description"] or "")
     job["days_to_deadline"] = (date.fromisoformat(job["deadline"]) - date.fromisoformat(today)).days if job["deadline"] else None
     job["blockers"] = blockers if job["status"] in NOT_SENT else []
     return job
@@ -653,7 +658,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         try:
             extra = allowed_hosts(load_config())
-        except (OSError, tomllib.TOMLDecodeError):
+        except (OSError, tomllib.TOMLDecodeError, store.ConfigError):
             extra = set()  # Localhost still gets through, so the page can say what's wrong with the file.
         return host in ALLOWED_HOSTS or host in extra
 
@@ -663,6 +668,8 @@ class Handler(BaseHTTPRequestHandler):
             handle()
         except tomllib.TOMLDecodeError as err:
             self._json({"error": f"profile/search.toml can't be read, so nothing loaded. Fix it and reload: {err}"}, 500)
+        except store.ConfigError as err:
+            self._json({"error": f"{err} Nothing loads until it's fixed, so reload once it is."}, 500)
         except sqlite3.OperationalError as err:
             if "locked" in str(err) or "busy" in str(err):
                 self._json({"error": "The database is busy, probably with a sweep. Try again in a moment."}, 503)

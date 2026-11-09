@@ -166,6 +166,47 @@ class Workspace(unittest.TestCase):
             store.load_config()
         self.assertIn("example/profile/", str(caught.exception.code))
 
+    def config(self, text: str, encoding: str = "utf-8") -> Path:
+        folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "search.toml"
+        path.write_text(text, encoding=encoding)
+        patcher = mock.patch.object(store, "CONFIG_PATH", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return path
+
+    def test_a_search_toml_saved_with_a_byte_order_mark_reads(self):
+        # Windows PowerShell 5.1's Set-Content -Encoding UTF8 starts the file with one.
+        self.config((store.EXAMPLE_ROOT / "profile" / "search.toml").read_text(encoding="utf-8"), encoding="utf-8-sig")
+        self.assertEqual(store.load_config()["candidate"], CFG["candidate"])
+
+    def test_a_search_toml_that_isnt_toml_names_the_line_without_a_traceback(self):
+        self.config('[run]\nmin_score = 40\ntriage_per_day 20\n')
+        with self.assertRaisesRegex(store.ConfigError, r"search\.toml line 3: .*Fix that line"):
+            store.load_config()
+        with contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as caught, \
+                mock.patch.object(doctor, "tool_checks", return_value=[]):
+            cli.main(["doctor"])
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("line 3", out.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            cli.main(["sources"])
+        self.assertRegex(str(caught.exception.code), r"^\S*search\.toml line 3: ")
+
+    def test_a_number_written_as_text_is_named(self):
+        text = (store.EXAMPLE_ROOT / "profile" / "search.toml").read_text(encoding="utf-8")
+        for old, new, named in (("min_score = 40", 'min_score = "forty"', 'min_score under [run] is "forty"'),
+                                ("ghost_age_days = 90", "ghost_age_days = true", "ghost_age_days under [freshness]"),
+                                ("['python', 3]", "['python', '3']", "keywords under [scoring]"),
+                                ("[[3, 30], [7, 20]", "[[3, 'thirty'], [7, 20]", "age_points under [freshness]")):
+            with self.subTest(named):
+                self.assertIn(old, text)
+                self.config(text.replace(old, new))
+                with self.assertRaises(store.ConfigError) as caught:
+                    store.load_config()
+                self.assertIn(named, str(caught.exception))
+
 
 class NewWorkspace(unittest.TestCase):
     """A workspace made the way docs/operating.md says, by copying example/profile/, and what's left to change in it."""
@@ -365,6 +406,14 @@ class NewWorkspace(unittest.TestCase):
         (self.root / "profile" / "seed.toml").write_text(
             '[[application]]\ncompany = "Initech"\ntitle = "Engineer"\nfolder = "applications/gone"\n', encoding="utf-8")
         self.assertTrue(any("applications/gone" in what for what in self.todos()))
+
+    def test_a_watch_entry_or_a_pattern_written_wrong_is_named(self):
+        cfg = self.cfg()
+        cfg["watch"]["workday"] = {"globex": "Globex"}
+        cfg["scoring"]["keywords"].append(["c++(", 3])
+        todos = self.todos(cfg)
+        self.assertTrue(any(what.startswith("[watch.workday] globex") and "wd and site" in what for what in todos), todos)
+        self.assertTrue(any("keywords under [scoring]" in what and "'c++('" in what for what in todos), todos)
 
     def test_no_workspace_and_no_search_toml_each_say_how_to_start(self):
         self.assertIn("No workspace", WORKSPACE_TODOS(store.EXAMPLE_ROOT, CFG)[0]["what"])
@@ -839,6 +888,18 @@ class CommandOutput(Base):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(["add", "--company", "Initech", "--title", "Firmware Lead"])
         self.assertRegex(out.getvalue(), r"^Job (\d+): Initech, Firmware Lead\. `pyrite folder \1` makes its application folder\.")
+
+    def test_add_says_when_the_posting_was_already_tracked(self):
+        add = ["add", "--company", "Initech", "--title", "Firmware Lead", "--location", "Madison, WI"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(add)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cli.main(add)
+        self.assertRegex(out.getvalue(), r"^Already tracked as job \d+: Initech, Firmware Lead, new\. Nothing was changed\.")
+        # The same title in another place is another opening.
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cli.main(add[:-1] + ["Remote - US"])
+        self.assertRegex(out.getvalue(), r"^Job \d+: Initech")
 
     def test_folder_starts_the_drafts_from_the_masters_and_never_overwrites_one(self):
         self.root = Path(self.tmp.name) / "mine"
