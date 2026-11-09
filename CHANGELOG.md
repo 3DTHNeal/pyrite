@@ -38,6 +38,14 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- The systemd sweep unit runs `pyrite sweep`, the same sweep as the dashboard's button, so a timed sweep and one you start can't overlap.
+- A place under `places` that ends in a US state matches the state written out or first: "Madison, WI" also matches "Madison, Wisconsin" and "US-WI-Madison". Periods and parentheses count as spaces, so "St. Louis" matches "St Louis".
+- A `**Deadline:**` line in a job's notes.md now wins over the date read from the posting.
+- The example search.toml ties Madison to Wisconsin, and its `agent`, `field` and `store` patterns no longer catch "Insurance Agent", "Field Robotics" or "Object Store".
+- Scoring version 2: the next pan rescores prospects nobody has acted on.
+- History offers **Put back this whole save** for a save that changed several files, and warns that putting back one of them leaves the others as they are.
+- The job panel works as a dialog: the page behind it can't be clicked or tabbed to while it's open, and closing it returns focus to the job you opened.
+- In `approved-terms.txt`, a line starting with `#` is a comment and approves nothing. The Facts tab says so, and adding one needs no code.
 - The assay blocks each capitalized name listed under "Do not use" in `facts.md`, so a name is written once and needs no pattern under `[guard] forbidden`. The error names where it's listed. A name your sources also state as fact isn't blocked this way, since every draft that states it would fail, and `pyrite doctor` and the Off limits section name it instead of asking for a pattern for every term.
 - `<!-- comments -->` in a fact bank or master approve nothing, and a comment under Contact isn't taken for the contact line.
 - `rescore` no longer drops a prospect you've acted on (a note, a next step, a pick, a fit verdict or a status of your own, such as one put back by **Undo pass**). It says how many it kept that way, and names the ones it dropped.
@@ -78,6 +86,68 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- Workday autofill no longer answers a question that only shares words with a sheet row. A question asked the other way round ("Are you under 18?"), one about someone else ("a relative who worked here"), one about experience with something the row doesn't name ("years with Kubernetes"), and a passport or travel-visa question are left for you.
+- Names and places with a full stop, such as "Mary St. John", "J. Robert Smith" and "St. Louis", are typed whole.
+- A ``` block left open on `workday-paste.md` no longer swallows the sections after it. It ends at the next heading, and the fill sheet says so at the top. If the roles still don't read back as the paste sheet has them, no sheet is made.
+- A company or name with "letter" in it, such as Letterbox Labs, no longer makes the resume the cover letter on the fill sheet.
+- Marking a job applied while a document is locked no longer leaves a half-made `sent/` that counts as the record, and `sent/` holds only the resume, the letter and their built documents, not the autofill log or other files.
+- A resume.md saved with a byte-order mark builds with its name as the name. A `#### Role` line without a place builds, and one with a fourth part fails with a sentence that says so. A failed build shows the end of what went wrong.
+- `* ` and `+ ` bullets build as bullets, and `<!-- notes -->` are left out of the documents.
+- `pyrite import-resume` reads text in Word content controls, text boxes, nested tables and the page footer, and names anything it still couldn't reach. It reads Pyrite's own PDFs back as the master they came from, and reads a `.txt` saved as UTF-16 or with a byte-order mark.
+- `pyrite status <id> new` or `shortlisted` is refused for a job you've applied to, since it put a sent application back in line for the daily run, which could rewrite its folder. `pyrite status <id> applied` reopens it, as the dashboard's Reopen does, and the run's queue, triage and tailoring skip any job you've sent, whatever its status says.
+- `pyrite fill` writes no fill sheet for a job you've applied to, or into a folder with a copy of what was sent, as the dashboard already didn't.
+- `--json` prints one JSON document: `pyrite job` puts the fenced posting in an `untrusted_posting` field, `pyrite discover` lists new job ids in `new_ids`, and `pyrite finish` writes the built file names to stderr.
+- `pyrite where` piped to a script on Windows writes the path in the console's code page, so Windows PowerShell 5.1 reads a folder name with an accent correctly.
+- A relative path in `.pyrite-home` is read from that file's folder, and lines starting with `#` there are notes. A relative `PYRITE_HOME` is read once, from where you started Pyrite, and the dashboard `pyrite open` starts uses the same workspace.
+- `pyrite init` says when `.pyrite-home` or `PYRITE_HOME` already names the folder, rather than telling you to put it there, and says so in a line, with nothing left half-made, when it's given a file or a folder it can't write.
+- A port outside 1–65535, a `queue --limit` below 1, a damaged or read-only `data/pyrite.db`, and a run number that isn't there each get a line instead of a traceback. `pyrite <command> --help` works before the workspace is made.
+- "Applied on" gives the day you applied where you are, not the UTC date.
+- Application folder names keep accented letters as plain ones: "Acmé" makes `acme`, not `acm`.
+- Text hidden in a Lever, Ashby or Workday posting stays hidden when the posting also shows a tag such as "&lt;script&gt;". Only Greenhouse's escaped descriptions are unescaped now.
+- More ways of hiding text in a posting are caught: transparent text, text the color of its own background, near-zero opacity or font size, `scale(0)`, and `<font color="white">`.
+- A job you added yourself and closed out no longer takes a new posting with the same title. The new opening comes in as its own job.
+- A `[watch.workday]` entry written like the other boards' (`globex = "Globex"`), or the reverse, fails only that company, with how to write it, in a pan, `pyrite sources` and `pyrite doctor`.
+- A track limited to `industries` now matches Greenhouse and Workday listings: their descriptions are fetched so the industry can be judged.
+- A pattern in search.toml that isn't valid stops a pan with one line naming it and its setting, instead of every board showing as failing. `pyrite doctor` names it too.
+- search.toml saved with a byte-order mark, as Windows PowerShell 5.1 writes it, now reads. One that isn't valid TOML, or has a number in quotes such as `min_score = "forty"`, gives one line naming the line or setting, in the commands, `pyrite doctor` and the dashboard.
+- Industry codes written without quotes (`naics = [333998]`) no longer break the Industries tab.
+- Remote roles in American towns named for foreign places (Dublin, CA; Paris, TX), and in New Mexico, are no longer dropped as foreign. A remote role that names a US place beside a foreign one is kept.
+- "Remote" limited to one state is recognized in more spellings: "REMOTE - CA", "Remote (CA)", "Remote, CA", "Remote - California", "CA - Remote".
+- `level_top` and `level_mid` patterns with alternatives, such as `principal|staff`, match whole words only, so "Principality" isn't a principal title.
+- Deadlines: "until the position is filled" and the posted or start date are no longer read as the deadline, and "11/30/2026", "30th of November 2026" and longer "will close at 11:59 PM … on Monday, November 16, 2026" are found.
+- The Settings tab refuses to save when [promote] holds settings it doesn't show, such as `points` on a skill or a `[promote.extra]` table, instead of dropping them.
+- Removing an item from a list in the Profile tab removes its comment too.
+- `pyrite add` without a link adds the same title in another place as another job, and says when a posting was already tracked.
+- A Gmail mail check that couldn't read your mail, or handed back a list that was cut off, no longer counts as a good check that found nothing. It shows as failed on the Sources tab, and the next check reads those days again.
+- Moving a job on, for instance marking it applied, while Claude is polishing or refreshing its draft puts back the draft that passed the assay, so a sent folder never keeps text the assay didn't check. The same goes for losing the Claude Code sign-in during a polish.
+- A long tailoring job no longer looks stopped while it's still writing, which could let a second Claude run or tailoring batch start beside it. The dashboard now shows each step, such as "writing draft 2" or "checking draft 1". A Refresh resume still building its documents after its time limit no longer looks stopped either.
+- Claude is no longer started again with almost no time left. The run stops and says time ran out.
+- When a Claude run runs out of time on Windows, everything it started is stopped, not just the `claude.cmd` wrapper.
+- An industry outlook whose answer Claude wrote in the wrong shape finishes as failed with a reason, instead of saying "researching" until it went stale.
+- Judging a posting now gets Pyrite's own possible-ghost and scam-sign markings, which its instructions already referred to.
+- A Claude run whose answer was no use is counted as failed itself, never another job's run that finished just after it.
+- Mail scam warnings now judge senders whose domain uses letters from another alphabet, and addresses like o'brien@, instead of dropping them. They recognize free mail in any country (ymail.com, yahoo.co.uk, gmx.at and more) and look-alike domains such as acme-careers.com for "Acme Robotics". A recruiter mentioning a passport, a driver's licence, a date of birth or a travel refund is no longer flagged on that alone.
+- An IMAP password with a character IMAP can't send, such as an accented letter, is reported on the Sources tab without repeating it. Any other unexpected error in a pan's mail check is recorded there too.
+- A save that would be refused anyway, for text that can't be saved or a form that's out of date, is refused before a code is sent. It no longer uses up a code and a notification. This covers the Profile tab, the Facts tab and Put back.
+- Saves on the Facts and Settings tabs now go into History on the Profile tab, so every earlier version can be put back. Before, only one `.previous` copy was kept beside the file, so a second save lost the original.
+- Notes, next steps and update notes that are too long are refused with a message rather than cut short without saying so, and the boxes stop typing at the limit. An impossible date such as 30 February is refused.
+- Got a reply, Interview, Offer and Rejected can only be logged on an application you've sent.
+- A malformed request, such as a huge job number or deeply nested data, gets a clear refusal instead of a server error.
+- A posting added by hand can't have a company, title or location over 200 characters. Very long company names and titles show at most three lines in tables and cards.
+- On a phone, long folder paths and notes wrap instead of running off the screen.
+- `pyrite serve --port` with a port out of range says so instead of showing a traceback.
+- The assay no longer counts the digits of your phone number or zip code as measured numbers, so "a team of 10" can't pass on the strength of a phone number with 010 in it.
+- The assay no longer takes praise for a denial: "Never failed an X audit", "not a single X finding", "...and I couldn't have done it alone", "...and I never regretted it" are claims of X.
+- A name under `forbidden` that's a plain word, such as `Bluebird`, is also blocked split by a space or a hyphen ("blue bird", "Sky-Lift") and as a plural. The example blocks "hives" as well as "hive".
+- A name alone on a line under "Do not use", such as "- Bluebird" or "- Osprey Systems (a customer)", is blocked by name. Before, the first word of every line there was taken for a label.
+- A role moved under a different employer, and a line written like a role heading in bold or plain text, are checked against your master resume.
+- The assay catches links with any ending (alexrivera.pro, alex@rivera.studio), and no longer blocks a domain-shaped name your sources write, such as an employer called Booking.com or a skill called Socket.IO.
+- Unfilled placeholders in more forms are caught: `___%`, `{company_name}`, `<Company Name>`, FIXME.
+- Multiples in digits (8x), "seven-figure", changes in percentage points and numbers like .83 are checked against the fact bank.
+- A letter's date line may be written any common way: 15 November 2026, Nov. 15, 2026, November 15th, 2026 or 2026-11-15.
+- A `.txt` paste-box copy of the resume or letter, or a new `.docx` or `.pdf`, changed or added after the assay passed shows as changed since checked.
+- Lines starting with `#` in `approved-terms.txt` approve nothing, as the Facts tab already treated them. Before, a term on such a line was approved without a code.
+- A draft that isn't saved as UTF-8 gets a clear error from the assay instead of a crash, and a very long sentence no longer takes minutes to check.
 - Refresh resume and Interview prep no longer depend on Claude Code honoring an edit rule for one file, which headless runs on one Windows machine refused. Claude gets no tools, hands the document back in its closing message, and Pyrite writes it. An answer with no document in it is asked for again, then fails with the reason on the dashboard instead of looking like a run that changed nothing.
 - The pre-push hook works in a `git worktree` that has no `.venv` of its own: it uses the main checkout's venv, then `python3` or `python` if one is 3.11 or newer, and skips the Microsoft Store's placeholder. With none of those it says how to point it at a Python with `git config pyrite.python`, instead of failing on the Store's message.
 - `pyrite check` on the folder of a job with a sent copy no longer says to rebuild documents from an older drafter. It says which drafter the sent documents came from, since what was sent is the record and rebuilding would only make the folder differ from it.
@@ -108,6 +178,19 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - A fill sheet made from a draft the assay hasn't passed, or whose pass no longer covers it, is still written, but it says at the top that its role text hasn't passed the assay and why, and so do the job's history and `pyrite fill`. `pyrite fill <folder>` says no pass was looked up.
 - Prospects says `1 posting`, not `1 postings`.
 - At about 1000px wide, Prospects' **Tailor** and **Pass** stay in view at the right edge instead of scrolling off it.
+
+### Security
+
+- `python -m pyrite.workday` checks the `[workday]` switch, that the job hasn't been sent, and the assay's pass, as `pyrite autofill` does. Autofill no longer presses a button that agrees to, accepts or sends anything, even one that also says "continue".
+- `check_public.py` catches more: phone numbers written with a leading +1, with or without dots, or as ten digits after "phone"; lowercase `c:\users` paths; private files in any case, plus database journals and backups and `.env` copies; GitHub fine-grained, OpenAI project, Google, Stripe live and Slack webhook keys, JWTs, and secrets written as settings; fastmail, comcast and pm.me addresses; annotated tags' messages and taggers; names split across a document's runs or written as entities, and every file inside a zip-based document; and UTF-16 text in image metadata. It reports a submodule instead of crashing, and allows only `.docx`, `.pdf` and `.png` under `example/applications/` and `docs/screenshots/`.
+- Pyrite refuses a workspace inside its own repository, where applications and the database could be committed to a public repository, and a folder that isn't a workspace, which used to get an empty database. `pyrite init` says how to make one.
+- PRIVACY.md now lists the Industries tab's downloads from the Bureau of Labor Statistics and its outlook research run, which sends the industry, your area and the employers you follow to Claude with web search.
+- The Gmail mail check denies every Gmail tool that sends, drafts, labels, trashes or marks mail, so even a workspace `.claude/settings.json` can't allow one. It is told only the companies you've applied to and those under `[inbox.domains]`, fenced as data, not every company a job board listed.
+- Drafting runs can never edit or write `profile/`, `data/`, `.claude/` or `CLAUDE.md`, whatever the workspace's settings allow. If anything in `profile/` changes while a draft is written, the draft is put back and the run stops.
+- Runs that can read files can't read a Workday fill sheet, autofill log, `workday-paste.md` or `public-denylist.txt` anywhere in the workspace, or the workspace's `.claude/` settings.
+- An industry outlook keeps a source only if its whole address is a page Claude opened or one its searches listed, not a site's home page, a shortened address, or a link mentioned inside some other page.
+- `allowed_hosts` under `[dashboard]` must be a list of names, matched exactly and ignoring case. A single string, which used to match any piece of a host name, now allows nothing, and `pyrite doctor` says so. A request with no Host header is refused.
+- An unexpected server error no longer sends its details to the page. They go to the window the dashboard runs in.
 
 ## [0.1.0] - 2026-11-09
 

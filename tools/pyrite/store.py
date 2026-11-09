@@ -17,13 +17,54 @@ MAY_BE_MISSING = "PYRITE_WORKSPACE_MAY_BE_MISSING"
 
 
 def _read_pointer(path: Path) -> str:
-    """The path in the pointer file, however it was saved. PowerShell's `>` writes UTF-16, and some editors add a byte-order mark."""
+    """The path in the pointer file, however it was saved. PowerShell's `>` writes UTF-16, and some editors add a byte-order mark.
+
+    Only the first line that names something counts, so a blank line or a `#` comment around it is a note to whoever
+    reads the file, not part of the path."""
     raw = path.read_bytes()
     encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
     try:
-        return raw.decode(encoding).strip().strip('"')
+        text = raw.decode(encoding)
     except UnicodeError:
         raise SystemExit(f"Can't read {path}. Save it as plain text holding one line: the path to your workspace.") from None
+    for line in text.splitlines():
+        line = line.strip().strip('"').strip()
+        if line and not line.startswith("#"):
+            return line
+    return ""
+
+
+def _resolve(chosen: str, base: Path) -> Path:
+    """A workspace path made whole. A relative one is read from `base`, so the same words name the same folder from
+    wherever Pyrite was started: the pointer file's own folder for .pyrite-home, the starting folder for PYRITE_HOME."""
+    return (base / Path(_windows_path(chosen)).expanduser()).resolve()
+
+
+def pointer_target() -> Path | None:
+    """The workspace .pyrite-home names, or None when there's no such file or it names nothing."""
+    if not HOME_POINTER.exists():
+        return None
+    chosen = _read_pointer(HOME_POINTER)
+    return _resolve(chosen, HOME_POINTER.parent) if chosen else None
+
+
+def _not_a_workspace(workspace: Path, origin: str) -> str:
+    """Why a folder can't be the workspace, with what to do about it, or "" when it can be."""
+    said = f"That path comes from {origin}."
+    make = f"make a workspace with `pyrite init {workspace} --name \"Your Name\"`, with your own name."
+    if not workspace.is_dir():
+        return f"The Pyrite workspace doesn't exist: {workspace}\n{said} Fix the path, or {make}"
+    if workspace == CODE_ROOT or CODE_ROOT in workspace.parents:
+        # Its applications and database would sit where `git add` picks them up, in a repository meant to be public.
+        return (f"The Pyrite workspace {workspace} is inside the code repository, where your applications and database "
+                f"could be committed and published.\n{said} Move the workspace outside {CODE_ROOT} and point that at it, "
+                "or make a new one beside the repository with `pyrite init ../my-job-search --name \"Your Name\"`.")
+    if not (workspace / "profile" / "search.toml").is_file() and not (workspace / "data" / "pyrite.db").is_file():
+        # Used as it is, the first command would start an empty database there, and that looks exactly like a lost one.
+        fix = ("Copy example/profile/search.toml into its profile/ to start." if (workspace / "profile").is_dir()
+               else f"Fix the path, or {make}")
+        return f"{workspace} isn't a Pyrite workspace: it has no profile/search.toml and no data/pyrite.db.\n{said} {fix}"
+    return ""
 
 
 def find_workspace() -> Path:
@@ -31,19 +72,26 @@ def find_workspace() -> Path:
 
     The code and the data are separate on purpose, so that nothing personal can be
     committed from this repository. A workspace that was named but can't be found
-    stops here, because an empty database would look exactly like a lost one.
+    stops here, because an empty database would look exactly like a lost one. So does
+    a folder that isn't a workspace, and one inside this repository.
     """
-    chosen, origin = os.environ.get("PYRITE_HOME", "").strip(), "PYRITE_HOME"
+    chosen, origin, base = os.environ.get("PYRITE_HOME", "").strip(), "PYRITE_HOME", Path.cwd()
     if not chosen and HOME_POINTER.exists():
-        chosen, origin = _read_pointer(HOME_POINTER), str(HOME_POINTER)
+        chosen, origin, base = _read_pointer(HOME_POINTER), str(HOME_POINTER), HOME_POINTER.parent
     if not chosen:
         return EXAMPLE_ROOT
-    workspace = Path(_windows_path(chosen)).expanduser().resolve()
-    if not workspace.is_dir():
+    workspace = _resolve(chosen, base)
+    if workspace == EXAMPLE_ROOT:
+        return workspace  # The demo, which the entry point points here on purpose.
+    problem = _not_a_workspace(workspace, origin)
+    if problem:
         if os.environ.get(MAY_BE_MISSING):
             return EXAMPLE_ROOT
-        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}\nThat path comes from {origin}. Fix the path, or make a "
-                         f"workspace there with `pyrite init {workspace} --name \"Your Name\"`, with your own name.")
+        raise SystemExit(problem)
+    if origin == "PYRITE_HOME":
+        # Made whole once, here, for every process this one starts: the dashboard's workers start in the code folder,
+        # where a relative path would name some other folder.
+        os.environ["PYRITE_HOME"] = str(workspace)
     return workspace
 
 
@@ -217,23 +265,106 @@ def today_plus(days: int) -> str:
     return (datetime.now().astimezone() + timedelta(days=days)).date().isoformat()
 
 
+class ConfigError(ValueError):
+    """search.toml can't be used as it is. The message is one line that names the setting or line to fix."""
+
+
+# The settings that must be numbers, by table. Written as text, such as min_score = "forty", each would otherwise fail
+# far from here, as a TypeError in the middle of a pan or a rescore.
+NUMBERS = {
+    "run": ("triage_per_day", "tailor_per_day", "min_score", "tailor_min_score", "follow_up_days", "quiet_days",
+            "ghost_after_down_days", "fix_attempts"),
+    "freshness": ("new_days", "older_points", "repost_penalty", "redate_penalty", "max_penalty", "redate_tolerance_days",
+                  "came_back_after_days", "ghost_age_days", "ghost_repost_count", "ghost_age_if_reposted"),
+    "promote": ("city_points", "industry_points", "mentions_needed"),
+}
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def config_problems(cfg: dict) -> list[str]:
+    """Settings of the wrong kind, each as a sentence naming it: a number written as text, or a [scoring] list whose
+    entries aren't the [pattern, points] pairs it needs."""
+    problems = []
+    for table, keys in NUMBERS.items():
+        section = cfg.get(table)
+        if not isinstance(section, dict):
+            continue
+        for key in keys:
+            if key in section and not _is_number(section[key]):
+                problems.append(f"{key} under [{table}] is {json.dumps(section[key])}, which needs to be a number, written without quotes.")
+    ages = (cfg.get("freshness") or {}).get("age_points", [])
+    if not isinstance(ages, list) or not all(isinstance(row, list) and len(row) == 2 and all(map(_is_number, row)) for row in ages):
+        problems.append("age_points under [freshness] needs pairs of numbers, such as [[3, 30], [7, 20]].")
+    scoring = cfg.get("scoring") or {}
+    for key, shape, size in (("keywords", "['pattern', points]", 2), ("flags", "['Label', 'pattern', points]", 3)):
+        for entry in scoring.get(key) or []:
+            if not (isinstance(entry, list) and len(entry) == size and all(isinstance(part, str) for part in entry[:-1])
+                    and _is_number(entry[-1])):
+                problems.append(f"{key} under [scoring] has {json.dumps(entry)}, where each entry needs to be {shape}.")
+                break
+    return problems
+
+
+def _relative(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def read_config(path: Path) -> dict:
+    """A search.toml, read. A byte-order mark is skipped, since Windows PowerShell 5.1 writes one. A file that isn't
+    valid TOML raises ConfigError naming the line, such as "profile/search.toml line 28: Expected '=' after a key"."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        return tomllib.loads(text)
+    except UnicodeDecodeError as err:
+        raise ConfigError(f"{_relative(path)} isn't saved as UTF-8 ({err.reason}). Save it as UTF-8 and try again.") from None
+    except tomllib.TOMLDecodeError as err:
+        found = re.fullmatch(r"(.*) \(at line (\d+), column \d+\)", str(err), re.S)
+        where, why = (f"{_relative(path)} line {found[2]}", found[1]) if found else (_relative(path), str(err))
+        raise ConfigError(f"{where}: {why}. Fix that line and try again.") from None
+
+
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
-        raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/ into your workspace to start, then run `pyrite doctor`.")
-    with CONFIG_PATH.open("rb") as handle:
-        return tomllib.load(handle)
+        raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/search.toml there, or make a new workspace with "
+                         "`pyrite init ../my-job-search --name \"Your Name\"`, then run `pyrite doctor`.")
+    cfg = read_config(CONFIG_PATH)
+    problems = config_problems(cfg)
+    if problems:
+        raise ConfigError(f"{_relative(CONFIG_PATH)}: {problems[0]}")
+    return cfg
+
+
+class Unusable(sqlite3.DatabaseError):
+    """A database file Pyrite can't open or can't write. `str()` says which, and what to do, in plain words."""
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
     path = path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not os.access(path, os.W_OK):
+        # It opens, and the first change fails halfway through a command. Every run writes, so say so before any starts.
+        raise Unusable(f"{path} is read-only, and Pyrite writes to its database on every run. Make it writable again. "
+                       "Nothing was changed.")
     conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    _stamp_scoring(conn)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        _stamp_scoring(conn)
+    except sqlite3.DatabaseError as err:
+        conn.close()
+        if "locked" in str(err):
+            raise  # Busy rather than broken, and the caller decides whether to wait.
+        raise Unusable(f"Pyrite can't use its database, {path}: {err}. If the file is damaged, put back your latest backup "
+                       "of it. Nothing was changed.") from err
     return conn
 
 
@@ -321,12 +452,37 @@ def shorten(text: str, limit: int) -> str:
 
 SENT_FOLDER = "sent"
 SENT_SUFFIXES = (".md", ".docx", ".pdf", ".txt")
+SENT_SOURCES = ("resume.md", "cover-letter.md")
+# The documents the build makes, `<Name>_Resume_<Company>` and `<Name>_Cover_Letter_<Company>`. Only these and the two
+# sources are what was sent: the autofill log, a posting saved as text or any other file in the folder isn't.
+SENT_BUILD = re.compile(r"_(?:Resume|Cover_Letter)(?:_|$)")
 
 
 def sent_copies(folder: Path) -> list[Path]:
     """The documents kept as the record of what was sent, if a copy was made."""
     sent = folder / SENT_FOLDER
     return sorted(p for p in sent.iterdir() if p.is_file()) if sent.is_dir() else []
+
+
+def is_sent_document(path: Path) -> bool:
+    """Whether a file in an application folder is one of the documents that go to the employer."""
+    if path.name in SENT_SOURCES:
+        return True
+    return path.suffix in SENT_SUFFIXES and path.suffix != ".md" and bool(SENT_BUILD.search(path.stem))
+
+
+def _remove_folder(folder: Path) -> None:
+    """Delete a folder of read-only copies, which a plain rmtree can't do on Windows."""
+    import shutil
+    import stat
+
+    for path in folder.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            os.chmod(path, stat.S_IWRITE)
+            path.unlink()
+    folder.rmdir()
 
 
 def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]:
@@ -336,6 +492,11 @@ def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]
     first time a job is marked applied. A copy that already exists is left alone: the first application
     is the one that was sent, and a second application is a new job. `source` names another folder to
     copy from, for applications made before this existed. The fictional example is never written to.
+
+    The copy is made in a folder of its own and put in place only once every file is in it, so a copy that
+    fails part-way, as one does when Word holds a lock on a document, leaves no `sent/` to pass for the record.
+    A `sent/` with no fingerprints on record is such a leftover, or a copy made by hand: its files are kept as they
+    are, and the documents it lacks are added.
     """
     import hashlib
     import shutil
@@ -346,22 +507,46 @@ def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]
         return {}
     folder = ROOT / job["app_folder"]
     sent = folder / SENT_FOLDER
-    if sent_copies(folder):
-        return json.loads(job["sent_files"] or "{}")
+    recorded = json.loads(job["sent_files"] or "{}")
+    if recorded and sent_copies(folder):
+        return recorded
     source = source or folder
     if not source.is_dir():
         return {}
-    wanted = [p for p in sorted(source.iterdir()) if p.is_file() and p.suffix in SENT_SUFFIXES
-              and (p.suffix != ".md" or p.name in ("resume.md", "cover-letter.md"))]
+    wanted = [p for p in sorted(source.iterdir()) if p.is_file() and is_sent_document(p)]
     if not wanted:
         return {}
-    sent.mkdir(exist_ok=True)
+    staging, aside = folder / f".{SENT_FOLDER}-copying", folder / f".{SENT_FOLDER}-replaced"
+    if staging.is_dir():
+        _remove_folder(staging)
+    if aside.is_dir():
+        # Set aside by a run that stopped before the new copy took its place, so it's still the only copy.
+        if sent.exists():
+            _remove_folder(aside)
+        else:
+            os.replace(aside, sent)
+    staging.mkdir()
     fingerprints = {}
-    for path in wanted:
-        copy = sent / path.name
-        shutil.copyfile(path, copy)
-        os.chmod(copy, stat.S_IREAD)
-        fingerprints[path.name] = hashlib.sha256(copy.read_bytes()).hexdigest()
+    try:
+        for path in wanted:
+            earlier = sent / path.name
+            copy = staging / path.name
+            # A copy made before is what was sent, even if the folder's file has changed since.
+            shutil.copyfile(earlier if earlier.is_file() else path, copy)
+            fingerprints[path.name] = hashlib.sha256(copy.read_bytes()).hexdigest()
+        for earlier in sent_copies(folder):
+            if earlier.name not in fingerprints:
+                shutil.copyfile(earlier, staging / earlier.name)  # Not one of the documents, but not this code's to delete.
+    except BaseException:
+        _remove_folder(staging)
+        raise
+    if sent.exists():
+        os.replace(sent, aside)
+    os.replace(staging, sent)
+    if aside.exists():
+        _remove_folder(aside)
+    for path in sent_copies(folder):
+        os.chmod(path, stat.S_IREAD)
     conn.execute("UPDATE jobs SET sent_files = ? WHERE id = ?", (json.dumps(fingerprints), job_id))
     log_event(conn, job_id, "sent_copy", f"Kept a read-only copy of {len(fingerprints)} sent files in {SENT_FOLDER}/")
     return fingerprints

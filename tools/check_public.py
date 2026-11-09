@@ -19,6 +19,7 @@ layer runs there. Exit status is 1 if anything is found.
 """
 import argparse
 import functools
+import html
 import io
 import re
 import shutil
@@ -36,31 +37,59 @@ if sys.version_info < (3, 11):  # noqa: UP036
 
 REPO = Path(__file__).resolve().parents[1]
 
-# Private files belong in the workspace. Anything under example/ is fictional and allowed.
+# Private files belong in the workspace. Anything under example/ is fictional and allowed. Matched in any case, since
+# Windows and macOS treat Profile/ and profile/ as one folder, and including a database's journal and backups, and any
+# .env file but an example one.
 FORBIDDEN_PATH = re.compile(
-    r"^(profile|applications|archive|data)/|(^|/)\.pyrite-home$|\.db(-shm|-wal)?$|(^|/)imap\.env$|(^|/)\.env$"
+    r"^(profile|applications|archive|data)/|(^|/)\.pyrite-home$"
+    r"|\.(?:db|sqlite3?)(?:-shm|-wal|-journal)?(?:\.bak|\.old|~)?$"
+    r"|(^|/)imap\.env(?:\.(?!example$)[^/]+)?$|(^|/)\.env(?:\.(?!example$|sample$|template$)[^/]+)?$",
+    re.I,
 )
-# Binary files can't be read reliably, so only these places may hold them.
-BINARY_SUFFIXES = {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".xlsx", ".pptx", ".db", ".sqlite"}
+# Binary files can't be read reliably, so only these places may hold them, and only the kinds read below: a .docx's
+# text, a PDF's pages and a PNG's metadata. A spreadsheet or an archive there would pass with its insides unread.
+BINARY_SUFFIXES = {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".xlsx", ".pptx", ".db", ".sqlite", ".sqlite3"}
 BINARY_ALLOWED = re.compile(r"^(example/applications/|docs/screenshots/)")
+BINARY_KINDS = {".docx", ".pdf", ".png"}
+# A zip's members are read up to this size each. A larger one, or one that won't open, is a finding, not a pass.
+MEMBER_LIMIT = 50 * 1024 * 1024
+UNREADABLE_ARCHIVE = "archive or document whose contents can't be read here, so nothing vouches for them"
 
 # North American numbers, written with dashes, dots or spaces, and anything written with a country code.
 PHONE = re.compile(r"(?<![\d.])(?:\(\d{3}\)\s?|\b\d{3}[-. ])\d{3}[-. ]\d{4}\b")
 INTERNATIONAL_PHONE = re.compile(r"(?<![\w+])\+\d[\d ().-]{7,18}\d\b")
+# Ten digits run together are a phone number only where something says so: a ten-digit order or build number isn't.
+BARE_PHONE = re.compile(r"\b(?:phone|tel|telephone|mobile|cell|call|text|sms|fax|whatsapp)\b[^\d\n]{0,25}(?<![\d.+-])(1?\d{10})(?!\d)",
+                        re.I)
 UNREADABLE_PDF = "PDF whose pages can't be read here, so nothing vouches for them. Install poppler's pdftotext, or pypdf"
 PDF_UTF16_STRING = re.compile(rb"\(\xfe\xff((?:[^()\\]|\\.)*)\)")
 PDF_UTF16_HEX = re.compile(rb"<\s*FEFF([0-9A-Fa-f\s]+)>")
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})")
-PERSONAL_EMAIL_DOMAIN = re.compile(r"^(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|proton|protonmail|aol)\.", re.I)
+PERSONAL_EMAIL_DOMAIN = re.compile(
+    r"^(gmail|googlemail|outlook|hotmail|live|yahoo|icloud|me|proton|protonmail|pm|aol|fastmail|comcast)\.", re.I)
 TAILNET = re.compile(r"\b[a-z0-9-]+\.(tail[0-9a-f]{4,}|[a-z0-9-]+)\.ts\.net\b", re.I)
 SAFE_TAILNET = re.compile(r"example-tailnet\.ts\.net$", re.I)
 CGNAT_IP = re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b")
-USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]+Users[\\/]+|/home/|/Users/)([A-Za-z0-9._-]+)")
+# Windows doesn't care how "Users" is written, so neither does this. The Unix forms keep their case, since a web
+# address such as api.example.com/users/name isn't a home folder.
+USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]+(?i:users)[\\/]+|/home/|/Users/)([A-Za-z0-9._-]+)")
 SAFE_USER = {"you", "me", "user", "username", "name", "example", "runner", "alex", "public"}
 SECRET = re.compile(
-    r"sk-ant-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}"
+    r"sk-ant-[A-Za-z0-9_-]{8,}|\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9]{40,}"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}"
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}|hooks\.slack\.com/services/[A-Za-z0-9_/-]{10,}"
+    r"|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|\b[rs]k_live_[0-9A-Za-z]{16,}"
+    r"|\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"  # a JSON web token
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
 )
+# A secret written as a setting: `password = "..."`, `IMAP_TOKEN: ...`, `aws_secret_access_key=...`. The value has to
+# look like one, with letters and digits, so code that passes a variable along (`token = cfg.token`) isn't one.
+ASSIGNED_SECRET = re.compile(
+    r"[\w.-]*(?:password|passwd|passphrase|secret|token|api_?key|access_?key)[\w.-]*[\"']?\s*[=:]\s*"
+    r"(?P<quote>[\"']?)(?P<value>[^\s\"'`<>{}()\[\],;]{8,})(?P=quote)", re.I)
+PLACEHOLDER = re.compile(r"(?:your|my|the|some|example|dummy|fake|placeholder|changeme|redacted|x+|\*+)\b|https?:", re.I)
+# A Gmail app password as Google shows it: four groups of four letters. The start of the alphabet is the usual stand-in.
+APP_PASSWORD = re.compile(r"password\w*[\"']?\s*[=:]\s*[\"']?(?!abcd efgh ijkl mnop)[a-z]{4} [a-z]{4} [a-z]{4} [a-z]{4}\b", re.I)
 
 
 def builtin_findings(text: str) -> list[str]:
@@ -73,9 +102,17 @@ def builtin_findings(text: str) -> list[str]:
             found.append(f"phone number {match.group(0)}")
     for match in INTERNATIONAL_PHONE.finditer(text):
         digits = re.sub(r"\D", "", match.group(0))
-        north_american = len(digits) == 11 and digits.startswith("1")  # Already judged above.
-        if 9 <= len(digits) <= 15 and not north_american:
+        if len(digits) == 11 and digits.startswith("1"):
+            # A North American number with its country code. Written "+1 312-867-5309", it was judged above; written
+            # "+13128675309" or "+1.312.867.5309", it wasn't, and the same 555 rule settles it.
+            if not PHONE.search(match.group(0)) and "555" not in (digits[1:4], digits[4:7]):
+                found.append(f"phone number {match.group(0)}")
+        elif 9 <= len(digits) <= 15:
             found.append(f"phone number {match.group(0)}")
+    for match in BARE_PHONE.finditer(text):
+        digits = match.group(1)[-10:]
+        if "555" not in (digits[:3], digits[3:6]):
+            found.append(f"phone number {match.group(1)}")
     for match in EMAIL.finditer(text):
         domain = match.group(1)
         if PERSONAL_EMAIL_DOMAIN.match(domain):
@@ -88,6 +125,12 @@ def builtin_findings(text: str) -> list[str]:
         if match.group(1).lower() not in SAFE_USER and not match.group(1).startswith("<"):
             found.append(f"home folder path {match.group(0)}")
     found += [f"credential {m.group(0)[:12]}..." for m in SECRET.finditer(text)]
+    for match in ASSIGNED_SECRET.finditer(text):
+        # Judged as it reads, so the digits of an escape such as ä in a test's made-up password don't count.
+        value = re.sub(r"\\(?:u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|.)", "", match.group("value"))
+        if re.search(r"[A-Za-z]", value) and re.search(r"\d", value) and not PLACEHOLDER.match(value):
+            found.append(f"credential {match.group(0)[:20]}...")
+    found += [f"credential {m.group(0)[:20]}..." for m in APP_PASSWORD.finditer(text)]
     return found
 
 
@@ -114,7 +157,9 @@ def png_metadata(blob: bytes) -> str:
         length = int.from_bytes(blob[position:position + 4], "big")
         kind = blob[position + 4:position + 8]
         if kind in (b"tEXt", b"iTXt", b"eXIf"):
-            parts.append(blob[position + 8:position + 8 + length].decode("latin-1"))
+            data = blob[position + 8:position + 8 + length]
+            # EXIF's Windows fields, such as XPAuthor, hold UTF-16 text, which reads as letters and NULs byte by byte.
+            parts += [data.decode("latin-1"), utf16_text(data)]
         elif kind == b"zTXt":
             try:
                 compressed = blob[position + 8:position + 8 + length].split(b"\0", 1)[1][1:]
@@ -184,6 +229,59 @@ def looks_binary(blob: bytes) -> bool:
     return b"\0" in blob[:8000]
 
 
+def utf16_text(data: bytes) -> str:
+    """Runs of UTF-16 text in either byte order, at any offset: a name in EXIF or a Windows field."""
+    runs = [m.group(0).decode("utf-16-le") for m in re.finditer(rb"(?:[\x20-\x7e]\x00){3,}", data)]
+    runs += [m.group(0).decode("utf-16-be") for m in re.finditer(rb"(?:\x00[\x20-\x7e]){3,}", data)]
+    return "\n".join(runs)
+
+
+def xml_text(xml: str) -> str:
+    """The words in a document's XML as a reader sees them.
+
+    Word splits a paragraph into runs wherever the formatting changes, even inside a word, and writes characters as
+    entities such as `&#105;`. So the text of each paragraph is joined up with its entities read, and the whole part
+    is given again with a space for every tag, so words in neighboring cells aren't run together either.
+    """
+    paragraphs = re.split(r"</(?:w:p|a:p|text:p|text:h|si|row)>", xml)
+    joined = [html.unescape(re.sub(r"<[^>]+>", "", paragraph)) for paragraph in paragraphs]
+    return "\n".join(joined) + "\n" + html.unescape(re.sub(r"<[^>]+>", " ", xml))
+
+
+def archive_text(blob: bytes, depth: int = 0) -> tuple[list[str], list[str]]:
+    """The text of every member of a zip, a .docx, .xlsx or .pptx among them, and of zips inside it. Also what
+    couldn't be read, since a member nobody read is one nobody checked."""
+    parts: list[str] = []
+    problems: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                if info.file_size > MEMBER_LIMIT:
+                    problems.append(f"{UNREADABLE_ARCHIVE}: {info.filename} is too large to read")
+                    continue
+                data = archive.read(info)
+                text = data.decode("utf-8", "replace")
+                parts.append(text)
+                if data.startswith(b"PK\x03\x04"):
+                    if depth < 3:
+                        inner, trouble = archive_text(data, depth + 1)
+                        parts += inner
+                        problems += trouble
+                    else:
+                        problems.append(f"{UNREADABLE_ARCHIVE}: {info.filename} is nested too deep to read")
+                elif text.lstrip().startswith("<"):
+                    parts.append(xml_text(text))
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, RuntimeError, OSError, EOFError, zlib.error) as err:
+        problems.append(f"{UNREADABLE_ARCHIVE} ({type(err).__name__})")
+    return parts, problems
+
+
+def is_archive(path: str, blob: bytes) -> bool:
+    return blob.startswith(b"PK\x03\x04") or Path(path).suffix.lower() in (".docx", ".xlsx", ".pptx", ".zip")
+
+
 def readable_text(path: str, blob: bytes) -> str:
     """The text of a blob, including what's inside documents, since a .docx is a zip and a PDF deflates its streams.
 
@@ -193,13 +291,8 @@ def readable_text(path: str, blob: bytes) -> str:
     if suffix == ".png":
         return png_metadata(blob)
     parts = [blob.decode("utf-8", "replace")]
-    if suffix == ".docx":
-        try:
-            with zipfile.ZipFile(io.BytesIO(blob)) as archive:
-                for name in archive.namelist():
-                    parts.append(archive.read(name).decode("utf-8", "replace"))
-        except zipfile.BadZipFile:
-            parts.append("unreadable")
+    if is_archive(path, blob):
+        parts += archive_text(blob)[0]
     elif suffix == ".pdf":
         for stream in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", blob, re.S):
             try:
@@ -216,8 +309,13 @@ def scan_blob(path: str, blob: bytes, denylist: list[re.Pattern]) -> list[str]:
         found.append("private path")
     suffix = Path(path).suffix.lower()
     # By content as well as by name, so a database or an archive under some other extension doesn't pass as text.
-    if (suffix in BINARY_SUFFIXES or looks_binary(blob)) and not BINARY_ALLOWED.search(path):
+    binary = suffix in BINARY_SUFFIXES or looks_binary(blob) or blob.startswith(b"PK\x03\x04")
+    if binary and not BINARY_ALLOWED.search(path):
         found.append("binary file outside example/ and docs/screenshots/")
+    elif binary and suffix not in BINARY_KINDS:
+        found.append(f"binary file of a kind this doesn't read ({suffix or 'no extension'}): only .docx, .pdf and .png may go there")
+    if is_archive(path, blob):
+        found += archive_text(blob)[1]
     text = readable_text(path, blob)
     if suffix == ".pdf":
         pages = pdf_text(blob)
@@ -246,37 +344,67 @@ def _git(*args: str, data: bytes | None = None) -> bytes:
     return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, check=True, input=data).stdout
 
 
-def tree_entries() -> dict[str, set[str]]:
+GITLINK = "160000"
+SUBMODULE = "submodule, whose files are in another repository this doesn't read, so nothing vouches for them"
+
+
+def tree_entries(gitlinks: set[str] | None = None) -> dict[str, set[str]]:
     """Everything ever committed, plus what's staged. Maps each blob id to every path it has had.
 
     Every path, because the same content can sit at an allowed path in one commit and a private one in another.
+    A submodule is a commit id, not a blob, so its path goes into `gitlinks` instead.
     """
     seen: dict[str, set[str]] = {}
+    links = gitlinks if gitlinks is not None else set()
     has_commits = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode == 0
     commits = _git("rev-list", "--all").decode().split() if has_commits else []
     for commit in commits:
         for line in _git("ls-tree", "-r", "-z", commit).decode("utf-8", "replace").split("\0"):
             if line:
                 meta, path = line.split("\t", 1)
-                seen.setdefault(meta.split()[2], set()).add(path)
+                _mode, kind, object_id = meta.split()
+                if kind == "blob":
+                    seen.setdefault(object_id, set()).add(path)
+                else:
+                    links.add(path)
     for line in _git("ls-files", "-s", "-z").decode("utf-8", "replace").split("\0"):
         if line:
             meta, path = line.split("\t", 1)
-            seen.setdefault(meta.split()[1], set()).add(path)
+            mode, object_id = meta.split()[:2]
+            if mode == GITLINK:
+                links.add(path)
+            else:
+                seen.setdefault(object_id, set()).add(path)
     return seen
+
+
+def tag_messages() -> list[str]:
+    """Each annotated tag's text: its tagger's name and address, and its message."""
+    found = []
+    for line in _git("for-each-ref", "--format=%(objecttype) %(objectname)", "refs/tags").decode("utf-8", "replace").splitlines():
+        kind, _, object_id = line.partition(" ")
+        if kind == "tag":
+            found.append(_git("cat-file", "tag", object_id).decode("utf-8", "replace"))
+    return found
 
 
 def scan_repository(denylist: list[re.Pattern]) -> list[str]:
     found: set[str] = set()
-    for blob_id, paths in tree_entries().items():
+    gitlinks: set[str] = set()
+    for blob_id, paths in tree_entries(gitlinks).items():
         blob = _git("cat-file", "blob", blob_id)
         for path in paths:
             found |= {f"{path}: {finding}" for finding in scan_blob(path, blob, denylist)}
+    found |= {f"{path}: {SUBMODULE}" for path in gitlinks}
     problems = sorted(found)
-    # Commit messages, identities and the names of branches and tags are published too.
+    # Commit messages, identities and the names of branches and tags are published too, and so are annotated tags.
     if subprocess.run(["git", "-C", str(REPO), "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode == 0:
         log = _git("log", "--all", "--format=%h %an <%ae> %cn <%ce>%n%B").decode("utf-8", "replace")
         problems += [f"commit log: {finding}" for finding in builtin_findings(log) + denylist_findings(log, denylist)]
+    for text in tag_messages():
+        name = re.search(r"^tag (.*)$", text, re.M)
+        problems += [f"tag {name.group(1) if name else '?'}: {finding}"
+                     for finding in builtin_findings(text) + denylist_findings(text, denylist)]
     refs = _git("for-each-ref", "--format=%(refname)").decode("utf-8", "replace").split()
     problems += ref_findings(refs, denylist)
     return problems

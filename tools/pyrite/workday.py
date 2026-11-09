@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -55,9 +56,8 @@ def enabled() -> bool:
     The dashboard's Settings tab edits only [promote], so a page can't turn this on.
     """
     try:
-        with open(store.ROOT / "profile" / "search.toml", "rb") as handle:
-            return tomllib.load(handle).get("workday", {}).get("autofill") is True
-    except (OSError, tomllib.TOMLDecodeError):
+        return store.read_config(store.ROOT / "profile" / "search.toml").get("workday", {}).get("autofill") is True
+    except (OSError, store.ConfigError):
         return False
 
 
@@ -108,10 +108,15 @@ def ask(prompt: str) -> str:
     return input(prompt)
 
 
+# Words on a button that commit the candidate to something: sending the application, or agreeing to terms. A button
+# that also says "continue" is still theirs to press: "Agree and continue" accepts the terms on their behalf.
+COMMITS = re.compile(r"submit|apply|send|agree|accept|consent|certif|acknowledg|\bsign\b|authori[sz]", re.I)
+
+
 def is_safe_button(text: str) -> bool:
-    """Only a button that saves or continues may be pressed at the foot of a page. Submit is the candidate's."""
+    """Only a button that saves or continues may be pressed at the foot of a page. Submit, and agreeing, are the candidate's."""
     words = (text or "").lower()
-    return bool(words) and "submit" not in words and "apply" not in words and ("save" in words or "continue" in words or "next" in words)
+    return bool(words) and not COMMITS.search(words) and ("save" in words or "continue" in words or "next" in words)
 
 
 def short(value: str) -> str:
@@ -150,41 +155,88 @@ def degree_candidates(degree: str) -> list[str]:
 # sheet row it is. Sponsorship comes before work authorization, since tenants ask it as "require support to obtain
 # authorization to work", which also reads as the authorization question.
 INTENTS = (
-    # "Require relocation assistance to work there" is a different question, and is left to the word match.
-    (re.compile(r"sponsor|\bvisa\b|immigration"
+    # "Require relocation assistance to work there" is a different question, and is left to the word match. A visa
+    # counts only when it's for work: "a valid passport or visa for international travel" asks about travel.
+    (re.compile(r"sponsor|immigration|\bvisa\b.{0,40}\b(?:work|employ)|\b(?:work|employ)\w*\b.{0,40}\bvisa\b"
                 r"|^(?!.*relocat).*(?:require|need)\w*\b.{0,60}\b(?:support|assistance|help)\b.{0,60}\b(?:authori[sz]|work|employment|status)", re.I | re.S),
      re.compile(r"sponsor", re.I)),
     (re.compile(r"(?:authori[sz]ed|eligible|permitted|entitled|legally able)\b.{0,20}\bto work|right to work|work authori[sz]ation", re.I),
      re.compile(r"authori[sz]ed to work|eligible to work|right to work", re.I)),
     (re.compile(r"non.?compete|non.?solicit|restrictive covenant", re.I), re.compile(r"non.?compete|non.?solicit", re.I)),
     (re.compile(r"(?:willing|open|able|prepared)\b.{0,30}\brelocat", re.I), re.compile(r"relocat", re.I)),
+    (re.compile(r"\b(?:18|eighteen)\b.{0,20}\b(?:years?|older|age)\b|\bat least (?:18|eighteen)\b|legal age|age of majority", re.I),
+     re.compile(r"\b(?:18|eighteen)\b|legal age", re.I)),
 )
+# A question that asks the opposite of the sheet's row: "Are you under 18?" against "Are you 18 or older". The words
+# match, so only the negation tells them apart, and a wrong Yes there is worse than leaving the question to the candidate.
+NEGATION = re.compile(r"\bnot\b|n't\b|\bnever\b|\bwithout\b|\bcannot\b|\bneither\b|\bnor\b|\byounger\b|\b(?:less|fewer) than\b"
+                      r"|\bunder\b(?=\s+(?:the\s+)?(?:age|\d))", re.I)
+# A question about someone else: "Do you have a relative who previously worked here?" isn't "Have you previously worked here?"
+SOMEONE_ELSE = {"relative", "family", "household", "spouse", "partner", "friend", "anyone", "someone", "member", "parent",
+                "child", "children", "sibling", "related", "relationship"}
+# "Years of experience with Kubernetes" is about Kubernetes, which a sheet row on relevant experience doesn't answer.
+EXPERIENCE_WITH = re.compile(r"\bexperience\s+(?:with|in|using|on|of|working with)\s+(?P<what>[^?.;:()]+)", re.I)
+# How much of each side's words the other must cover. The sheet's row is short, so most of it must be asked; the
+# page's question carries filler, so a little of it may go unmatched, but not a word that changes what it asks.
+SHEET_COVERED, PAGE_COVERED = 0.6, 0.75
+
+
+def _tokens(text: str) -> set[str]:
+    return {_stem(w) for w in re.findall(r"[a-z0-9']+", text.lower())}
+
+
+def _words(text: str) -> set[str]:
+    return {_stem(w) for w in re.findall(r"[a-z0-9']+", text.lower()) if w not in STOP}
+
+
+def _opposed(label: str, question: str) -> bool:
+    """Whether one asks the opposite of the other: a negation only one has, or "unwilling" against "willing"."""
+    if bool(NEGATION.search(label)) != bool(NEGATION.search(question)):
+        return True
+    asked, ours = _tokens(label), _tokens(question)
+    for these, those in ((asked, ours), (ours, asked)):
+        for word in these:
+            for prefix in ("un", "in", "non", "dis", "il", "ir"):
+                if word.startswith(prefix) and len(word) > len(prefix) + 3 and word[len(prefix):] in those:
+                    return True
+    return False
 
 
 def match_question(label: str, questions: dict[str, str]) -> tuple[str, str] | None:
-    """The sheet row for a question on the page: a standard question by what it asks, else by the words they share."""
+    """The sheet row for a question on the page: a standard question by what it asks, else by the words they share.
+
+    None when nothing fits closely enough, which leaves the question to the candidate: a wrong answer typed into an
+    application is worse than a blank one. So a row must ask the same way round, be about the candidate rather than
+    someone else, name whatever the question asks about experience with, and share most of its words both ways.
+    """
+    candidates = {q: a for q, a in questions.items() if not _opposed(label, q)}
     for intent, row in INTENTS:
         if intent.search(label):
-            found = next(((q, a) for q, a in questions.items() if row.search(q)), None)
+            found = next(((q, a) for q, a in candidates.items() if row.search(q)), None)
             if found:
                 return found
-    def words(text: str) -> set[str]:
-        return {_stem(w) for w in re.findall(r"[a-z0-9']+", text.lower()) if w not in STOP}
-    asked = words(label)
+    asked = _words(label)
+    if not asked:
+        return None
+    others = asked & SOMEONE_ELSE
+    topic = EXPERIENCE_WITH.search(label)
+    named = _words(topic["what"]) if topic else set()
     best, score = None, 0.0
-    for question, answer in questions.items():
-        ours = words(question)
-        if not ours or not asked:
+    for question, answer in candidates.items():
+        ours = _words(question)
+        if not ours or not others <= ours or not named <= ours:
             continue
-        overlap = len(asked & ours) / len(ours)
-        if overlap > score:
-            best, score = (question, answer), overlap
-    return best if score >= 0.6 else None
+        shared = len(asked & ours)
+        sheet, page = shared / len(ours), shared / len(asked)
+        if sheet >= SHEET_COVERED and page >= PAGE_COVERED and sheet + page > score:
+            best, score = (question, answer), sheet + page
+    return best
 
 
 STOP = {"a", "an", "the", "you", "your", "are", "is", "do", "of", "to", "in", "or", "and", "for", "with", "be", "will", "now",
         "have", "has", "this", "that", "any", "please", "us", "we", "our", "at", "by", "on", "if", "it", "as", "from", "been", "one",
-        "its", "least", "older", "age"}
+        "its", "least", "older", "age", "how", "many", "much", "what", "which", "who", "whom", "would", "does", "did", "can",
+        "currently", "ever", "before"}
 
 
 def _stem(word: str) -> str:
@@ -1302,7 +1354,7 @@ def _hear_about_field(page):
 
 def fill_information(page, info: dict[str, str], report: Report, source: str = "", company: str = "") -> None:
     """Page 1 is mostly the account's own details. This answers the yes/no questions, and where the posting was found."""
-    from .fill import is_ask
+    from .fill import clean, is_ask
     hear, hear_box = _hear_about_field(page)
     if hear_box is not None:
         # The sheet's answer comes first, so a candidate can name the source every tenant lists (LinkedIn); where the
@@ -1339,10 +1391,11 @@ def fill_information(page, info: dict[str, str], report: Report, source: str = "
             if not parts["postal"] and page.locator('[id$="--postalCode"]').count() and not page.locator('[id$="--postalCode"]').first.input_value():
                 report.skipped.append("Postal code: not on the sheet. Add it to the Address row as ZIP: 12345")
         elif re.search(r"^email", question, re.I):
-            _fill_blank(page, '[id$="--email"]', value, report, "email")
+            _fill_blank(page, '[id$="--email"]', clean(answer), report, "email")
         elif re.search(r"^country$", question, re.I):
             _choose_field(page, r"^country", [value], report, "Country")
-    name = short(info.get("Legal name", ""))
+    # A name is never cut at a full stop as an answer is: "Mary St. John" and "J. Robert Smith" are whole names.
+    name = clean(info.get("Legal name", ""))
     if name and " " in name:
         first, last = name.split(" ", 1)
         for selector, value in (('[id$="--firstName"]', first), ('[id$="--lastName"]', last)):
@@ -1704,6 +1757,28 @@ def load_sheet(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def sheet_refusal(sheet: Path, cfg: dict | None = None) -> str | None:
+    """Why a fill sheet named on the command line mustn't be typed in, if there's a reason.
+
+    The same gates `pyrite autofill` and the dashboard apply: the [workday] switch, a job that hasn't been sent, and an
+    assay pass that covers the role text. The sheet's folder says which job it is.
+    """
+    if IS_EXAMPLE:
+        return "The demo doesn't open a browser. In your own workspace, this types the fill sheet into the Workday form."
+    if not enabled():
+        return OFF
+    folder = sheet.resolve().parent
+    with closing(store.connect()) as conn:
+        rows = conn.execute("SELECT * FROM jobs WHERE app_folder IS NOT NULL AND app_folder != '' ORDER BY id DESC").fetchall()
+    job = next((row for row in rows if (store.ROOT / row["app_folder"]).resolve() == folder), None)
+    if job is None:
+        return (f"{sheet} isn't in a job's application folder in this workspace, so nothing says the assay passed it. "
+                "Use `pyrite autofill <id>`.")
+    if job["applied_at"]:
+        return "This job is already marked applied. A second application is a new job."
+    return unchecked(job, cfg) or None
+
+
 def main(argv=None) -> None:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -1711,6 +1786,9 @@ def main(argv=None) -> None:
     ap.add_argument("--url", default="", help="the posting or apply page; defaults to the sheet's")
     ap.add_argument("--no-pause", action="store_true", help="don't wait for a look at each page before saving it")
     args = ap.parse_args(argv)
+    problem = sheet_refusal(args.sheet)
+    if problem:
+        sys.exit(problem)
     data = load_sheet(args.sheet)
     url = args.url or data.get("job", {}).get("url", "")
     if not url:

@@ -28,6 +28,24 @@ class PostingDeadline(unittest.TestCase):
         self.assertIsNone(deadline.from_posting("Start no later than 30 days after an offer."))
         self.assertIsNone(deadline.from_posting(""))
 
+    def test_more_ways_of_writing_it(self):
+        cases = {
+            "Applications accepted until 11/30/2026.": "2026-11-30",
+            "Closing date: 30th of November 2026": "2026-11-30",
+            "The posting will close at 11:59 PM Pacific Standard Time on Monday, November 16, 2026.": "2026-11-16",
+            "Applications will close at 11:59 p.m. Pacific Time on Monday, November 16, 2026.": "2026-11-16",
+            "Apply by Nov. 16, 2026": "2026-11-16",
+        }
+        for text, want in cases.items():
+            self.assertEqual(deadline.from_posting(f"About us. {text} Benefits."), want, text)
+
+    def test_the_date_the_job_was_posted_or_starts_is_not_the_deadline(self):
+        for text in ("Applications accepted until the position is filled. Posted: 2026-10-01",
+                     "Apply by sending your resume. Start date: January 4, 2027",
+                     "Apply by May 2026. Review begins June 1, 2026",
+                     "Applications will be accepted until filled, posted October 1, 2026"):
+            self.assertIsNone(deadline.from_posting(text), text)
+
 
 class NotesBeforeApplying(unittest.TestCase):
     NOTES = """# Acme: Role
@@ -73,6 +91,14 @@ class Sluice(Base):
         (folder / "resume.md").write_text("# Resume\n", encoding="utf-8")
         self.addCleanup(lambda: [p.unlink() for p in folder.iterdir()] and folder.rmdir())
         return f"applications/{name}", json.dumps({"ok": True, "checked": checked or {}})
+
+    def test_the_deadline_in_the_notes_wins_over_the_postings(self):
+        folder, _ = self.folder("2026-11-acme-noted")
+        (store.ROOT / folder / "notes.md").write_text("- **Deadline:** December 1, 2026, checked on the careers page.\n", encoding="utf-8")
+        self.add(source_id="a", title="Noted", app_folder=folder, description="Apply by November 16, 2026.")
+        self.add(source_id="b", title="Not noted", description="Apply by November 16, 2026.")
+        found = {j["title"]: j["deadline"] for j in server.build_state(self.conn, CFG)["jobs"]}
+        self.assertEqual(found, {"Noted": "2026-12-01", "Not noted": "2026-11-16"})
 
     def test_the_draft_closing_tomorrow_comes_first_and_says_so(self):
         tomorrow = date.today() + timedelta(days=1)

@@ -1,4 +1,5 @@
 """The Industries tab: official numbers from the BLS, what Pyrite has seen, and Claude's sourced outlook."""
+import contextlib
 import json
 import subprocess
 import tempfile
@@ -198,6 +199,21 @@ class Seen(Base):
         self.assertEqual([i["name"] for i in view["industries"]], ["Robotics"])
         self.assertEqual(view["industries"][0]["official"], [])
 
+    def test_codes_written_as_numbers_read_as_codes(self):
+        # naics = [333998], without quotes, is what someone writing search.toml by hand often types.
+        cfg = {**CFG, "promote": {**CFG["promote"], "industry": [{"name": "Robotics", "terms": ["robot"], "naics": [333998]}]}}
+        fakes = {"areas": lambda cfg: ([{"code": "55000", "level": "state", "name": "Wisconsin"}], []),
+                 "industry_titles": lambda: {"333998": "NAICS 333998 All other general purpose machinery manufacturing"},
+                 "area_numbers": lambda code, today=None: {"quarter": "2026Q1", "rows": market._detail(csv(row("55000", "5", "333998")))}}
+        with contextlib.ExitStack() as stack:
+            for name, fake in fakes.items():
+                stack.enter_context(mock.patch.object(market, name, fake))
+            view = market.view(self.conn, cfg)
+        robotics = view["industries"][0]
+        self.assertEqual(robotics["codes"], [{"code": "333998", "title": "All other general purpose machinery manufacturing"}])
+        self.assertEqual(robotics["official"][0]["jobs"], 100)
+        self.assertIn("(NAICS): 333998", outlook.prompt("Robotics", cfg["promote"]["industry"][0], {}, [], "2026-11-08"))
+
     def test_a_rejection_isnt_a_reply_here_either(self):
         # The same rule as the dashboard's Reply rate, so the two never disagree.
         cfg = {**CFG, "promote": {**CFG["promote"], "industry": [{"name": "Robotics", "terms": ["robot"]}]}}
@@ -229,7 +245,9 @@ def answer(**changes):
     ], "sources": SOURCES, **changes})
 
 
-SEEN = "Links: [{\"url\": \"https://example-news.com/plant-expands\"}]\nhttps://dwd.example.gov/report"
+SEEN = ["https://example-news.com/plant-expands", "https://dwd.example.gov/report"]
+# A WebSearch result as Claude Code's stream gives it, listing those two pages.
+SEARCH_RESULT = "Web search results for query: \"plant\"\n\nLinks: " + json.dumps([{"title": "Page", "url": url} for url in SEEN])
 
 
 class Vetting(unittest.TestCase):
@@ -243,8 +261,29 @@ class Vetting(unittest.TestCase):
 
     def test_a_link_that_isnt_a_web_page_is_dropped(self):
         bad = [{"id": 1, "title": "x", "url": "javascript:alert(1)//example-news.com/plant-expands"}]
-        sections, sources, _ = outlook.vet(answer(sources=bad), SEEN + "\njavascript:alert(1)//example-news.com/plant-expands")
+        sections, sources, _ = outlook.vet(answer(sources=bad), [*SEEN, "javascript:alert(1)//example-news.com/plant-expands"])
         self.assertEqual((sections, sources), ([], []))
+
+    def test_a_source_counts_only_as_the_whole_address_the_run_came_across(self):
+        seen = ["https://www.news.example/business/acme-opens-plant-2026-10-01/"]
+        sources = [{"id": 1, "url": "https://news.example"}, {"id": 2, "url": "https://www.news.example/business/acme"},
+                   {"id": 3, "url": "https://elsewhere.example/whatever"},
+                   {"id": 4, "url": "http://news.example/business/acme-opens-plant-2026-10-01#top"}]
+        points = [{"text": f"Point {i}.", "scope": "metro", "sources": [i]} for i in (1, 2, 3, 4)]
+        data = {"sections": [{"heading": "In short", "points": points}], "sources": sources}
+        sections, kept, dropped = outlook.vet(json.dumps(data), seen)
+        self.assertEqual([s["url"] for s in kept], [sources[3]["url"]])
+        self.assertEqual([p["text"] for p in sections[0]["points"]], ["Point 4."])
+        self.assertEqual(dropped, {"points": 3, "sources": 3})
+
+    def test_an_answer_of_the_wrong_shape_is_left_out_not_trusted(self):
+        for data in ({"sections": [], "sources": 5},
+                     {"sections": [{"heading": "In short", "points": [{"text": "x", "sources": 1}]}], "sources": [{"id": 1, "url": SEEN[0]}]},
+                     {"sections": [{"heading": ["In short"], "points": []}], "sources": []},
+                     {"sections": "none", "sources": {"id": 1}},
+                     {"sections": [{"heading": "In short", "points": "x"}], "sources": [{"id": 1, "url": SEEN[0]}]}):
+            with self.subTest(data=data):
+                self.assertEqual(outlook.vet(json.dumps(data), SEEN)[:2], ([], []))
 
     def test_an_answer_with_no_json_fails(self):
         with self.assertRaises(outlook.ClaudeFailed):
@@ -253,14 +292,17 @@ class Vetting(unittest.TestCase):
     def test_the_stream_gives_the_answer_and_what_the_tools_saw(self):
         lines = [
             {"type": "system", "subtype": "init"},
-            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {"url": "https://fetched.example/a", "prompt": "x"}}]}},
-            {"type": "user", "message": {"content": [{"type": "tool_result", "content": [{"type": "text", "text": "Links: https://found.example/b"}]}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "f1", "name": "WebFetch", "input": {"url": "https://fetched.example/a", "prompt": "x"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "f1", "content": "The page says see https://mentioned.example/c"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "s1", "name": "WebSearch", "input": {"query": "plant"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "s1", "content": [
+                {"type": "text", "text": 'Links: [{"title": "B", "url": "https://found.example/b"}] and a summary naming https://said.example/d'}]}]},
+             "tool_use_result": {"query": "plant", "results": [{"tool_use_id": "x", "content": [{"title": "E", "url": "https://listed.example/e"}]}, "text"]}},
             {"type": "result", "result": "{}", "is_error": False, "usage": {"output_tokens": 5}},
         ]
         text, result, seen = outlook.read_stream("\n".join(json.dumps(line) for line in lines) + "\nnot json")
         self.assertEqual((text, result["usage"]["output_tokens"]), ("{}", 5))
-        self.assertIn("https://fetched.example/a", seen)
-        self.assertIn("https://found.example/b", seen)
+        self.assertEqual(seen, {"https://fetched.example/a", "https://found.example/b", "https://listed.example/e"})
 
 
 class Research(Base):
@@ -279,13 +321,14 @@ class Research(Base):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def stream(self, final, seen=SEEN, code=0):
-        lines = [{"type": "user", "message": {"content": [{"type": "tool_result", "content": seen}]}},
+    def stream(self, final, seen=SEARCH_RESULT, code=0):
+        lines = [{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "s1", "name": "WebSearch", "input": {"query": "plant"}}]}},
+                 {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "s1", "content": seen}]}},
                  {"type": "result", "result": final, "is_error": bool(code), "num_turns": 4, "total_cost_usd": 0.4}]
         return subprocess.CompletedProcess([], code, stdout="\n".join(json.dumps(line) for line in lines), stderr="")
 
     def test_a_sourced_outlook_is_kept_and_the_run_is_counted(self):
-        with mock.patch.object(outlook.subprocess, "run", return_value=self.stream(answer())) as ran:
+        with mock.patch.object(outlook.claude_code, "run_process", return_value=self.stream(answer())) as ran:
             report = outlook.run(self.conn, CFG, "Semiconductors", claude="claude")
         cmd, prompt = ran.call_args.args[0], ran.call_args.kwargs["input"]
         self.assertEqual(cmd[cmd.index("--tools") + 1], "WebSearch,WebFetch")
@@ -299,14 +342,27 @@ class Research(Base):
         self.assertEqual([tuple(r) for r in runs], [("outlook", 1, 0.4)])
 
     def test_a_failed_redo_keeps_the_last_outlook(self):
-        with mock.patch.object(outlook.subprocess, "run", return_value=self.stream(answer())):
+        with mock.patch.object(outlook.claude_code, "run_process", return_value=self.stream(answer())):
             outlook.run(self.conn, CFG, "Semiconductors", claude="claude")
-        with mock.patch.object(outlook.subprocess, "run", return_value=self.stream(answer(), seen="nothing relevant")), \
+        with mock.patch.object(outlook.claude_code, "run_process", return_value=self.stream(answer(), seen="nothing relevant")), \
                 self.assertRaisesRegex(outlook.ClaudeFailed, "actually found"):
             outlook.run(self.conn, CFG, "Semiconductors", claude="claude")
         status = outlook.status("Semiconductors")
         self.assertEqual(status["state"], "failed")
         self.assertIsNotNone(status["report"])
+
+    def test_trouble_of_any_kind_finishes_the_research_as_failed(self):
+        malformed = json.dumps({"sections": [{"heading": ["In short"], "points": 3}], "sources": 5})
+        with mock.patch.object(outlook.claude_code, "run_process", return_value=self.stream(malformed)), \
+                self.assertRaises(outlook.ClaudeFailed):
+            outlook.run(self.conn, CFG, "Semiconductors", claude="claude")
+        self.assertEqual(outlook.status("Semiconductors")["state"], "failed")
+        with mock.patch.object(outlook.claude_code, "run_process", return_value=self.stream(answer())), \
+                mock.patch.object(outlook, "vet", side_effect=KeyError("url")), self.assertRaises(KeyError):
+            outlook.run(self.conn, CFG, "Semiconductors", claude="claude")
+        status = outlook.status("Semiconductors")
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("KeyError", status["detail"])
 
     def test_the_button_refuses_an_unknown_industry_and_a_second_run(self):
         with self.assertRaisesRegex(ValueError, "no industry"):

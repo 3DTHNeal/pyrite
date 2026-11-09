@@ -50,11 +50,15 @@ def _one_line(value, what: str) -> str:
     return value.strip()
 
 
-def _list(value, what: str) -> list:
+def _list(value, what: str, of: type | None = None) -> list:
+    """A list from a form, or [] for none. With `of`, every item must be that type, since one used as a key or a set
+    member would otherwise fail as a server error rather than a refusal."""
     if value is None:
         return []
     if not isinstance(value, list):
         raise ValueError(f"{what} should be a list.")
+    if of is not None and not all(isinstance(item, of) for item in value):
+        raise ValueError(f"{what} should be a list of {'numbers' if of is int else 'text'}.")
     return value
 
 
@@ -873,12 +877,12 @@ def _offlimits(texts: dict, cfg: dict, edits: dict) -> Draft:
             raise ValueError("Nothing to change.")
         section = _excluded(doc, kind)
         items = {item.line: item for item in doc.items(section)} if section else {}
-        for line in _list(change.get("drop_items"), "Items to remove"):
+        for line in _list(change.get("drop_items"), "Items to remove", int):
             if line not in items:
                 raise ValueError("A line in facts.md has moved since the page read it. Reload and try again.")
             plan.delete(line, items[line].end)
             count += 1
-        drop = set(_list(change.get("drop_patterns"), "Patterns to remove"))
+        drop = set(_list(change.get("drop_patterns"), "Patterns to remove", str))
         patterns = [p for p in guard.get(key, []) if p not in drop]
         count += len(guard.get(key, [])) - len(patterns)
         remaining = [item.text for line, item in items.items() if line not in set(change.get("drop_items") or [])]
@@ -1205,14 +1209,14 @@ def _assay(texts: dict, cfg: dict, key: str, kind: str) -> dict:
     source = _reader(texts)
     blocked = checks.blocked_patterns(checked, source)
     approved = list(guard["approved_sources"])
-    every = "\n".join(checks.claimable(source(rel)) for rel in approved)
+    every = "\n".join(checks.source_body(rel, source(rel)) for rel in approved)
     errors, warnings = checks.check_text(texts[key], kind, checked, every, blocked=blocked)
     if kind == "resume" and guard.get("heading_source") == own:
         more, also = checks.check_resume_structure(texts[key], checked)
         errors, warnings = errors + more, warnings + also
     only = []
     if own in approved:
-        others = "\n".join(checks.claimable(source(rel)) for rel in approved if rel != own)
+        others = "\n".join(checks.source_body(rel, source(rel)) for rel in approved if rel != own)
         found, _ = checks.check_text(texts[key], kind, checked, others, blocked=blocked)
         only = [error.split(". Remove them")[0] for error in found if error not in errors and " not in " in error]
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}

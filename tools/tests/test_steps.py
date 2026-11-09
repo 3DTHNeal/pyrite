@@ -37,6 +37,13 @@ class EditList(unittest.TestCase):
         new = tomledit.edit_list(self.TEXT, "guard", "unsupported", remove=["field failures"])
         self.assertTrue(new.endswith("  # a note inside the list\n]\n"), new)
 
+    def test_an_items_own_comment_goes_with_it(self):
+        text = "[guard]\nforbidden = [\n  'Alpha',  # about Alpha\n  'Beta',   # about Beta\n  'Gamma'  # about Gamma\n]\n"
+        new = tomledit.edit_list(text, "guard", "forbidden", remove=["Beta"])
+        self.assertEqual(new, "[guard]\nforbidden = [\n  'Alpha',  # about Alpha\n  'Gamma'  # about Gamma\n]\n")
+        new = tomledit.edit_list(text, "guard", "forbidden", remove=["Gamma"])
+        self.assertEqual(new, "[guard]\nforbidden = [\n  'Alpha',  # about Alpha\n  'Beta',   # about Beta\n]\n")
+
     def test_a_new_item_gets_its_own_line_before_the_bracket(self):
         new = tomledit.edit_list(self.TEXT, "guard", "unsupported", add=["\\bKubernetes\\b"], literal=True)
         self.assertIn("  'field failures',\n  '\\bKubernetes\\b',\n]", new)

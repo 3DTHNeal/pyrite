@@ -5,7 +5,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from typing import cast
+from typing import Any, cast
 
 from . import quality, sources
 from . import score as scoring
@@ -14,6 +14,7 @@ from .store import (
     REPLY_DETECTED,
     SCORING_VERSION,
     STATUSES,
+    ConfigError,
     get_job,
     load_config,
     log_event,
@@ -61,9 +62,42 @@ def _watchlist(cfg: dict) -> list[tuple]:
     return out
 
 
+def watch_problem(kind: str, ident: str, spec) -> str:
+    """What's wrong with how one watched company is written in search.toml, or "" if nothing is. Workday needs a
+    table of three settings, and the other boards a name, so the one written the other's way says which it needs."""
+    if kind == "workday":
+        if isinstance(spec, dict) and all(isinstance(spec.get(key), str) and spec[key].strip() for key in ("name", "wd", "site")):
+            return ""
+        return (f"[watch.workday] {ident} in profile/search.toml needs a name, wd and site, written as "
+                f'{ident} = {{ name = "Company", wd = "wd1", site = "External" }}, with the wd and site from its careers page address.')
+    if isinstance(spec, str) and spec.strip():
+        return ""
+    return f'[watch.{kind}] {ident} in profile/search.toml should be the company\'s name, written as {ident} = "Company".'
+
+
+def watch_problems(cfg: dict) -> list[str]:
+    """watch_problem for every watched company that has one."""
+    return [problem for kind, ident, spec in _watchlist(cfg) if (problem := watch_problem(kind, ident, spec))]
+
+
+def _company(ident: str, spec) -> str:
+    """The company's name for a watched source, however its entry is written."""
+    if isinstance(spec, dict):
+        return str(spec.get("name") or ident)
+    return str(spec or ident)
+
+
+def check_patterns(cfg: dict) -> None:
+    """Stop before reading any board when a pattern in search.toml can't be read, since it would fail every posting."""
+    problems = scoring.pattern_problems(cfg)
+    if problems:
+        raise ConfigError(" ".join(problems) + " Fix it, then try again.")
+
+
 def _is_candidate(title: str, location: str, cfg: dict, workplace: str = "", company: str = "") -> bool:
-    """Worth the slower call for a full description?"""
-    if not scoring.match_track(title, cfg, {"company": company}):
+    """Worth the slower call for a full description? A track limited to industries counts here, since the industry
+    is judged from the description this would fetch."""
+    if not scoring.match_track(title, cfg, {"company": company}, industry_unknown=True):
         return False
     if scoring.MULTI_LOCATION.match(location):
         return True
@@ -93,9 +127,13 @@ def _probe_workday(spec: dict, open_ids: list, hits: dict, deadline: float) -> t
 def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: float, open_ids: list | None = None) -> dict:
     kind, ident, spec = item
     source_key = f"{kind}:{ident}"
-    company = spec["name"] if kind == "workday" else spec
-    result = {"source_key": source_key, "company": company, "postings": [], "seen": [], "dates": {}, "error": "", "complete": True,
-              "closed": [], "live": []}
+    company = _company(ident, spec)
+    result: dict[str, Any] = {"source_key": source_key, "company": company, "postings": [], "seen": [], "dates": {}, "error": "",
+                              "complete": True, "closed": [], "live": []}
+    # One entry written the wrong way fails only its own source, saying how to write it.
+    result["error"] = watch_problem(kind, ident, spec)
+    if result["error"]:
+        return result
     if time.monotonic() > deadline:
         result["error"] = "Not reached before the pan's time limit."
         return result
@@ -146,6 +184,7 @@ def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: floa
 
 def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minutes: float = 45) -> dict:
     cfg = cfg or load_config()
+    check_patterns(cfg)
     started = now()
     run_id = conn.execute("INSERT INTO runs (started_at) VALUES (?)", (started,)).lastrowid
     if fresh:
@@ -419,10 +458,18 @@ def _requisition_twin(conn, key: str, posting):
     return None
 
 
+# Jobs you added yourself, never linked to a board, that are over: rejected, passed, withdrawn and so on. A board's
+# posting with the same title is then a new opening, so it becomes a job of its own. Linked to the old one, or counted
+# as its repost, it would take the old status and never reach the queue. A board's own jobs still keep their status
+# across reposts, so a posting you passed on stays passed when it comes back.
+_ADDED_AND_OVER = "source_key IN ('seed', 'manual') AND status NOT IN (" + ",".join(f"'{status}'" for status in ACTIVE) + ")"
+
+
 def _attach_to_existing(conn, posting, ts, key, cfg) -> bool:
-    """If you already added this job by hand, link it up rather than listing it twice."""
+    """If you already added this job by hand and it's still in play, link it up rather than listing it twice."""
     for row in conn.execute(
-        "SELECT * FROM jobs WHERE company = ? AND source_key IN ('seed', 'manual')", (posting.company,)
+        f"SELECT * FROM jobs WHERE company = ? AND source_key IN ('seed', 'manual') AND status IN ({','.join('?' * len(ACTIVE))})",
+        (posting.company, *ACTIVE),
     ).fetchall():
         if _norm_title(row["title"]) != _norm_title(posting.title):
             continue
@@ -451,7 +498,7 @@ def _same_text(one: str, other: str) -> bool:
 def _exact_twin(conn, posting, fingerprint: str):
     """A job with the same opening text. The fingerprint reads only the first 600 characters, which many
     employers fill with the same paragraph about themselves, so the rest of the text has to agree too."""
-    for row in conn.execute("SELECT * FROM jobs WHERE dedupe_key = ?", (fingerprint,)).fetchall():
+    for row in conn.execute(f"SELECT * FROM jobs WHERE dedupe_key = ? AND NOT ({_ADDED_AND_OVER})", (fingerprint,)).fetchall():
         if _same_text(posting.description, row["description"]):
             return row
     return None
@@ -462,7 +509,8 @@ def _near_twin(conn, posting, started: str):
     if not posting.description.strip():
         return None
     for row in conn.execute(
-        "SELECT * FROM jobs WHERE company = ? AND last_seen < ? AND description != ''", (posting.company, started)
+        f"SELECT * FROM jobs WHERE company = ? AND last_seen < ? AND description != '' AND NOT ({_ADDED_AND_OVER})",
+        (posting.company, started),
     ).fetchall():
         if _norm_title(row["title"]) == _norm_title(posting.title) and _same_text(posting.description, row["description"]):
             return row
@@ -523,6 +571,7 @@ def rescore(conn, cfg=None) -> dict:
     Records that the prospects now have this code's scoring, so the next sweep doesn't do it again.
     """
     cfg = cfg or load_config()
+    check_patterns(cfg)
     kept = dropped = held = 0
     removed = []
     _fill_in_existing(conn, cfg)
@@ -659,11 +708,15 @@ def _close_missing(conn, result, cfg, started, stats, ts):
 def check_sources(cfg=None) -> list[dict]:
     """Try each watched source once and report how many postings it returned."""
     cfg = cfg or load_config()
+    check_patterns(cfg)
     report = []
 
     def probe(item):
         kind, ident, spec = item
-        name = spec["name"] if kind == "workday" else spec
+        name = _company(ident, spec)
+        problem = watch_problem(kind, ident, spec)
+        if problem:
+            return {"source": f"{kind}:{ident}", "company": name, "ok": False, "error": problem}
         try:
             if kind == "workday":
                 api, _ = sources.workday_base({**spec, "tenant": ident})

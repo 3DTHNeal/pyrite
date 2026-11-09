@@ -150,6 +150,10 @@ input, select, textarea { background: var(--surface); border: 1px solid var(--li
 .grid { width: 100%; border-collapse: collapse; font-size: 13px; }
 .grid th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .grid td { padding: 7px 10px; border-bottom: 1px solid var(--surface-2); vertical-align: top; }
+/* Three lines at most of a company or title, however long a board or a paste made it. The job panel shows all of it. */
+.clamp, .card .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+/* Breaking anywhere would let a table squeeze a column until short words split, so a cell keeps room for one. */
+.grid .clamp { min-width: 12ch; }
 .grid tr:last-child td { border-bottom: 0; }
 .grid tbody tr[data-id] { cursor: pointer; }
 .grid tbody tr[data-id]:hover { background: var(--surface-2); }
@@ -185,7 +189,7 @@ input, select, textarea { background: var(--surface); border: 1px solid var(--li
 .facts { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 3px 10px; font-size: 13px; }
 .facts dt { color: var(--ink-3); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
-.callout { border-left: 3px solid var(--warn); background: var(--surface-2); padding: 8px 12px; font-size: 13px; border-radius: 0 4px 4px 0; }
+.callout { border-left: 3px solid var(--warn); background: var(--surface-2); padding: 8px 12px; font-size: 13px; border-radius: 0 4px 4px 0; overflow-wrap: anywhere; }
 .callout.bad { border-left-color: var(--bad); }
 .callout ul { margin: 4px 0 0; padding-left: 18px; }
 .reply-detail { margin: 4px 0; overflow-wrap: anywhere; font-weight: 600; }
@@ -354,6 +358,8 @@ textarea { width: 100%; resize: vertical; }
 .profile-work { padding: 12px 22px 18px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
 .profile-work.wide { grid-template-columns: minmax(0, 1fr); }
 .profile-main { display: grid; gap: 12px; min-width: 0; max-width: 80ch; }
+/* A section not built yet names a folder, which on a phone is wider than the screen. */
+.profile-fallback { overflow-wrap: anywhere; }
 .profile-aside { position: sticky; top: 12px; display: grid; gap: 10px; }
 .profile-writes { margin: 0 22px 14px; border: 1px dashed var(--line); border-radius: 6px; padding: 6px 12px; font-size: 13px; color: var(--ink-2); }
 .profile-writes summary { cursor: pointer; color: var(--ink-3); font-size: 12px; }

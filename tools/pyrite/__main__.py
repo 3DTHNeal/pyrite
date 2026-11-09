@@ -14,8 +14,9 @@ def run() -> None:
     if sys.argv[1:2] == ["demo"]:
         os.environ["PYRITE_HOME"] = str(CODE_ROOT / "example")
     # Making the workspace, or asking how, mustn't need the workspace to be there already. The name matches
-    # store.MAY_BE_MISSING, which can't be imported before this is set.
-    if not sys.argv[1:] or sys.argv[1] in ("init", "help", "-h", "--help", "--version"):
+    # store.MAY_BE_MISSING, which can't be imported before this is set. Help on one command, `pyrite queue --help`, is
+    # asking how too.
+    if not sys.argv[1:] or sys.argv[1] in ("init", "help", "--version") or {"-h", "--help"} & set(sys.argv[1:]):
         os.environ["PYRITE_WORKSPACE_MAY_BE_MISSING"] = "1"
     from pyrite.cli import main
 

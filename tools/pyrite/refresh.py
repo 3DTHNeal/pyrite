@@ -22,12 +22,18 @@ PREVIOUS = "resume.previous.md"
 DRAFT, NOTES = "resume.md", "notes.md"
 ATTEMPTS = 3
 TIME_LIMIT_MINUTES = 20
-STALE_MINUTES = TIME_LIMIT_MINUTES + 5
+# Claude is never started with less than a minute of the time limit left, but the documents may still be built after
+# it: once for the last rewrite, and once more to put the passing one back after a failed polish, each up to five
+# minutes. Only past all of that has a run died.
+STALE_MINUTES = TIME_LIMIT_MINUTES + 15
 INSTRUCTIONS = Path(__file__).parent / "refresh_resume.md"
 
 
 class RefreshFailed(ClaudeFailed):
     pass
+
+
+MOVED_ON = "You moved this job on during the refresh, so the resume stays as it was."
 
 
 def states(conn) -> dict[int, dict]:
@@ -102,14 +108,17 @@ def prompt(job, folder: str, feedback: str = "", polish: str = "", unusable: boo
 def _ask(conn, job_id: int, folder: str, claude: str, text: str, deadline: float) -> str:
     """One run, its rewrite saved in the folder. Returns Claude's sentence for the dashboard.
 
-    An answer with no resume in it counts as a failed run and raises NoDocument, leaving the files as they were.
+    An answer with no resume in it counts as a failed run and raises NoDocument, leaving the files as they were. So
+    does moving the job on while Claude wrote, since the resume on file is then the one you sent.
     """
     answer = claude_code.ask(conn, job_id, "refresh", command(claude), text, ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
     try:
         found, summary = claude_code.documents(answer, DRAFT, (NOTES,))
     except NoDocument:
-        claude_code.mark_last_failed(conn, "refresh")
+        claude_code.mark_failed(conn, answer)
         raise
+    if get_job(conn, job_id)["status"] not in REFRESHABLE:
+        raise RefreshFailed(MOVED_ON)
     claude_code.save_documents(ROOT / folder, found)
     return summary
 
@@ -118,22 +127,21 @@ def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, dead
     """One more pass over a rewrite that passed with warnings it can clear. The letter isn't this run's to change,
     so its warnings are left alone. If the pass fails the assay, the rewrite that passed goes back."""
     asks = checks.polish_requests(report, letter=False)
-    if not asks or time.monotonic() > deadline:
+    if not asks or deadline - time.monotonic() < claude_code.MIN_ASK_SECONDS:
         return
     files = [ROOT / folder / name for name in (DRAFT, NOTES)]
     kept = {path: path.read_bytes() for path in files if path.exists()}
     try:
         text = prompt(get_job(conn, job_id), folder, polish="\n".join(f"- {ask}" for ask in asks))
         _ask(conn, job_id, folder, claude, text, deadline)
-        if get_job(conn, job_id)["status"] not in REFRESHABLE:
-            return  # You moved it on during the pass, so its files are yours now.
         if finish_job(conn, cfg, job_id)["ok"]:
             return
     except ClaudeFailed:
-        pass
+        pass  # Moving the job on meanwhile lands here too, before anything was saved.
     for path, content in kept.items():
         path.write_bytes(content)
-    finish_job(conn, cfg, job_id)
+    if get_job(conn, job_id)["status"] in REFRESHABLE:
+        finish_job(conn, cfg, job_id)  # A sent job's folder is a record, so it isn't rebuilt.
 
 
 def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
@@ -149,8 +157,6 @@ def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
             feedback = f"- Your answer had no {DRAFT} block, so nothing was saved. Hand back the whole resume, as the end of these instructions says."
             continue
         missing = None
-        if get_job(conn, job_id)["status"] not in REFRESHABLE:
-            raise RefreshFailed("You moved this job on during the refresh, so the resume stays as it was.")
         report = finish_job(conn, cfg, job_id)
         if report["ok"]:
             _polish(conn, cfg, job_id, folder, claude, report, deadline)

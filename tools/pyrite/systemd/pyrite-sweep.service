@@ -6,7 +6,7 @@ After=network-online.target
 Type=oneshot
 # The workspace comes from .pyrite-home in this folder, or set Environment=PYRITE_HOME=...
 WorkingDirectory=%h/pyrite
-ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py discover
-# The leading - means trouble reading mail never fails the sweep. It shows on the dashboard instead.
-ExecStart=-%h/pyrite/.venv/bin/python tools/pyrite.py inbox
+# The same sweep as the dashboard's button: it reads the boards, then checks mail, and claims the run first so the two
+# can't overlap. Trouble reading mail never fails it; that shows on the dashboard instead.
+ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py sweep
 Nice=10

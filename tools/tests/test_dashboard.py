@@ -1,5 +1,6 @@
 """The dashboard server: its defenses, the job lifecycle it drives, and the demo."""
 import contextlib
+import http.client
 import io
 import json
 import shutil
@@ -12,6 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import support
 from support import CFG, MODEL, Base
 
 from pyrite import checks, claude_code, cli, demo, refresh, server, store
@@ -86,6 +88,16 @@ class Dashboard(Base):
         self.assertNotEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", "https://jobs.example.com/acme/R-200"), sent)
         self.assertIsNone(server.tracked_by_url(self.conn, ""))
 
+    def test_without_a_link_another_place_or_text_is_another_opening(self):
+        first = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors.")
+        self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
+        elsewhere = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Remote - US", "Builds sensors.")
+        other_text = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds motors.")
+        self.assertEqual(len({first, elsewhere, other_text}), 3)
+        # One added before the place and text counted, under the old number, is still found.
+        self.conn.execute("UPDATE jobs SET source_id = 'old-form' WHERE id = ?", (first,))
+        self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
+
 
 class Outreach(Base):
     """Reaching out after applying: logged as an event, due on the to-do list a day or so in, and the follow-up keyed to it."""
@@ -146,6 +158,62 @@ class Outreach(Base):
             with self.subTest(target=target, day=day), self.assertRaises(ValueError):
                 server.apply_action(self.conn, target, {"action": "reached_out", "date": day}, CFG)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM events WHERE kind = 'reached_out'").fetchone()[0], 0)
+
+
+class WhatTheBoxesTake(Base):
+    """Text from the page is refused when it's too long or isn't text, rather than cut short or stored some other way."""
+
+    def act(self, job, **body):
+        server.apply_action(self.conn, job, body, CFG)
+        return store.get_job(self.conn, job)
+
+    def test_too_long_is_refused_and_nothing_changes(self):
+        job = self.add()
+        self.act(job, action="note", notes="Ask about the team")
+        for body in ({"action": "note", "notes": "x" * (server.MAX_NOTES + 1)},
+                     {"action": "next_action", "text": "x" * (server.MAX_NEXT_STEP + 1)},
+                     {"action": "status", "status": "passed", "note": "x" * (server.MAX_NOTE + 1)}):
+            with self.subTest(body["action"]), self.assertRaisesRegex(ValueError, "Shorten it"):
+                self.act(job, **body)
+        row = store.get_job(self.conn, job)
+        self.assertEqual((row["notes"], row["next_action"], row["status"]), ("Ask about the team", "", "new"))
+        # At the limit is fine.
+        self.assertEqual(self.act(job, action="note", notes="x" * server.MAX_NOTES)["notes"], "x" * server.MAX_NOTES)
+
+    def test_only_text_is_taken(self):
+        job = self.add()
+        for body in ({"action": "note", "notes": ["a"]}, {"action": "next_action", "text": {"a": 1}},
+                     {"action": "next_action", "text": "Call", "date": 20300102}, {"action": "status", "status": "passed", "note": 5}):
+            with self.subTest(body), self.assertRaisesRegex(ValueError, "should be text"):
+                self.act(job, **body)
+        self.assertEqual(store.get_job(self.conn, job)["notes"], "")
+
+    def test_a_next_step_needs_a_real_date(self):
+        job = self.add()
+        for day in ("2026-02-30", "2026-13-01", "20260102", "soon"):
+            with self.subTest(day), self.assertRaisesRegex(ValueError, "isn't a date"):
+                self.act(job, action="next_action", text="Phone screen", date=day)
+        row = self.act(job, action="next_action", text="Phone screen", date="2028-02-29")
+        self.assertEqual((row["next_action"], row["next_action_date"]), ("Phone screen", "2028-02-29"))
+
+    def test_a_reply_is_only_logged_on_a_job_that_was_sent(self):
+        job = self.add()
+        for kind in server.HEARD_BACK:
+            with self.subTest(kind), self.assertRaisesRegex(ValueError, "hasn't been sent"):
+                self.act(job, action="heard_back", kind=kind)
+        row = store.get_job(self.conn, job)
+        self.assertEqual((row["status"], row["response_at"]), ("new", None))
+        store.set_status(self.conn, job, "applied")
+        self.assertTrue(self.act(job, action="heard_back", kind="reply")["response_at"])
+
+    def test_a_posting_added_by_hand_has_a_name_and_title_of_sensible_length(self):
+        for field in ("company", "title", "location"):
+            fields = {"company": "Acme", "title": "Engineer", "location": "", field: "x" * (server.MAX_NAME + 1)}
+            with self.subTest(field), self.assertRaisesRegex(ValueError, "over 200 characters"):
+                server.add_manual_job(self.conn, CFG, **fields)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 0)
+        job = server.add_manual_job(self.conn, CFG, "Acme", "x" * server.MAX_NAME)
+        self.assertEqual(store.get_job(self.conn, job)["title"], "x" * server.MAX_NAME)
 
 
 class Security(unittest.TestCase):
@@ -245,10 +313,53 @@ class Security(unittest.TestCase):
             status, body, _ = self.call("/api/state")
         self.assertEqual(status, 503)
         self.assertIn("busy", json.loads(body)["error"])
-        with mock.patch.object(server, "build_state", side_effect=RuntimeError("boom")), contextlib.redirect_stderr(io.StringIO()):
+        with mock.patch.object(server, "build_state", side_effect=RuntimeError("boom in a private folder")), \
+                contextlib.redirect_stderr(io.StringIO()) as log:
             status, body, _ = self.call("/api/state")
+        # The page hears that it failed. What failed, which can name files on this computer, goes only to the log.
         self.assertEqual(status, 500)
-        self.assertIn("boom", json.loads(body)["error"])
+        self.assertIn("went wrong", json.loads(body)["error"])
+        self.assertNotIn("boom", json.loads(body)["error"])
+        self.assertIn("boom", log.getvalue())
+
+    def test_a_host_list_written_as_one_string_allows_nothing_but_this_computer(self):
+        cfg = {**CFG, "dashboard": {"allowed_hosts": "workstation.example-tailnet.ts.net"}}
+        self.assertEqual(server.allowed_hosts(cfg), set())
+        with mock.patch.object(server, "load_config", return_value=cfg):
+            for host in ("workstation.example-tailnet.ts.net", "tailnet", "ts", "net"):
+                with self.subTest(host):
+                    self.assertEqual(self.call("/api/state", headers={"Host": host})[0], 403)
+        self.assertEqual(server.allowed_hosts({"dashboard": {"allowed_hosts": [" Tower ", "", 5, ["x"]]}}), {"tower"})
+        self.assertEqual(self.call("/api/state", headers={"Host": "WORKSTATION:8787"})[0], 200)
+        found = support.WORKSPACE_TODOS(store.ROOT, cfg)
+        self.assertTrue(any("allowed_hosts" in todo["what"] and "isn't a list" in todo["what"] for todo in found), found)
+
+    def test_a_request_without_a_host_is_refused(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.putrequest("GET", "/api/state", skip_host=True)
+            connection.endheaders()
+            with connection.getresponse() as response:
+                self.assertEqual(response.status, 403)
+        finally:
+            connection.close()
+
+    def test_malformed_requests_are_refused_not_failed(self):
+        self.assertEqual(self.call("/api/job/99999999999999999999999")[0], 404)
+        self.assertEqual(self.post("/api/job/99999999999999999999999/action", b'{"action":"seen"}')[0], 404)
+        self.assertEqual(self.post("/api/jobs", b"[" * 100_000 + b"]" * 100_000)[0], 400)
+        versions = json.loads(self.call("/api/profile")[1])["versions"]
+        for change in ({"drop_patterns": [[1]]}, {"drop_items": [[1]]}, {"drop_items": ["1"]}):
+            with self.subTest(change):
+                body = json.dumps({"step": "offlimits", "edits": {"never": change}, "based_on": versions}).encode()
+                status, answer, _ = self.post("/api/profile/draft", body)
+                self.assertEqual(status, 400, answer)
+
+    def test_an_out_of_range_port_says_so(self):
+        for port in (70000, -1):
+            with self.subTest(port), self.assertRaises(SystemExit) as caught:
+                server.make_server(port)
+            self.assertIn("isn't a port", str(caught.exception))
 
     def test_a_file_name_outside_latin_1_can_be_served(self):
         folder = store.ROOT / "applications" / "names"

@@ -174,7 +174,7 @@ class ClaudeRun(Base):
                 result["result"] = block + result["result"]
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(result), stderr="")
             return subprocess.CompletedProcess(cmd, 0, stdout=block + summary, stderr="")
-        patcher = mock.patch.object(claude_code.subprocess, "run", side_effect=fake)
+        patcher = mock.patch.object(claude_code, "run_process", side_effect=fake)
         patcher.start()
         self.addCleanup(patcher.stop)
 

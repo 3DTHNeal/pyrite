@@ -1,8 +1,9 @@
 """When a posting stops taking applications, and what to settle before applying.
 
 Job boards have no closing-date field, so this reads the posting's own words ("accepted at
-least until November 8, 2026", "expected to close on November 16th, 2026") and, failing
-that, the **Deadline:** line of the job's notes.md. Notes also say what could rule an
+least until November 8, 2026", "expected to close on November 16th, 2026") and the
+**Deadline:** line of the job's notes.md. The notes win, since they were written by reading
+the whole posting, or by you after checking. Notes also say what could rule an
 application out (residency, a missing core skill, a stale date): a **Check before
 applying:** line, a "Before you apply" section, or any line that says to do something
 before applying. Posting text is data, so all of this is shown as text and never acted on.
@@ -15,7 +16,9 @@ _MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
 _MONTH = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
 _ISO = re.compile(r"\b(20\d\d)-(\d{2})-(\d{2})\b")
 _MONTH_FIRST = re.compile(rf"\b{_MONTH}\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(20\d\d)\b", re.I)
-_DAY_FIRST = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+{_MONTH},?\s+(20\d\d)\b", re.I)
+_DAY_FIRST = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?{_MONTH},?\s+(20\d\d)\b", re.I)
+# 11/30/2026, as US boards write it. One whose first number can't be a month is read the other way round.
+_SLASHED = re.compile(r"\b(\d{1,2})/(\d{1,2})/(20\d\d)\b")
 
 # What a posting says just before its closing date. The date has to follow within a few words.
 _CUE = re.compile(
@@ -24,7 +27,14 @@ _CUE = re.compile(
     r"|posting (?:will )?(?:end|expire)s?",
     re.I,
 )
-_CUE_REACH = 60
+# Long enough for "will close at 11:59 PM Pacific Standard Time on Monday, November 16, 2026".
+_CUE_REACH = 90
+# Where the words after a cue stop being about it: the end of the sentence, "until the position is filled", or a date
+# that's another one, such as when it was posted or when the job starts. A full stop after a lone letter, as in
+# "p.m." or an initial, or before a number, as in "Nov. 16", doesn't end a sentence.
+_CUE_STOP = re.compile(
+    r"(?<![ap]\.m)(?<!\b[A-Za-z])[.!?;](?=\s+[A-Z])|\n|(?i:\bfilled\b|\bposted\b|\bstart(?:s|ing)?\b|\bbegins?\b)"
+)
 
 _DEADLINE_LINE = re.compile(r"\*\*deadline\b", re.I)
 _CHECK_LINE = re.compile(r"\*\*check before applying:?\*\*:?\s*(.*)", re.I)
@@ -45,6 +55,10 @@ def first_date(text: str) -> date | None:
         found.append((match.start(), int(match[3]), _MONTHS.index(match[1][:3].lower()) + 1, int(match[2])))
     for match in _DAY_FIRST.finditer(text):
         found.append((match.start(), int(match[3]), _MONTHS.index(match[2][:3].lower()) + 1, int(match[1])))
+    for match in _SLASHED.finditer(text):
+        first, second = int(match[1]), int(match[2])
+        month, day = (second, first) if first > 12 else (first, second)
+        found.append((match.start(), int(match[3]), month, day))
     for _, year, month, day in sorted(found):
         try:
             return date(year, month, day)
@@ -56,7 +70,9 @@ def first_date(text: str) -> date | None:
 def from_posting(description: str) -> str | None:
     """The closing date a posting states, as an ISO date, or None."""
     for cue in _CUE.finditer(description or ""):
-        when = first_date(description[cue.end():cue.end() + _CUE_REACH])
+        after = description[cue.end():cue.end() + _CUE_REACH]
+        stop = _CUE_STOP.search(after)
+        when = first_date(after[:stop.start()] if stop else after)
         if when:
             return when.isoformat()
     return None

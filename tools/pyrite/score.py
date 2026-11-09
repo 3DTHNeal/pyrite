@@ -10,10 +10,10 @@ from . import quality
 # or `quality.rejection` returns for a posting already stored: its score, reasons, flags, track, or whether it's kept.
 # The next sweep then rescores the prospects nobody has acted on, so none keeps an old score or a reason in old words.
 # Changes to `freshness` and `promotion` don't need it, since the dashboard works those out afresh on every load.
-VERSION = 1
+VERSION = 2
 
 FOREIGN = re.compile(
-    r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|mexico|brazil|argentina|colombia|"
+    r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|(?<!new\s)mexico|brazil|argentina|colombia|"
     r"uk|u\.k\.|united kingdom|england|london|ireland|dublin|germany|munich|berlin|france|paris|spain|madrid|"
     r"italy|netherlands|amsterdam|sweden|stockholm|switzerland|zurich|poland|warsaw|romania|czech|prague|"
     r"israel|tel aviv|india|bengaluru|bangalore|hyderabad|karnataka|pune|chennai|china|shanghai|beijing|"
@@ -25,9 +25,39 @@ FOREIGN = re.compile(
     r"costa rica|uruguay|pakistan|bangladesh|sri lanka|hong kong)\b",
     re.I,
 )
+US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
+    "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+    "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+    "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+}
+# A state as boards write it: the abbreviation in capitals, so "in" and "or" stay words, or the name in any case.
+_STATE = rf"(?:(?:{'|'.join(US_STATES)})\b|(?i:{'|'.join(sorted(US_STATES.values(), key=len, reverse=True))})\b)"
 US_MARKER = re.compile(r"\b(united states|u\.s\.a?\.?|usa|us)\b|\bremote\s*[-,:(]?\s*us\b", re.I)
 REMOTE = re.compile(r"\b(remote|work from home|virtual|distributed|anywhere)\b", re.I)
-STATE_LIMITED = re.compile(r"Remote\s*[-–]\s*(?!US\b|USA\b)(?:[A-Z]{2}\b|SF\b|Bay Area)")
+# A remote role open only to one state or area: "Remote - CA", "REMOTE (Texas)", "Remote, MA" or "CA - Remote". Any two
+# capitals after "Remote" count, as they always have, since a country code there is no better.
+STATE_LIMITED = re.compile(
+    rf"(?i:remote)\s*(?:[-–,:]\s*|\(\s*)(?:(?!US\b|USA\b)[A-Z]{{2}}\b|SF\b|(?i:bay area)|{_STATE})|{_STATE}\s*[-–(]\s*(?i:remote)\b"
+)
+# A US state just after a foreign place's name makes it the American namesake: Dublin, CA or Paris, Texas.
+STATE_AFTER = re.compile(rf"[\s,(\-–]+({_STATE})")
+# Unless that "state" is the country's own code, as in "Toronto, CA" or "Pune, IN". Ontario, CA is the Californian city,
+# since boards write the province "ON" or in full.
+COUNTRY_CODES = {
+    "CA": ("canada", "canadian", "toronto", "vancouver", "montreal"),
+    "DE": ("germany", "munich", "berlin"),
+    "IN": ("india", "bengaluru", "bangalore", "hyderabad", "karnataka", "pune", "chennai"),
+    "IL": ("israel", "tel aviv"),
+    "CO": ("colombia",),
+    "AR": ("argentina",),
+    "ID": ("indonesia",),
+}
 MULTI_LOCATION = re.compile(r"^\s*\d+\s+locations?\s*$", re.I)
 
 
@@ -171,12 +201,44 @@ def _any(patterns, text, flags=re.I):
     return any(re.search(p, text, flags) for p in patterns)
 
 
-def plain_pattern(phrase: str) -> str:
+# What may come between plain words: spaces, commas, hyphens, periods and parentheses, so "St. Louis" matches
+# "St Louis" and "Madison, WI" matches "Madison (WI)".
+_BETWEEN = r"[\s,\-–.()]+"
+
+
+def _words(words: list[str]) -> str:
+    return _BETWEEN.join(re.escape(word) for word in words)
+
+
+def _state_at_end(words: list[str]) -> tuple[list[str], str] | None:
+    """The words before a US state that ends a place, such as "Madison, WI" or "Raleigh, North Carolina", and the
+    state as its abbreviation. None when the place doesn't end in a state, or is only a state."""
+    names = {name.lower(): abbr for abbr, name in US_STATES.items()}
+    for size in (3, 2, 1):
+        if len(words) > size:
+            tail = " ".join(words[-size:])
+            abbr = tail.upper() if size == 1 and tail.upper() in US_STATES else names.get(tail.lower())
+            if abbr:
+                return words[:-size], abbr
+    return None
+
+
+def plain_pattern(phrase: str, place: bool = False) -> str:
     """A pattern for words written plainly, such as "Springfield, IL" or "data engineer": each word whole, in any case,
-    with any spaces, commas or hyphens between them. So "springfield il" and "Springfield,IL" match the first, and
-    "Big Data Engineer" the second, but "Springfielder" and "data engineering" don't."""
-    words = re.findall(r"[^\s,\-–]+", str(phrase))
-    return r"(?<!\w)" + r"[\s,\-–]+".join(re.escape(word) for word in words) + r"(?!\w)" if words else r"(?!)"
+    with any spaces, commas, hyphens, periods or parentheses between them. So "springfield il" and "Springfield,IL"
+    match the first, and "Big Data Engineer" the second, but "Springfielder" and "data engineering" don't.
+
+    A `place` that ends in a US state matches it written either way and on either side, so "Madison, WI" also matches
+    "Madison, Wisconsin, United States" and "US-WI-Madison"."""
+    words = re.findall(r"[^\s,\-–.()]+", str(phrase))
+    if not words:
+        return r"(?!)"
+    split = _state_at_end(words) if place else None
+    if not split:
+        return rf"(?<!\w){_words(words)}(?!\w)"
+    town, abbr = split
+    state = rf"(?:{re.escape(abbr)}|{_words(US_STATES[abbr].split())})"
+    return rf"(?<!\w)(?:{_words(town)}{_BETWEEN}{state}|{state}{_BETWEEN}{_words(town)})(?!\w)"
 
 
 def _plain(value) -> list[str]:
@@ -186,12 +248,24 @@ def _plain(value) -> list[str]:
 
 def local_patterns(loc_cfg: dict) -> list[str]:
     """[location]'s patterns under `local`, and its plain place names under `places`, as patterns."""
-    return list(loc_cfg.get("local", [])) + [plain_pattern(place) for place in _plain(loc_cfg.get("places"))]
+    return list(loc_cfg.get("local", [])) + [plain_pattern(place, place=True) for place in _plain(loc_cfg.get("places"))]
 
 
 def title_patterns(track: dict) -> list[str]:
     """A [[track]]'s patterns under `title`, and its plain job-title words under `titles`, as patterns."""
     return list(track.get("title", [])) + [plain_pattern(words) for words in _plain(track.get("titles"))]
+
+
+def _foreign(text: str) -> bool:
+    """Whether a place is outside the US. A foreign name with a US state after it is an American town of that name."""
+    for found in FOREIGN.finditer(text):
+        state = STATE_AFTER.match(text, found.end())
+        if not state:
+            return True
+        abbr = state.group(1) if state.group(1) in US_STATES else ""
+        if abbr and found.group(0).lower().split(",")[0] in COUNTRY_CODES.get(abbr, ()):
+            return True
+    return False
 
 
 def classify_location(location: str, workplace: str, cfg: dict) -> str:
@@ -211,7 +285,10 @@ def classify_location(location: str, workplace: str, cfg: dict) -> str:
             return "out" if _any(elsewhere or [], text) else "remote"
         if US_MARKER.search(text):
             return "remote"
-        return "out" if FOREIGN.search(text) or STATE_LIMITED.search(text) else "remote"
+        # Out only when every place it names is: "San Francisco | Toronto" is open from San Francisco. A bare "Remote"
+        # names no place, so "Remote | Toronto" is still Toronto's.
+        places = [place for place in re.split(r"[|;]", text) if REMOTE.sub("", place).strip(" -–,:()/")]
+        return "out" if places and all(_foreign(place) or STATE_LIMITED.search(place) for place in places) else "remote"
 
     if not text.strip() or MULTI_LOCATION.match(text):
         return "unknown"
@@ -225,27 +302,66 @@ def _in_any_industry(names: list, job: dict, cfg: dict) -> bool:
     return any(_in_industry(i, job, needed) for i in rules.get("industry", []) if i["name"] in names)
 
 
-def match_track(title: str, cfg: dict, job: dict | None = None) -> tuple[str, int] | None:
+def match_track(title: str, cfg: dict, job: dict | None = None, industry_unknown: bool = False) -> tuple[str, int] | None:
     """Return (track name, seniority points) for an eligible title, else None.
 
     A track with `industries` applies only to postings in one of those industries, judged
     the way promotion judges them: from the employer, the title and the description. `job`
-    carries the employer and description; without it, such a track is skipped.
+    carries the employer and description; without it, such a track is skipped. With
+    `industry_unknown`, as for a listing whose description hasn't been fetched yet, such a
+    track counts as matching, so the description is fetched and the industry judged from it.
     """
     scoring = cfg["scoring"]
     if _any([rf"\b(?:{p})\b" for p in scoring["exclude_titles"]], title):
         return None
-    top = _any([rf"\b{p}\b" for p in scoring["level_top"]], title)
-    mid = _any([rf"\b{p}\b\.?" for p in scoring["level_mid"]], title)
+    # Grouped, so a pattern with alternatives such as "principal|staff" is whole words too, not "Principality".
+    top = _any([rf"\b(?:{p})\b" for p in scoring["level_top"]], title)
+    mid = _any([rf"\b(?:{p})\b\.?" for p in scoring["level_mid"]], title)
     level_points = 10 if top else 5 if mid else 0
     for track in cfg.get("track", []):  # A blank search.toml has none yet.
         if _any(title_patterns(track), title):
             if track.get("needs_level") and not (top or mid):
                 continue
-            if track.get("industries") and not (job and _in_any_industry(track["industries"], {**job, "title": title}, cfg)):
+            if (track.get("industries") and not industry_unknown
+                    and not (job and _in_any_industry(track["industries"], {**job, "title": title}, cfg))):
                 continue
             return track["name"], level_points
     return None
+
+
+def _tables(value) -> list[dict]:
+    """The tables in a list from search.toml, passing over anything else written there."""
+    return [item for item in value or [] if isinstance(item, dict)]
+
+
+def _setting_patterns(cfg: dict) -> list[tuple[str, str]]:
+    """Every pattern search.toml gives the filters and the ranking, as (where it's set, the pattern as it's used)."""
+    loc, scoring, promote = cfg.get("location") or {}, cfg.get("scoring") or {}, cfg.get("promote") or {}
+    found = [(f"{key} under [location]", p) for key in ("local", "local_exact", "remote_home", "remote_elsewhere")
+             for p in loc.get(key) or []]
+    for track in _tables(cfg.get("track")):
+        found += [(f"title under the [[track]] named {track.get('name', '?')}", p) for p in track.get("title") or []]
+    found += [(f"{key} under [scoring]", rf"\b(?:{p})\b") for key in ("exclude_titles", "level_top", "level_mid")
+              for p in scoring.get(key) or []]
+    found += [("keywords under [scoring]", entry[0]) for entry in scoring.get("keywords") or [] if entry]
+    found += [("flags under [scoring]", entry[1]) for entry in scoring.get("flags") or [] if len(entry) > 1]
+    found += [("cities under [promote]", city["match"]) for city in _tables(promote.get("cities")) if city.get("match")]
+    for industry in _tables(promote.get("industry")):
+        found += [(f"terms of the [[promote.industry]] named {industry.get('name', '?')}", p) for p in industry.get("terms") or []]
+    return found
+
+
+def pattern_problems(cfg: dict) -> list[str]:
+    """Each pattern in search.toml that isn't a valid regular expression, naming its setting. One bad pattern would
+    otherwise stop every posting from being judged, and look like every job board failing."""
+    problems = []
+    for where, pattern in _setting_patterns(cfg):
+        try:
+            re.compile(str(pattern))
+        except re.error as err:
+            shown = re.sub(r"^\\b\(\?:(.*)\)\\b$", r"\1", str(pattern))
+            problems.append(f"{where} in profile/search.toml has '{shown}', which isn't a valid pattern ({err}).")
+    return problems
 
 
 def _matched_words(found: re.Match) -> str:

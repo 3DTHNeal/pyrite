@@ -25,6 +25,7 @@ SHEET_JSON = "fill-sheet.json"
 # The role text comes from resume.md, so a sheet made from a draft the assay doesn't vouch for says so first.
 NOT_PASSED = "This role text hasn't passed the assay."
 NOT_LOOKED_UP = "Nothing looked up a passing check for this folder."
+SHEET_PROBLEM = f"{PASTE_SHEET.as_posix()} has a mistake."
 BULLET = "•"
 
 _ROLE_HEADING = re.compile(r"^###\s+work experience\b", re.IGNORECASE)
@@ -39,6 +40,20 @@ _FORM_NOTE = re.compile(
     r"\bsalary\b|\bpay\b|compensation|\$\s?\d|\breferr(al|ed|er)s?\b|\brecruiter\b|hiring manager|job id|\breq(uisition)?\b|how did you hear",
     re.IGNORECASE,
 )
+
+
+# A built cover letter is named `<Name>_Cover_Letter_<Company>`. Matched as that token, not as any "letter", since
+# a company called Letterbox or a surname like Letterman would otherwise make the resume a cover letter.
+_LETTER_FILE = re.compile(r"(?:^|_)cover[_ -]?letter(?:_|$)", re.IGNORECASE)
+
+
+class SheetError(ValueError):
+    """The paste sheet can't be made into a fill sheet as it is, with a message that says what to fix."""
+
+
+def is_letter(stem: str) -> bool:
+    """Whether a file name (without its extension) is a cover letter's."""
+    return bool(_LETTER_FILE.search(stem))
 
 
 def _norm(text: str) -> str:
@@ -68,10 +83,11 @@ def paste_roles(lines: list[str]) -> list[dict]:
             elif fence is None and _FENCE_OPEN.match(lines[j]):
                 start = j + 1
                 end = start
-                while end < len(lines) and not _FENCE_OPEN.match(lines[end]):
+                # A block never closed ends at the next heading, rather than taking the rest of the sheet with it.
+                while end < len(lines) and not _FENCE_OPEN.match(lines[end]) and not lines[end].startswith("#"):
                     end += 1
                 fence = (start, end)
-                j = end
+                j = end - 1 if end < len(lines) and lines[end].startswith("#") else end
             j += 1
         roles.append({"title": fields.get("Job title", ""), "company": fields.get("Company", ""), "fence": fence, "line": i})
         i = j
@@ -105,9 +121,37 @@ def _find(role: dict, candidates: list[dict]) -> dict | None:
     return None
 
 
+def close_fences(lines: list[str]) -> tuple[list[str], list[str]]:
+    """The sheet's lines with every ``` block closed, and what was wrong with each one that wasn't.
+
+    A block missing its closing ``` would otherwise run on through every section after it, so a role's description
+    would hold the next role's table and the questions would vanish. Role text never holds a Markdown heading, so a
+    block still open at the next heading ends there.
+    """
+    out: list[str] = []
+    problems: list[str] = []
+    opened = 0
+    section = ""
+    for number, line in enumerate(lines, 1):
+        if opened and line.startswith("#"):
+            out.append("```")
+            problems.append(f"The ``` block at line {opened} ({section or 'the top'}) isn't closed before {line.strip()!r}. "
+                            "Close it with ``` on a line of its own.")
+            opened = 0
+        if line.startswith("```"):
+            opened = 0 if opened else number
+        elif not opened and line.startswith("#"):
+            section = line.lstrip("#").strip()
+        out.append(line)
+    if opened:
+        out.append("```")
+        problems.append(f"The ``` block at line {opened} ({section or 'the top'}) is never closed. Close it with ``` on a line of its own.")
+    return out, problems
+
+
 def merge(paste: str, resume: str) -> tuple[list[str], dict]:
     """The paste sheet's lines with each matched role's text replaced by the resume's, and what matched."""
-    lines = paste.splitlines()
+    lines, problems = close_fences(paste.splitlines())
     sheet = paste_roles(lines)
     tailored = resume_roles(resume)
     report: dict[str, list] = {"tailored": [], "kept": [], "unmatched": []}
@@ -129,6 +173,7 @@ def merge(paste: str, resume: str) -> tuple[list[str], dict]:
             report["unmatched"].append(label(role))
     for key in report:
         report[key].reverse() if key != "unmatched" else None
+    report["problems"] = problems
     return lines, report
 
 
@@ -208,8 +253,8 @@ def compose(paste: str, resume: str, folder: Path, company: str, title: str, url
     # The resume first, since it's the one file every site takes. Workday gets the .docx: from a PDF it keeps
     # every wrapped line as a line break, so the PDF is named only as the alternative.
     by_kind = sorted({p.stem for p in folder.glob("*.docx")} | {p.stem for p in folder.glob("*.pdf")},
-                     key=lambda n: ("letter" in n.lower(), n))
-    txts = sorted((p.name for p in folder.glob("*.txt")), key=lambda n: ("letter" in n.lower(), n))
+                     key=lambda n: (is_letter(n), n))
+    txts = sorted((p.name for p in folder.glob("*.txt")), key=lambda n: (is_letter(Path(n).stem), n))
     notes = _form_notes(folder)
     out = [
         f"# Fill sheet: {company}: {title}".rstrip(": "),
@@ -221,6 +266,8 @@ def compose(paste: str, resume: str, folder: Path, company: str, title: str, url
     ]
     if unchecked:
         out += [f"> **{NOT_PASSED}** {unchecked} Check it again and make this sheet again before you type any of it into a form.", ""]
+    for problem in report["problems"]:
+        out += [f"> **{SHEET_PROBLEM}** {problem}", ""]
     out += [
         "## This application",
         "",
@@ -229,7 +276,7 @@ def compose(paste: str, resume: str, folder: Path, company: str, title: str, url
         out.append(f"- **Posting:** {url}")
     explained = False
     for stem in by_kind:
-        kind = "cover letter" if "letter" in stem.lower() else "resume"
+        kind = "cover letter" if is_letter(stem) else "resume"
         docx, pdf = (folder / f"{stem}.docx").exists(), (folder / f"{stem}.pdf").exists()
         if docx and pdf:
             why = "" if explained else ": Workday keeps a PDF's line wraps as line breaks, so the PDF is for sites that want one"
@@ -271,9 +318,22 @@ def clean(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip(" .;:,")
 
 
+# The word before a full stop that doesn't end a sentence: an initial ("J. Smith", "U.S. citizen") or a title or place
+# abbreviation ("Mary St. John", "St. Louis", "Dr. Lee"). Splitting there would type "Mary St" as a name.
+_ABBREVIATION = re.compile(r"(?:^|[\s(.])(?:[A-Za-z]|St|Ste|Mt|Ft|Pt|Dr|Mr|Mrs|Ms|Mx|Jr|Sr|Prof|Rev|Hon|Gen|Col|Capt|Lt|Sgt"
+                           r"|Inc|Co|Corp|Ltd|Bros|Ave|Blvd|Rd|vs|etc|approx|dept|e\.g|i\.e)$", re.IGNORECASE)
+
+
 def answer(value: str) -> str:
-    """The answer itself, without the sheet's reasoning: "No. Remote or Madison area" is "No"."""
-    return re.split(r"\.\s|;\s", clean(value), maxsplit=1)[0].strip(" .")
+    """The answer itself, without the sheet's reasoning: "No. Remote or Madison area" is "No".
+
+    The reasoning starts at the first full stop or semicolon that ends a sentence, so "St. Louis" and "J. Smith" stay whole.
+    """
+    text = clean(value)
+    for stop in re.finditer(r"\.\s|;\s", text):
+        if stop.group(0).startswith(";") or not _ABBREVIATION.search(text[:stop.start()]):
+            return text[:stop.start()].strip(" .")
+    return text.strip(" .")
 
 
 # A row that tells the candidate what to answer rather than answering: "leave it blank if optional", "the candidate clicks these".
@@ -296,6 +356,8 @@ def sections(lines: list[str]) -> list[dict]:
     current: dict | None = None
     in_fence = False
     for line in lines:
+        if in_fence and line.startswith("#"):
+            in_fence = False  # Never closed: it ends at the heading, as `close_fences` says.
         if line.startswith("```"):
             in_fence = not in_fence
             if current is not None:
@@ -365,7 +427,9 @@ def parse_address(value: str) -> dict[str, str]:
     """Street, city, state and postal code from a sheet's address line, written as "street City: x. State: y. ZIP: z"."""
     text = clean(value)
     out = {"street": "", "city": "", "state": "", "postal": ""}
-    labelled = {m.group(1).lower(): m.group(2).strip(" .,") for m in re.finditer(r"(City|State|ZIP|Zip|Postal(?: code)?)\s*:\s*([^.;]+)", text)}
+    # Each value runs to the next "Label:", so a city such as "St. Louis" keeps the words after its full stop.
+    labelled = {m.group(1).lower(): m.group(2).strip(" .,") for m in re.finditer(
+        r"(City|State|ZIP|Zip|Postal(?: code)?)\s*:\s*(.+?)(?=\s*(?:;|\b[A-Z][A-Za-z]*(?: [a-z]+)?\s*:|$))", text)}
     out["city"] = labelled.get("city", "")
     out["state"] = labelled.get("state", "")
     out["postal"] = labelled.get("zip", "") or labelled.get("postal", "") or labelled.get("postal code", "")
@@ -444,7 +508,7 @@ def structure(merged_lines: list[str], folder: Path, company: str, title: str, u
                     websites.append(cells[1].strip())
     files: dict[str, str] = {}
     for path in sorted(folder.glob("*.docx")) + sorted(folder.glob("*.pdf")):
-        kind = "cover_letter" if "letter" in path.name.lower() else "resume"
+        kind = "cover_letter" if is_letter(path.stem) else "resume"
         key = kind if path.suffix == ".docx" else f"{kind}_pdf"
         files.setdefault(key, str(path))
     return {
@@ -463,7 +527,8 @@ def structure(merged_lines: list[str], folder: Path, company: str, title: str, u
 
 def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", today: date | None = None, source: str = "",
                unchecked: str = NOT_LOOKED_UP) -> dict:
-    """Write the folder's fill sheet and say what went into it. Raises FileNotFoundError when a source is missing.
+    """Write the folder's fill sheet and say what went into it. Raises FileNotFoundError when a source is missing, and
+    SheetError when the paste sheet doesn't read back as the roles it holds.
 
     `unchecked` is `checks.not_covered` for the job: "" only when its last assay pass covers the folder as it is.
     The sheet is still written when it isn't, since you may want to read it, but it says so at the top.
@@ -481,10 +546,17 @@ def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", 
     paste = paste_path.read_text(encoding="utf-8")
     resume = resume_path.read_text(encoding="utf-8")
     text, report = compose(paste, resume, folder, company, title, url, today or date.today(), unchecked)
-    out = folder / SHEET
-    out.write_text(text, encoding="utf-8")
     merged, _ = merge(paste, resume)
     data = structure(merged, folder, company, title, url, source)
+    # What autofill types from must hold every role the paste sheet has: one lost to a stray ``` would be typed as
+    # another role's text, or not at all. So nothing is written then, and the data from an earlier sheet is taken away.
+    expected = sum(1 for line in paste.splitlines() if _ROLE_HEADING.match(line))
+    if len(data["roles"]) != expected:
+        (folder / SHEET_JSON).unlink(missing_ok=True)
+        raise SheetError(f"{PASTE_SHEET.as_posix()} has {expected} work experience sections, but {len(data['roles'])} read "
+                         "back after merging, so no fill sheet was written. " + " ".join(report["problems"]).strip())
+    out = folder / SHEET
+    out.write_text(text, encoding="utf-8")
     (folder / SHEET_JSON).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     rel = (lambda p: p.relative_to(store.ROOT).as_posix() if p.is_relative_to(store.ROOT) else str(p))
     report["file"] = rel(out)
@@ -494,6 +566,8 @@ def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", 
 
 def summary(report: dict) -> str:
     parts = [f"{len(report['tailored'])} roles tailored"]
+    if report.get("problems"):
+        parts.insert(0, f"{SHEET_PROBLEM} " + " ".join(report["problems"]))
     if report["kept"]:
         parts.append(f"{len(report['kept'])} kept from the sheet")
     if report["unmatched"]:

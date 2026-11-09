@@ -111,6 +111,11 @@ def industry_titles() -> dict[str, str]:
     return _titles(INDUSTRY_TITLES, "industry_titles.csv", "industry_code")
 
 
+def naics_codes(industry: dict) -> list[str]:
+    """An industry's codes as text. Written by hand as naics = [333998], without quotes, they read as numbers."""
+    return [str(code).strip() for code in industry.get("naics") or []]
+
+
 def code_title(titles: dict[str, str], code: str) -> str:
     """'NAICS 3332 Industrial machinery manufacturing' as 'Industrial machinery manufacturing'."""
     return re.sub(rf"^NAICS\s+{re.escape(code)}\s+", "", titles.get(code, "")) or "Not a code the BLS publishes"
@@ -370,7 +375,7 @@ def view(conn, cfg: dict, today: date | None = None) -> dict:
 
     shown = []
     for industry in industries:
-        codes = industry.get("naics", [])
+        codes = naics_codes(industry)
         official = []
         for place in places if codes else []:
             found = numbers.get(place["code"], {})

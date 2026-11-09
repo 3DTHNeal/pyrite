@@ -121,7 +121,7 @@
   </section>
 </main>
 
-<aside id="drawer" class="drawer" hidden aria-label="Job details" tabindex="-1"></aside>
+<aside id="drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-label="Job details" tabindex="-1"></aside>
 <div id="scrim" class="scrim" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
@@ -129,10 +129,10 @@
   <form id="add-form">
   <h2>Add a posting</h2>
   <p class="muted">For anything the watchlist misses, such as a LinkedIn or referral lead. It goes to the front of the next run. Paste the description so the resume can be tailored to it.</p>
-  <label>Company <input id="add-company" required></label>
-  <label>Title <input id="add-title" required></label>
+  <label>Company <input id="add-company" required maxlength="200"></label>
+  <label>Title <input id="add-title" required maxlength="200"></label>
   <label>Link <input id="add-url" type="url" placeholder="https://"></label>
-  <label>Location <input id="add-location"></label>
+  <label>Location <input id="add-location" maxlength="200"></label>
   <label>Description <textarea id="add-description" rows="8"></textarea></label>
   <p id="add-error" class="error" role="alert"></p>
   <div class="row end">

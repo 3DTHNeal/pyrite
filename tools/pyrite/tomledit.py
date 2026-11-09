@@ -421,8 +421,10 @@ def edit_list(text: str, table: str | Path, key: str, remove=(), add=(), literal
                 start -= 1
             if new[start - 1] == ",":
                 start -= 1
-        if not new[line_start:a].strip() and new[end:end + 1] in ("\r", "\n"):
-            start, end = line_start, _line_end(new, end)  # Alone on its line: the line goes.
+        rest = _ws(new, end)
+        if not new[line_start:a].strip() and new[rest:rest + 1] in ("#", "\r", "\n"):
+            # Alone on its line: the line goes, with the comment after it, which was about this item.
+            start, end = line_start, _line_end(new, rest)
         new = new[:start] + new[end:]
     added = [value for value in expected if value not in current]
     if added:
