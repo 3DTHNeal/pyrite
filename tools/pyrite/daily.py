@@ -11,7 +11,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import checks, claude_code
+from . import checks, claude_code, discover, signals, skillage
 from .claude_code import ClaudeFailed, find_claude
 from .cli import BOARD_FIELDS, apply_triage, ensure_folder, finish_job, queue
 from .store import ROOT, get_job, log_event, now, shorten
@@ -61,14 +61,16 @@ def parse_verdict(message: str) -> tuple[str, str] | None:
 
 
 def markings(marks: dict | None) -> str:
-    """Pyrite's own read of a listing: whether it may be a ghost, and any scam signs in its text. The code words these
-    from the listing's dates, reposts and fixed patterns, so they go outside the posting's fence."""
+    """Pyrite's own read of a listing: whether it may be a ghost, any scam signs in its text, its deadline, what its pay
+    says and whether it's rare nearby, then how old the skills it asks for are. The code words these from the listing's
+    dates, reposts, fixed patterns and its own tables, so they go outside the posting's fence."""
     if not marks:
         return ""
     ghost = f"yes, {marks.get('ghost_reason') or 'from its dates and reposts'}" if marks.get("ghost_risk") else "no"
     scam = ", ".join(str(sign) for sign in marks.get("scam_signs") or ()) or "none"
+    more = "".join(f"{line}\n" for line in signals.markings(marks))
     return ("\n\n## Pyrite's markings\n\nFrom Pyrite's own checks of this listing's dates, reposts and wording, not from the job board:\n\n"
-            f"- Possible ghost: {ghost}\n- Scam signs: {scam}\n")
+            f"- Possible ghost: {ghost}\n- Scam signs: {scam}\n{more}" + skillage.prompt_section(marks))
 
 
 def triage_prompt(job, marks: dict | None = None) -> str:
@@ -93,6 +95,7 @@ def tailor_prompt(job, folder: str, cfg: dict, feedback: str = "", polish: str =
     today = date.today()
     text += claude_code.files_section(ROOT, folder, tuple(path.rsplit("/", 1)[1] for path in tailor_files(folder, cfg)))
     text += claude_code.job_line(job) + f"Today is {today:%B} {today.day}, {today.year}.\n"
+    text += skillage.prompt_section(skillage.signals(job["description"] or "", today))
     if feedback:
         text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{feedback}\n"
     if polish:
@@ -248,6 +251,26 @@ def briefing(judged: dict, unjudged: int, ready: list[str], blocked: list[str], 
     return " ".join(parts)
 
 
+def _research_skills(conn, cfg: dict, waiting: list[dict], claude: str, report) -> list[dict] | None:
+    """Date the skills these postings ask years of that the table doesn't know, and queue again with what was learned.
+    Returns None when there was nothing to look up. A failed lookup costs only itself: the run goes on without it."""
+    ids = [job["id"] for job in waiting]
+    marks = ",".join("?" * len(ids))
+    texts = [row[0] or "" for row in conn.execute(f"SELECT description FROM jobs WHERE id IN ({marks})", ids)] if ids else []
+    phrases = skillage.to_research(texts)
+    if not phrases:
+        return None
+    report(f"Looking up how long {_count(len(phrases), 'skill')} in the new postings have existed")
+    try:
+        skillage.research(conn, cfg, phrases, claude)
+    except ClaudeFailed as err:
+        if "auth login" in str(err):
+            raise NotSignedIn(str(err)) from err
+        report(f"Couldn't look up the skills' ages: {err}")
+        return None
+    return queue(conn, cfg)["to_triage"]
+
+
 def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) -> str:
     """Judge the new postings, tailor the best, and leave a briefing. Returns the briefing."""
     claude = claude or find_claude()
@@ -256,7 +279,13 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
     deadline = time.monotonic() + TIME_LIMIT_MINUTES * 60
     judged, unjudged = dict.fromkeys(FITS, 0), 0
 
+    # Nothing past its deadline is worth a judgement or a draft. The sweep passes on these too; this catches a day's turn.
+    passed = discover.settle_expired(conn)
+    if passed:
+        report(f"Passed on {_count(len(passed), 'posting')} whose deadline has gone by.")
     waiting = queue(conn, cfg)["to_triage"]
+    if skillage.enabled(cfg):
+        waiting = _research_skills(conn, cfg, waiting, claude, report) or waiting
     for index, job in enumerate(waiting, start=1):
         if time.monotonic() > deadline:
             unjudged += 1

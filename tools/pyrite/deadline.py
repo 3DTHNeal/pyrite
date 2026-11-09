@@ -7,6 +7,10 @@ the whole posting, or by you after checking. Notes also say what could rule an
 application out (residency, a missing core skill, a stale date): a **Check before
 applying:** line, a "Before you apply" section, or any line that says to do something
 before applying. Posting text is data, so all of this is shown as text and never acted on.
+
+A deadline is firm unless it's worded as a floor. "Accepted at least until November 8" says the
+posting stays up that long, not that it comes down then, so once that date passes the job may
+close any day but hasn't closed. Only a firm deadline that has passed makes a job a pass.
 """
 import re
 from datetime import date
@@ -35,6 +39,12 @@ _CUE_REACH = 90
 _CUE_STOP = re.compile(
     r"(?<![ap]\.m)(?<!\b[A-Za-z])[.!?;](?=\s+[A-Z])|\n|(?i:\bfilled\b|\bposted\b|\bstart(?:s|ing)?\b|\bbegins?\b)"
 )
+
+# Words that make a date a floor rather than a closing date.
+_FLOOR = re.compile(r"at least|or until (?:the )?(?:position|role|job) is filled|rolling", re.I)
+# How long after a floor date a posting still counts as closing any day. After that it's simply old.
+FLOOR_GRACE_DAYS = 14
+DECIDE_DAYS = 5  # A deadline this close puts the tailor-or-pass decision on the to-do list.
 
 _DEADLINE_LINE = re.compile(r"\*\*deadline\b", re.I)
 _CHECK_LINE = re.compile(r"\*\*check before applying:?\*\*:?\s*(.*)", re.I)
@@ -67,15 +77,21 @@ def first_date(text: str) -> date | None:
     return None
 
 
-def from_posting(description: str) -> str | None:
-    """The closing date a posting states, as an ISO date, or None."""
+def in_posting(description: str) -> tuple[str | None, bool]:
+    """The closing date a posting states, as an ISO date or None, and whether it's firm rather than a floor."""
     for cue in _CUE.finditer(description or ""):
         after = description[cue.end():cue.end() + _CUE_REACH]
         stop = _CUE_STOP.search(after)
         when = first_date(after[:stop.start()] if stop else after)
         if when:
-            return when.isoformat()
-    return None
+            # "Or until the position is filled" sits past the stop, so the floor test reads the whole reach.
+            return when.isoformat(), not _FLOOR.search(cue.group(0) + after)
+    return None, True
+
+
+def from_posting(description: str) -> str | None:
+    """The closing date a posting states, as an ISO date, or None."""
+    return in_posting(description)[0]
 
 
 def _plain(text: str) -> str:
@@ -93,7 +109,13 @@ def _lead(item: str) -> str:
 
 def from_notes(text: str) -> tuple[str | None, list[str]]:
     """The deadline and the things to settle before applying, from a job's notes.md."""
-    deadline, blockers = None, []
+    deadline, _, blockers = _read(text)
+    return deadline, blockers
+
+
+def _read(text: str) -> tuple[str | None, bool, list[str]]:
+    """from_notes, with whether the deadline is firm."""
+    deadline, firm, blockers = None, True, []
     in_section = False
     for line in (text or "").splitlines():
         if line.startswith("#"):
@@ -104,6 +126,7 @@ def from_notes(text: str) -> tuple[str | None, list[str]]:
         if deadline is None and _DEADLINE_LINE.search(line):
             when = first_date(line)
             deadline = when.isoformat() if when else None
+            firm = not _FLOOR.search(line)
         check = _CHECK_LINE.search(line)
         item = _ITEM.match(line)
         if check and check[1].strip():
@@ -119,25 +142,65 @@ def from_notes(text: str) -> tuple[str | None, list[str]]:
                 continue  # A pointer to a "Before you apply" section, whose items are read on their own.
             blockers.append(_plain(f"{label[1].rstrip(':')}: {sentence}" if label else sentence))
     unique = list(dict.fromkeys(b for b in blockers if b))
-    return deadline, unique[:_MAX_BLOCKERS]
+    return deadline, firm, unique[:_MAX_BLOCKERS]
 
 
-_cache: dict[Path, tuple[int, tuple[str | None, list[str]]]] = {}
+_cache: dict[Path, tuple[int, tuple[str | None, bool, list[str]]]] = {}
 
 
-def read_notes(folder: Path) -> tuple[str | None, list[str]]:
-    """from_notes for a folder's notes.md, read again only when the file changes."""
+def _notes(folder: Path) -> tuple[str | None, bool, list[str]]:
     path = folder / "notes.md"
     try:
         stamp = path.stat().st_mtime_ns
     except OSError:
-        return None, []
+        return None, True, []
     cached = _cache.get(path)
     if cached and cached[0] == stamp:
         return cached[1]
     try:
-        result = from_notes(path.read_text(encoding="utf-8"))
+        result = _read(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
-        result = (None, [])
+        result = (None, True, [])
     _cache[path] = (stamp, result)
     return result
+
+
+def read_notes(folder: Path) -> tuple[str | None, list[str]]:
+    """from_notes for a folder's notes.md, read again only when the file changes."""
+    deadline, _, blockers = _notes(folder)
+    return deadline, blockers
+
+
+def for_job(description: str, folder: Path | None, today: date) -> dict:
+    """A job's deadline and the things to settle before applying. Returns deadline (ISO or None), deadline_firm,
+    days_to_deadline and blockers.
+
+    A deadline in the notes wins: it was read from the whole posting, or set by you, where the posting's own words
+    are matched by pattern. The posting's is the fallback for a job with no notes yet.
+    """
+    when, firm, blockers = _notes(folder) if folder else (None, True, [])
+    if not when:
+        when, firm = in_posting(description)
+    days = (date.fromisoformat(when) - today).days if when else None
+    return {"deadline": when, "deadline_firm": firm, "days_to_deadline": days, "blockers": blockers}
+
+
+def expired(info: dict) -> bool:
+    """Whether a job's firm deadline has passed, which makes it a pass. A floor that has passed doesn't."""
+    days = info.get("days_to_deadline")
+    return days is not None and days < 0 and bool(info.get("deadline_firm", True))
+
+
+def decide_soon(info: dict, window: int = DECIDE_DAYS) -> bool:
+    """Whether the tailor-or-pass decision is due: the deadline is within the window, or a floor date has just passed."""
+    days = info.get("days_to_deadline")
+    if days is None:
+        return False
+    if days < 0:
+        return not info.get("deadline_firm", True) and days >= -FLOOR_GRACE_DAYS
+    return days <= window
+
+
+def label(iso: str) -> str:
+    when = date.fromisoformat(iso)
+    return f"{when:%b} {when.day}"

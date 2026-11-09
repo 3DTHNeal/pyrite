@@ -336,6 +336,34 @@ def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict], list[dict], dict]
     return sections, kept, {"points": dropped, "sources": unconfirmed}
 
 
+def ask_web(conn, claude: str, kind: str, text: str, model: str, minutes: int) -> tuple[str, set[str]]:
+    """One web-only Claude run: its closing message, and the pages it came across, for checking what it cites.
+    Recorded under `kind` for the usage panel. Raises ClaudeFailed when it doesn't finish."""
+    began = time.monotonic()
+    try:
+        out = claude_code.run_process(command(claude, model), input=text, cwd=ROOT, timeout=minutes * 60)
+    except subprocess.TimeoutExpired as err:
+        claude_code.record(conn, None, kind, {}, time.monotonic() - began, ok=False)
+        raise ClaudeFailed(f"Claude hadn't finished after {minutes} minutes.") from err
+    except OSError as err:
+        raise ClaudeFailed(f"Couldn't run Claude Code: {err}") from err
+    answer, result, seen = read_stream(out.stdout or "")
+    failed = bool(out.returncode or result.get("is_error") or not result)
+    claude_code.record(conn, None, kind, result, time.monotonic() - began, ok=not failed)
+    if failed:
+        message = answer or (out.stderr or "").strip()
+        if "not logged in" in message.lower():
+            raise ClaudeFailed(sign_in_help(claude))
+        raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
+    return answer, seen
+
+
+def cited(url: str, seen: Iterable[str]) -> bool:
+    """Whether a run came across this page, by the same rule `vet` holds an outlook's sources to."""
+    bare = _bare(url)
+    return bool(bare) and bare in {page for page in map(_bare, seen) if page}
+
+
 def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
     """Research one industry and keep the outlook if any of it survives the source check."""
     from . import market  # market lists each industry's outlook, so it imports this module first
@@ -362,23 +390,7 @@ def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
             places.update({k: settings.get(k) for k in ("metro", "state") if settings.get(k)})
         text = prompt(name, industry, places, official, datetime.now().date().isoformat())
         model = str(settings.get("model") or DEFAULT_MODEL)
-        began = time.monotonic()
-        cmd = command(claude, model)
-        try:
-            out = claude_code.run_process(cmd, input=text, cwd=ROOT, timeout=TIME_LIMIT_MINUTES * 60)
-        except subprocess.TimeoutExpired as err:
-            claude_code.record(conn, None, KIND, {}, time.monotonic() - began, ok=False)
-            raise ClaudeFailed(f"Claude hadn't finished after {TIME_LIMIT_MINUTES} minutes.") from err
-        except OSError as err:
-            raise ClaudeFailed(f"Couldn't run Claude Code: {err}") from err
-        answer, result, seen = read_stream(out.stdout or "")
-        failed = bool(out.returncode or result.get("is_error") or not result)
-        claude_code.record(conn, None, KIND, result, time.monotonic() - began, ok=not failed)
-        if failed:
-            message = answer or (out.stderr or "").strip()
-            if "not logged in" in message.lower():
-                raise ClaudeFailed(sign_in_help(claude))
-            raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
+        answer, seen = ask_web(conn, claude, KIND, text, model, TIME_LIMIT_MINUTES)
         sections, kept, dropped = vet(answer, seen)
         if not sections:
             raise ClaudeFailed("None of the outlook cited a page Claude had actually found, so none of it was kept.")

@@ -1,0 +1,266 @@
+"""Deadlines that pass on a job or put the decision first, pay against your floor and similar roles, skills asked for
+longer than they've existed, and roles that rarely come up nearby."""
+import json
+import unittest
+from collections import Counter
+from datetime import date, timedelta
+from pathlib import Path
+from unittest import mock
+
+from support import CFG, Base  # Also sets up the throwaway workspace every path points into.
+
+from pyrite import cli, daily, deadline, discover, pay, server, signals, skillage, store
+
+TODAY = date(2026, 11, 8)
+
+
+def spelled(day: date) -> str:
+    return f"{day:%B} {day.day}, {day.year}"
+
+
+class Deadlines(unittest.TestCase):
+    def test_at_least_until_is_a_floor_and_the_rest_are_firm(self):
+        self.assertEqual(deadline.in_posting("Applications will be accepted at least until November 6, 2026."), ("2026-11-06", False))
+        self.assertEqual(deadline.in_posting("Applications accepted until November 6, 2026."), ("2026-11-06", True))
+        self.assertEqual(deadline.in_posting("Apply by November 6, 2026, or until the position is filled."), ("2026-11-06", False))
+        self.assertEqual(deadline.in_posting("This posting is expected to close on November 16th, 2026."), ("2026-11-16", True))
+        self.assertEqual(deadline.in_posting("No dates here."), (None, True))
+
+    def test_a_notes_deadline_wins_and_keeps_its_own_firmness(self):
+        tmp = Path(self.id().replace(".", "_"))
+        folder = store.ROOT / "applications" / tmp.name
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "notes.md").write_text("- **Deadline:** accepted at least until November 20, 2026\n", encoding="utf-8")
+        info = deadline.for_job("Apply by November 1, 2026.", folder, TODAY)
+        self.assertEqual((info["deadline"], info["deadline_firm"], info["days_to_deadline"]), ("2026-11-20", False, 12))
+
+    def test_only_a_firm_deadline_gone_by_expires(self):
+        self.assertTrue(deadline.expired({"days_to_deadline": -1, "deadline_firm": True}))
+        self.assertFalse(deadline.expired({"days_to_deadline": -1, "deadline_firm": False}))
+        self.assertFalse(deadline.expired({"days_to_deadline": 0, "deadline_firm": True}))
+        self.assertFalse(deadline.expired({"days_to_deadline": None}))
+
+    def test_the_decision_is_due_within_the_window_or_just_past_a_floor(self):
+        due = lambda days, firm=True: deadline.decide_soon({"days_to_deadline": days, "deadline_firm": firm}, 5)
+        self.assertTrue(due(0))
+        self.assertTrue(due(5))
+        self.assertFalse(due(6))
+        self.assertFalse(due(-1))
+        self.assertTrue(due(-3, firm=False))
+        self.assertFalse(due(-deadline.FLOOR_GRACE_DAYS - 1, firm=False))
+
+
+class ExpiredJobs(Base):
+    def posting(self, days: int, floor: bool = False) -> str:
+        cue = "accepted at least until" if floor else "Applications accepted until"
+        return f"About us. {cue} {spelled(date.today() + timedelta(days=days))}. Benefits."
+
+    def test_the_sweep_passes_on_jobs_not_yet_sent_once_their_deadline_goes_by(self):
+        gone = [self.add(source_id=str(n), status=status, description=self.posting(-2))
+                for n, status in enumerate(("new", "shortlisted", "ready"))]
+        floor = self.add(source_id="10", description=self.posting(-2, floor=True))
+        open_ = self.add(source_id="11", description=self.posting(3))
+        sent = self.add(source_id="12", status="applied", applied_at=store.now(), description=self.posting(-2))
+        self.assertEqual(sorted(discover.settle_expired(self.conn)), sorted(gone))
+        for job in gone:
+            row = store.get_job(self.conn, job)
+            self.assertEqual(row["status"], "passed")
+        self.assertEqual({store.get_job(self.conn, j)["status"] for j in (floor, open_)}, {"new"})
+        self.assertEqual(store.get_job(self.conn, sent)["status"], "applied")
+        detail = self.conn.execute("SELECT detail FROM events WHERE job_id = ? AND kind = 'passed'", (gone[0],)).fetchone()[0]
+        self.assertTrue(detail.startswith(discover.AUTO_PASSED))
+
+    def test_undo_pass_sticks(self):
+        job = self.add(description=self.posting(-1))
+        discover.settle_expired(self.conn)
+        store.set_status(self.conn, job, "new", "Undo pass")
+        self.assertEqual(discover.settle_expired(self.conn), [])
+        self.assertEqual(store.get_job(self.conn, job)["status"], "new")
+
+    def test_the_gate_drops_a_new_posting_past_its_deadline_or_under_the_floor(self):
+        cfg = {**CFG, "pay": {"floor": 150000}}
+        self.assertEqual(discover.gate(self.posting(-1), "", cfg), "expired")
+        self.assertEqual(discover.gate(self.posting(-1), "", cfg, dated=False), "")
+        self.assertEqual(discover.gate(self.posting(-1, floor=True), "", cfg), "")
+        self.assertEqual(discover.gate("", "$100,000 - $140,000", cfg), "pay")
+        self.assertEqual(discover.gate("", "$100,000 - $160,000", cfg), "")
+        self.assertEqual(discover.gate("", "$100,000 - $140,000", CFG), "")  # No floor set.
+
+    def test_the_queue_judges_a_closing_job_first_and_skips_an_expired_one(self):
+        best = self.add(source_id="1", score=90, description="Plenty of time.")
+        closing = self.add(source_id="2", score=50, description=self.posting(3))
+        self.add(source_id="3", score=95, description=self.posting(-1))
+        self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_triage"]], [closing, best])
+
+
+class Pay(unittest.TestCase):
+    def test_ranges_read_as_a_years_pay(self):
+        cases = {
+            "$130,700 to $205,200 USD": (130700, 205200, "USD"),
+            "$168,000�$285,600 USD": (168000, 285600, "USD"),
+            "$257K – $285K • Offers Equity": (257000, 285000, "USD"),
+            "CA$250K – CA$535K": (250000, 535000, "CAD"),
+            "$149,750.00-275,580.00 USD": (149750, 275580, "USD"),
+            "$45 - $60 an hour": (93600, 124800, "USD"),
+            "$150-200k": (150000, 200000, "USD"),
+            "£60,000 - £80,000": (60000, 80000, "GBP"),
+        }
+        for text, (low, high, currency) in cases.items():
+            found = pay.parse(text)
+            self.assertEqual((found.low, found.high, found.currency), (low, high, currency), text)
+        self.assertIsNone(pay.parse("Up to 15% bonus"))
+        self.assertIsNone(pay.parse(""))
+
+    def test_floor_and_target(self):
+        cfg = {"pay": {"floor": 150000, "target": 200000}}
+        low = pay.judge("$100,000 - $140,000", "", cfg, {})
+        self.assertEqual([s["label"] for s in low["pay_signs"]], ["Under your floor"])
+        self.assertLess(low["pay_points"], 0)
+        high = pay.judge("$210,000 - $250,000", "", cfg, {})
+        self.assertEqual([s["label"] for s in high["pay_signs"]], ["Meets your target"])
+        self.assertGreater(high["pay_points"], 0)
+        self.assertTrue(pay.below_floor("$100,000 - $140,000", cfg))
+        self.assertFalse(pay.below_floor("CA$100K – CA$140K", cfg))  # Another currency isn't compared.
+
+    def test_against_similar_roles_once_there_are_enough(self):
+        known = {"AI systems": (200000.0, 10), "*": (180000.0, 30)}
+        above = pay.judge("$300,000 - $340,000", "AI systems", {}, known)
+        self.assertIn("Pays well above similar roles", [s["label"] for s in above["pay_signs"]])
+        below = pay.judge("$120,000 - $140,000", "AI systems", {}, known)
+        self.assertIn("Pays under the going rate", [s["label"] for s in below["pay_signs"]])
+        # Too few in the track, so every track's median is used.
+        other = pay.judge("$120,000 - $140,000", "Rare track", {}, {"Rare track": (300000.0, 2), "*": (130000.0, 30)})
+        self.assertEqual(other["pay_signs"], [])
+        self.assertEqual(pay.judge("$120,000 - $140,000", "x", {}, {"*": (300000.0, 3)})["pay_signs"], [])
+
+    def test_a_wide_range_says_so(self):
+        self.assertIn("Wide range", [s["label"] for s in pay.judge("$120,000 - $260,000", "", {}, {})["pay_signs"]])
+
+    def test_peers_take_the_median_middle(self):
+        rows = [{"comp": f"${n}0,000 - ${n + 2}0,000", "track": "T"} for n in (10, 12, 14)] + [{"comp": "", "track": "T"}]
+        self.assertEqual(pay.peers(rows), {"T": (130000.0, 3), "*": (130000.0, 3)})
+
+
+class SkillAges(unittest.TestCase):
+    def test_an_ask_longer_than_the_skill_has_existed(self):
+        found = skillage.asks("Requirements: 8+ years of experience building AI agents and LLM-based workflows.", TODAY)
+        self.assertEqual([(a.skill.name, a.years, a.impossible) for a in found], [("AI agents", 8, True)])
+        self.assertIn("Nobody meets that", skillage.describe(found[0]))
+
+    def test_an_ask_within_the_skills_life(self):
+        found = skillage.asks("5+ years of hands-on experience with large language models.", TODAY)
+        self.assertEqual([(a.skill.name, a.impossible) for a in found], [("large language models", False)])
+        self.assertIn("of its whole life", skillage.describe(found[0]))
+
+    def test_the_skill_can_come_before_the_years(self):
+        found = skillage.asks("Experience with Kubernetes (5+ years). Python required.", TODAY)
+        self.assertEqual([a.skill.name for a in found], ["Kubernetes"])
+
+    def test_years_of_something_broad_dont_land_on_a_skill_named_after_it(self):
+        self.assertEqual(skillage.asks("8+ years of software engineering experience, including LLM agents.", TODAY), [])
+        self.assertEqual(skillage.asks("We use LLMs daily. 8 years of software experience.", TODAY), [])
+        self.assertEqual(skillage.asks("A company 25 years old.", TODAY), [])
+
+    def test_ranges_and_spelled_numbers_count_from_the_bottom(self):
+        found = {a.skill.name: a.years for a in skillage.asks("3-5 years of Rust; five (5) years of experience with React.js.", TODAY)}
+        self.assertEqual(found, {"Rust": 3, "React": 5})
+
+    def test_unknown_phrases_are_what_research_could_date(self):
+        self.assertEqual(skillage.unknown_phrases("10+ years of experience with distributed storage systems and RDMA"),
+                         ["distributed storage"])
+        self.assertEqual(skillage.unknown_phrases("10+ years of professional software engineering experience"), [])
+
+    def test_a_note_that_only_restates_an_impossible_ask(self):
+        self.assertTrue(skillage.only_restates("The posting requires 8+ years of AI agents; the record shows one.", TODAY))
+        self.assertFalse(skillage.only_restates("The posting requires 5+ years of large language models.", TODAY))
+        self.assertFalse(skillage.only_restates("Requires US citizenship.", TODAY))
+
+    def test_research_keeps_only_dated_answers_it_found_a_source_for(self):
+        answer = json.dumps({"skills": [
+            {"phrase": "rdma", "name": "RDMA", "kind": "dated", "since": "2000-10", "basis": "x", "source": "https://example.org/rdma"},
+            {"phrase": "made up", "name": "X", "kind": "dated", "since": "2020-01", "basis": "x", "source": "https://example.org/nowhere"},
+            {"phrase": "distributed storage", "kind": "general"},
+            {"phrase": "not asked", "kind": "general"},
+        ]})
+        kept = skillage.vet(answer, ["rdma", "made up", "distributed storage"], {"https://example.org/rdma"}, TODAY)
+        self.assertEqual({k: v["kind"] for k, v in kept.items()}, {"rdma": "dated", "made up": "unknown", "distributed storage": "general"})
+
+    def test_researched_skills_are_used_and_not_asked_about_again(self):
+        path = skillage.learned_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: path.unlink(missing_ok=True))
+        path.write_text(json.dumps({"phrases": {
+            "frobnicator": {"kind": "dated", "name": "Frobnicator", "since": "2024-01", "basis": "Released.", "source": "https://e.org"},
+            "distributed storage": {"kind": "general"},
+        }}), encoding="utf-8")
+        found = skillage.asks("5+ years of experience with the Frobnicator platform.", TODAY)
+        self.assertEqual([(a.skill.name, a.impossible) for a in found], [("Frobnicator", True)])
+        self.assertEqual(skillage.to_research(["10+ years of distributed storage", "3+ years of Quuxify"]), ["quuxify"])
+
+    def test_the_prompt_section_says_not_to_count_it(self):
+        text = skillage.prompt_section(skillage.signals("8+ years of AI agents.", TODAY))
+        self.assertIn("How old the skills it asks for are", text)
+        self.assertIn("isn't the candidate's gap", text)
+        self.assertEqual(skillage.prompt_section({}), "")
+
+
+class Rarity(unittest.TestCase):
+    def ctx(self, local: dict, watched: int = 60) -> signals.Context:
+        return signals.Context(TODAY, {}, Counter(local), watched, 5)
+
+    def job(self, **kw) -> dict:
+        return {"track": "AI systems", "location_kind": "local", "first_seen": TODAY.isoformat(), **kw}
+
+    def test_a_local_role_few_others_share(self):
+        found = signals.rarity(self.job(), CFG, self.ctx({"AI systems": 2}))
+        self.assertTrue(found["rare"])
+        self.assertEqual(found["rare_reason"], "only 1 other AI systems role near you in 90 days")
+        self.assertFalse(signals.rarity(self.job(), CFG, self.ctx({"AI systems": 4}))["rare"])
+
+    def test_never_for_remote_roles_or_before_there_is_history(self):
+        self.assertFalse(signals.rarity(self.job(location_kind="remote"), CFG, self.ctx({}))["rare"])
+        self.assertFalse(signals.rarity(self.job(), CFG, self.ctx({}, watched=5))["rare"])
+
+
+class OnTheDashboard(Base):
+    def test_the_job_carries_the_signals_and_its_priority_counts_them(self):
+        self.conn.execute("INSERT INTO runs (started_at) VALUES (?)", ((date.today() - timedelta(days=60)).isoformat(),))
+        cfg = {**CFG, "pay": {"target": 150000}}
+        job = self.add(track="AI systems", location_kind="local", comp="$160,000 - $200,000",
+                       description="8+ years of experience building AI agents.")
+        found = server._enrich(store.get_job(self.conn, job), cfg, date.today().isoformat(),
+                               context=signals.context(self.conn, cfg, date.today()))
+        self.assertEqual(found["impossible_asks"], ["AI agents"])
+        self.assertTrue(found["rare"])
+        self.assertIn("Meets your target", [s["label"] for s in found["pay_signs"]])
+        self.assertTrue(any(reason.startswith("Rare near you") for reason in found["freshness_reasons"]))
+
+    def test_a_decision_within_the_window_is_on_the_to_do_list(self):
+        soon = date.today() + timedelta(days=4)
+        job = self.add(description=f"Applications accepted until {spelled(soon)}.")
+        state = server.build_state(self.conn, CFG)
+        order = next(o for o in state["orders"] if o["job_id"] == job)
+        self.assertEqual(order["kind"], "Closing soon")
+        self.assertEqual(order["rank"], 2)
+        self.assertIn("Decide now", order["detail"])
+
+
+class InThePrompts(unittest.TestCase):
+    def test_triage_hears_about_the_deadline_pay_rarity_and_skill_ages(self):
+        marks = {"deadline": "2026-11-12", "days_to_deadline": 4, "deadline_firm": True, "rare": True,
+                 "rare_reason": "no other AI systems roles near you in 90 days",
+                 "pay_signs": [{"label": "Under your floor", "tone": "bad", "detail": "It pays at most $140k."}],
+                 **skillage.signals("8+ years of AI agents.", TODAY)}
+        text = daily.markings(marks)
+        for said in ("Deadline: Nov 12, in 4 days", "Pay: Under your floor", "Rare near the candidate", "How old the skills"):
+            self.assertIn(said, text)
+
+    def test_tailoring_hears_about_skill_ages(self):
+        row = {"company": "Acme", "title": "Staff Engineer", "description": "8+ years of AI agents."}
+        with mock.patch.object(daily.claude_code, "files_section", return_value=""):
+            text = daily.tailor_prompt(row, "applications/acme", CFG)
+        self.assertIn("How old the skills it asks for are", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
