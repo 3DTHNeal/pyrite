@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 from . import claude_code, discover, doctor, mail
 from .claude_code import find_claude, sign_in_help
-from .store import IS_EXAMPLE, ROOT, log_event, now
+from .store import IS_EXAMPLE, ROOT, ConfigError, log_event, now, read_config
 
 SWEEP, CLAUDE, TAILOR = "sweep", "claude", "tailor"
 LABELS = {SWEEP: "pan", CLAUDE: "Claude run", TAILOR: "tailoring batch"}
@@ -94,6 +94,14 @@ def _facts_still_example() -> bool:
     return "profile/facts.md" in doctor.still_example(ROOT)
 
 
+def _config() -> dict:
+    """search.toml as it reads now, or nothing while it's missing or can't be read, which is reported on its own."""
+    try:
+        return read_config(ROOT / "profile" / "search.toml")
+    except (OSError, ConfigError):
+        return {}
+
+
 def not_ready(kind: str) -> str | None:
     """Why this kind of run can't start in this workspace at all, whatever else is going on. The dashboard disables
     the run's button with this as its reason, rather than asking to spend your Claude plan and then refusing."""
@@ -109,6 +117,10 @@ def not_ready(kind: str) -> str | None:
     if kind in WRITERS and "profile/facts.md" in doctor.still_blank(ROOT):
         return ("profile/facts.md is still blank, so Claude has nothing true to write from. Fill it in first: "
                 "`pyrite doctor` lists what else is left.")
+    if kind in WRITERS:
+        unwritten = doctor.not_written_yet(ROOT, _config())
+        if unwritten:
+            return f"{unwritten['what']} {unwritten['fix']}"
     return None
 
 

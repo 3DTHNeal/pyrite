@@ -324,7 +324,46 @@ def config_problems(cfg: dict) -> list[str]:
                     and _is_number(entry[-1])):
                 problems.append(f"{key} under [scoring] has {json.dumps(entry)}, where each entry needs to be {shape}.")
                 break
+    for table, keys in PATTERN_LISTS.items():
+        section = cfg.get(table)
+        if not isinstance(section, dict):
+            continue
+        for key in keys:
+            if key in section and not _is_strings(section[key]):
+                problems.append(_not_a_list(f"{key} under [{table}]", key, section[key]))
+    tracks = cfg.get("track", [])
+    if not isinstance(tracks, list) or not all(isinstance(track, dict) for track in tracks):
+        problems.append("the roles need a [[track]] heading each, with two pairs of brackets, and a name and titles under it.")
+        tracks = []
+    for at, track in enumerate(tracks, 1):
+        name = track.get("name")
+        if not (isinstance(name, str) and name.strip()):
+            # Its name is what a kept posting is filed under, so without one the first posting it matched would fail.
+            problems.append(f"[[track]] number {at} has no name. Give it one, such as name = \"Data engineering\".")
+            name = f"number {at}"
+        if "title" in track and not _is_strings(track["title"]):
+            problems.append(_not_a_list(f"title under the [[track]] named {name}", "title", track["title"]))
+        if "titles" in track and not (isinstance(track["titles"], str) or _is_strings(track["titles"])):
+            problems.append(_not_a_list(f"titles under the [[track]] named {name}", "titles", track["titles"]))
     return problems
+
+
+# Lists of patterns, by table. One written without its brackets, such as local = "Oregon", would otherwise be read a
+# letter at a time, and a single letter matches nearly every posting.
+PATTERN_LISTS = {
+    "location": ("local", "local_exact", "remote_home", "remote_elsewhere"),
+    "scoring": ("exclude_titles", "level_top", "level_mid"),
+}
+
+
+def _is_strings(value) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _not_a_list(where: str, key: str, value) -> str:
+    shown = json.dumps(value, ensure_ascii=False)
+    fixed = f"{key} = [{shown}]" if isinstance(value, str) else f'{key} = ["..."]'
+    return f"{where} is {shown}, which needs to be a list in brackets, such as {fixed}."
 
 
 def _relative(path: Path) -> str:

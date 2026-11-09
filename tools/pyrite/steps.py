@@ -790,6 +790,21 @@ def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer
     for index, move in enumerate(moves):
         old, roles = move["old"], move["roles"]
         if old is None:
+            # New to the Timeline, but the resume may name it already, as one drafted by `import-resume` does before
+            # any work history is typed in. Its heading is kept, and only the roles under it are brought into line.
+            mine = employer_head(move["name"])
+            if mine is not None:
+                under = role_heads(mine)
+                for pair in roles:
+                    role = pair["new"]
+                    named = [h for h in under if h["parts"][0] == role["title"]]
+                    same = [h for h in named if (h["start"], h["end"]) == (role["start"][0], role["end"][0])]
+                    found = same[0] if same else named[0] if len(named) == 1 else None
+                    if found is None:
+                        plan.insert(_block_end(doc, mine["line"], top), [new_role_head(role)])
+                    elif " | ".join(found["parts"]) != new_role_head(role)[5:]:
+                        plan.set(found["line"], found["prefix"] + new_role_head(role)[5:])
+                continue
             start, end = _span_text([r["new"] for r in roles])
             block = [f"### {move['name']} | {start}{sep}{end}", *(new_role_head(r["new"]) for r in roles)]
             after = next((employer_head(m["old"].name) for m in moves[index + 1:] if m["old"] is not None
