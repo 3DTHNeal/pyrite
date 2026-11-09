@@ -35,6 +35,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - The job panel shows the job's number, such as **Job 56**, which the `pyrite` commands take. While it's open the address ends in `#job-56`, so a bookmark or a link in a note opens that job, and closing it puts back the tab you were on.
 - **Got it** on a job whose folder changed after sending, for a folder you reworked on purpose. It stops the warning for the files as they are now, and the warning comes back if they change again. The sent copies stay the record.
 - On a terminal, `pyrite discover`, `rescore`, `queue`, `job`, `check`, `finish`, `fill` and `usage` say what they found in a few lines of words, such as how many postings a pan read, how many were new and why the rest were filtered out. `--json` prints the JSON as before, and so does any run whose output goes to a file or another program, so the daily run, scheduled pans and scripts see no change. `pyrite sources` takes `--json` too.
+- A logo and icons. The dashboard has a favicon, and a pixel-art pyrite crystal beside its title that glints now and then and throws sparks while a board check, Claude run or tailoring batch is going. With reduced motion turned on, it holds still. Each stage of **Where they stand** has an icon from a fire assay, from the gold pan for prospects to the cupel's gold bead for an offer. `art/icons/build.py` draws them all.
 
 ### Changed
 

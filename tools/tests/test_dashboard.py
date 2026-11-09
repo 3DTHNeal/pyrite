@@ -3,7 +3,9 @@ import contextlib
 import http.client
 import io
 import json
+import re
 import shutil
+import struct
 import threading
 import unittest
 import unittest.mock as mock
@@ -378,6 +380,24 @@ class OpenedWithoutTheServer(unittest.TestCase):
         static = Path(server.__file__).parent / "static"
         self.assertIn("http://127.0.0.1:8787", (static / "index.html").read_text(encoding="utf-8"))
         self.assertIn(".not-served { display: none; }", (static / "style.css").read_text(encoding="utf-8"))
+
+
+class Icons(Base):
+    def test_every_icon_the_page_asks_for_is_served(self):
+        static = server.STATIC
+        text = "".join((static / name).read_text(encoding="utf-8") for name in ("index.html", "style.css", "app.js"))
+        wanted = set(re.findall(r"/static/icons/[\w.-]+\.(?:png|ico)|/favicon\.ico", text))
+        wanted |= {f"/static/icons/{f['icon']}-24.png" for f in server.build_state(self.conn, CFG)["funnel"]}
+        self.assertIn("/static/icons/tarnished-24.png", wanted)  # the closed line's, named in app.js
+        self.assertEqual(sorted(p for p in wanted if p not in server.STATIC_FILES), [])
+        self.assertTrue(all((static / server.STATIC_FILES[p][0]).is_file() for p in wanted))
+
+    def test_each_animation_strip_has_the_frames_its_css_steps_through(self):
+        css = (server.STATIC / "style.css").read_text(encoding="utf-8")
+        for selector, strip in ((".mark {", "mark-idle.png"), (".mark.working {", "mark-working.png")):
+            frames = int(re.search(r"--frames: (\d+)", css[css.index(selector):]).group(1))
+            width, height = struct.unpack(">II", (server.STATIC / "icons" / strip).read_bytes()[16:24])  # the PNG header
+            self.assertEqual((width, height), (32 * frames, 32), strip)
 
 
 class Demo(Base):
