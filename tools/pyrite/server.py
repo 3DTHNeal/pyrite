@@ -5,11 +5,14 @@ requests from other websites can neither read this data nor change it.
 """
 import hashlib
 import json
+import os
 import re
 import socket
 import sqlite3
 import statistics
 import sys
+import threading
+import time
 import tomllib
 import traceback
 from collections.abc import Sequence
@@ -27,6 +30,7 @@ from . import (
     doctor,
     facts,
     fill,
+    launch,
     mail,
     market,
     outlook,
@@ -38,6 +42,7 @@ from . import (
     steps,
     store,
     tasks,
+    update,
     workday,
 )
 from . import score as scoring
@@ -112,6 +117,8 @@ MAX_NEXT_STEP = 300
 MAX_NAME = 200  # A company, title or location you add by hand.
 # A job's or an alert's number. Longer ones can't be one, and SQLite can't even look them up.
 JOB_ID = r"(\d{1,18})"
+# Tells this server from the one that replaces it after an update, so the page knows when to reload.
+SERVER_ID = f"{os.getpid()}-{time.time_ns()}"
 
 
 def safe_url(url: str) -> str:
@@ -781,6 +788,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(profile.compare(query.get("key", [""])[0], query.get("stamp", [""])[0]))
                 except ValueError as err:
                     return self._json({"error": str(err)}, 404)
+            if path == "/api/update":
+                return self._json(update_state(load_config()))
+            if path == "/api/alive":
+                return self._json({"server": SERVER_ID})
             if path == "/api/industries":
                 conn = connect()
                 try:
@@ -858,6 +869,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/run":
                 tasks.start(conn, str(body.get("kind") or ""))
                 return self._json({"ok": True}, 202)
+            if path == "/api/update":
+                return self._update(conn, cfg)
             if path == "/api/industries/outlook":
                 outlook.start(cfg, str(body.get("name") or ""))
                 return self._json({"ok": True}, 202)
@@ -877,6 +890,43 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(err)}, 400)
         finally:
             conn.close()
+
+    def _update(self, conn, cfg: dict) -> None:
+        """Update Pyrite's code to GitHub's main, then restart on it once the page has heard what happened."""
+        # The page hides the button then, but `check_updates = false` promises GitHub is never asked, so this keeps it.
+        if not updates_on(cfg):
+            raise ValueError("check_updates = false under [dashboard], so Pyrite doesn't ask GitHub. Update with "
+                             "`git pull` instead.")
+        running = tasks.going(conn)
+        if running:
+            raise ValueError(f"A {running} is going, and updating the code under it could break it. Update once it's done.")
+        done = update.apply(demo=IS_EXAMPLE)
+        restart = getattr(self.server, "restart_soon", None)
+        self._json({**done, "restarting": restart is not None, "server": SERVER_ID})
+        if restart:
+            restart()
+
+
+def updates_on(cfg: dict) -> bool:
+    """Whether the dashboard may ask GitHub for a newer Pyrite: anything but `check_updates = false` under [dashboard]."""
+    return cfg.get("dashboard", {}).get("check_updates", True) is not False
+
+
+def update_state(cfg: dict) -> dict:
+    """What the Update available button needs: whether GitHub's main is ahead of this copy, and anything stopping the
+    update. `check_updates = false` under [dashboard] means GitHub is never asked."""
+    if not updates_on(cfg):
+        return {"available": False, "off": True}
+    found = update.check(demo=IS_EXAMPLE)
+    if found.get("available") and not found.get("why_not"):
+        conn = connect()
+        try:
+            running = tasks.going(conn)
+        finally:
+            conn.close()
+        if running:
+            found["why_not"] = f"A {running} is going, and updating the code under it could break it. Update once it's done."
+    return found
 
 
 def _save_facts(body: dict) -> dict:
@@ -963,6 +1013,13 @@ class DashboardServer(ThreadingHTTPServer):
     SO_REUSEADDR only lets a restart reuse the port of one that just closed.
     """
     allow_reuse_address = sys.platform != "win32"
+    # Set once an update has moved the code, so serve() starts a new dashboard on it after this one stops.
+    restarting = False
+
+    def restart_soon(self) -> None:
+        """Stop serving, from another thread, since the one serving can't wait for itself, and come back on the new code."""
+        self.restarting = True
+        threading.Thread(target=self.shutdown, daemon=True).start()
 
     def server_bind(self) -> None:
         if sys.platform == "win32":
@@ -992,3 +1049,11 @@ def serve(port: int = 8787) -> None:
         print("Stopped.", flush=True)
     finally:
         server.server_close()
+    # Only the update sets it, and only to True. Anything else standing in for a server must never start a dashboard.
+    if server.restarting is True:
+        print("Pyrite was updated, so the dashboard is starting again on the new code.", flush=True)
+        if launch.restart(port):
+            print(f"It's running in the background at {launch.url(port)}, and keeps going after this window closes.", flush=True)
+        else:
+            print(f"It didn't come back on port {port}. Run `pyrite open` to start it, or `pyrite serve` to see why not.",
+                  flush=True)

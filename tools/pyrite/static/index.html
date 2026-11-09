@@ -20,6 +20,7 @@
     <p id="runs" class="sweep runs" aria-live="polite"></p>
   </div>
   <div class="masthead-actions">
+    <button id="update-open" class="btn update" type="button" hidden>Update available</button>
     <button id="run-sweep" class="btn" type="button" title="Read the job boards and check mail now. No AI.">Check boards now</button>
     <button id="run-claude" class="btn" type="button" title="Judge new postings and tailor the best now. Uses your Claude plan.">Run Claude now</button>
     <button id="add-open" class="btn primary" type="button">Add a posting</button>
@@ -143,6 +144,18 @@
     <button id="add-save" class="btn primary" type="submit">Add</button>
   </div>
   </form>
+</dialog>
+
+<dialog id="update-dialog" class="dialog">
+  <h2>Update Pyrite</h2>
+  <p id="update-summary"></p>
+  <ul id="update-changes" class="update-changes"></ul>
+  <p id="update-note" class="muted"></p>
+  <p id="update-error" class="error" role="alert"></p>
+  <div class="row end">
+    <button id="update-cancel" class="btn" type="button">Not now</button>
+    <button id="update-go" class="btn primary" type="button">Update and restart</button>
+  </div>
 </dialog>
 <!-- The Profile tab, then one file per section, then app.js, which starts the page. -->
 <script src="/static/profile.js"></script>

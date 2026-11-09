@@ -122,6 +122,21 @@ def start(port: int) -> subprocess.Popen:
     return subprocess.Popen(args, stdin=null, stdout=null, stderr=null, cwd=CODE_ROOT, env=env, start_new_session=True)
 
 
+def restart(port: int) -> bool:
+    """Start a new dashboard on the port this one just let go of. Whether one answers in time.
+
+    A port can stay taken for a moment after its server closes, and then the new one stops at once, so it's tried again."""
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
+        child = start(port)
+        while child.poll() is None and time.monotonic() < deadline:
+            if answering(port, timeout=2):
+                return True
+            time.sleep(0.5)
+        time.sleep(1)
+    return answering(port)
+
+
 def open_dashboard(port: int, browse: Callable[[str], object] = webbrowser.open) -> None:
     """Open the dashboard on this port in the browser, starting it if nothing answers there. A dashboard that holds the
     port but has stopped answering is replaced. Any other program on the port is left alone."""

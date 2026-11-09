@@ -6,6 +6,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- **Update available** at the top of the dashboard when GitHub's `main` has commits your copy of Pyrite lacks. It lists what they say, and one click fast-forwards the code, installs the packages again if `tools/requirements.txt` changed, and restarts the dashboard on the new code. It does nothing, and says why, on another branch, with edits to tracked files, with local commits, or while a run is going. The check is a `git fetch` once an hour, and `check_updates = false` under `[dashboard]` turns it off.
 - A posting past its own firm deadline is a pass: the pan doesn't store a new one, and the next pan or run passes on a job you haven't sent, once, so **Undo pass** sticks. "Accepted at least until" is read as a floor, not a deadline, and past it the job shows **May close any day**.
 - `decide_days` under `[run]` (5 if unset): a job closing within that many days goes on the to-do list as **Closing soon**, saying to tailor it or pass, and the daily run judges and tailors it before the rest.
 - Pay is judged against the position: each range is compared with what postings for the same track at the same level have paid. One too low to bother with sinks in priority and isn't judged by the daily run unless you pick it, one under the going rate ranks lower, and one well above similar roles is marked, as is a range wide enough to span levels. `[pay]` in `search.toml` sets the currency compared.
