@@ -12,7 +12,7 @@ from pathlib import Path
 from support import CODE_ROOT
 
 import build_resume
-from pyrite import cli, profile, resumeimport, store
+from pyrite import cli, profile, resumeimport, steps, store, workspace
 
 EXAMPLE = CODE_ROOT / "example" / "profile" / "resume.md"
 HAVE_DOCX = importlib.util.find_spec("docx") is not None
@@ -417,6 +417,48 @@ class Command(Tmp):
         last = profile.history()[0]
         self.assertEqual((last["key"], last["reason"], last["step"]), ("resume", "Imported from r.txt", "masters"))
         self.assertEqual(profile.kept("resume", last["stamp"]), before)
+        # The example's fact bank has a contact line and a timeline already, so neither was touched.
+        self.assertNotIn("Filled in", out)
+
+    def blank_workspace(self):
+        root = self.dir / "blank"
+        workspace._make_blank(root / "profile", "Jordan Lee")
+        for patcher in (mock.patch.object(store, "ROOT", root), mock.patch.object(store, "IS_EXAMPLE", False)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_save_fills_an_empty_contact_line_and_timeline_from_it(self):
+        self.blank_workspace()
+        out, _ = self.run_cli(str(self.write("r.txt", MESSY)), "--save")
+        self.assertIn("Filled in the Contact line of profile/facts.md", out)
+        self.assertIn("Filled in the Timeline of profile/facts.md", out)
+        facts = profile.read("facts")
+        written = facts.replace("\r\n", "\n")  # A checkout may have either line ending, and a save keeps the file's.
+        self.assertIn("## Contact\nSpringfield, IL · (555) 010-0199 · jordan.lee@example.com · github.com/jlee-example\n", written)
+        self.assertIn("- **Initech, Jun 2018 – Present**\n"
+                      "  - Senior Software Engineer, Springfield, IL, Jan 2021 – Present\n"
+                      "  - Software Engineer, Springfield, IL, Jun 2018 – Dec 2020\n"
+                      "- **Globex Corporation,** Backend Developer, Chicago, IL, Mar 2015 – May 2018\n", written)
+        self.assertEqual(profile.read("resume"), MESSY_MARKDOWN)  # The resume is the source, so it stays as imported.
+        # Work history then opens with what the resume says, and saving it unchanged writes nothing.
+        view = {**profile.view(), **steps.view()}
+        employers = [{"line": e["line"], "name": e["name"], "roles": [dict(r) for r in e["roles"]]}
+                     for e in view["timeline"]["employers"]]
+        self.assertEqual([e["name"] for e in employers], ["Initech", "Globex Corporation"])
+        self.assertEqual(steps.draft("history", {"employers": employers}, view["versions"])["changes"], {})
+        # A second import leaves what's in facts.md alone.
+        out, _ = self.run_cli(str(self.write("r.txt", MESSY.replace("(555) 010-0199", "(555) 010-0100"))), "--save")
+        self.assertNotIn("Filled in", out)
+        self.assertEqual(profile.read("facts"), facts)
+
+    def test_a_role_with_no_dates_leaves_the_timeline_for_you_and_says_so(self):
+        self.blank_workspace()
+        resume = MESSY_MARKDOWN.replace("#### Software Engineer | Springfield, IL | Jun 2018 – Dec 2020", "#### Software Engineer |")
+        profile.write({"resume": resume}, profile.versions(), "test")
+        told = steps.fill_from_resume("test")
+        self.assertIn("Filled in the Contact line", told[0])
+        self.assertIn("The Timeline of profile/facts.md wasn't filled in: Software Engineer's From needs a date", told[1])
+        self.assertNotIn("Initech", profile.read("facts"))
 
     def test_save_is_refused_without_a_workspace(self):
         with mock.patch.object(store, "IS_EXAMPLE", True), self.assertRaises(SystemExit) as caught:

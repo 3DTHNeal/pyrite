@@ -302,6 +302,51 @@ def draft(step: str, edits, based_on) -> dict:
     }
 
 
+def fill_from_resume(reason: str) -> list[str]:
+    """Fill the Contact line and the Timeline of facts.md from the master resume, where facts.md has neither yet, and
+    return what to tell the person. For a resume that was just imported, so its contact details and work history
+    aren't typed a second time. Each goes through its section's own drafter, so it's written and checked as a save
+    from the Profile tab is, and nothing already in facts.md is changed."""
+    told = []
+    resume = profile.read("resume")
+    path = profile.FILES["facts"]
+
+    def save(step: str, edits: dict, what: str) -> None:
+        try:
+            changes = draft(step, edits, profile.versions())["changes"]
+            # Only facts.md: the resume is the source here, so it stays as it was imported.
+            if "facts" in changes:
+                profile.write({"facts": changes["facts"]}, profile.versions(), reason, step=step)
+                told.append(f"Filled in {what} of {path} from it. Check it on the Profile tab.")
+        except ValueError as err:
+            told.append(f"{what[0].upper()}{what[1:]} of {path} wasn't filled in: {err}")
+
+    facts = factsdoc.Doc(profile.read("facts"))
+    if facts.contact() is None:
+        line = next((row[2:].strip() for row in resume.splitlines() if row.startswith("@ ")), "")
+        parts = [part["text"] for part in contact_parts(line)[0]]
+        if parts:
+            save("basics", {"contact": parts}, "the Contact line")
+    if not facts.timeline(profile.known_titles(_config(profile.read("config"))))[0]:
+        employers: list[dict] = []
+        for head in _heads(factsdoc.Doc(resume)):
+            parts = head["parts"]
+            dates = head["dates"]
+            span = {"start": dates["start"] if dates else "", "end": dates["end"] if dates else ""}
+            if head["level"] == 3:
+                employers.append({"line": None, "name": parts[0], "roles": [], **span})
+            elif employers:
+                place = parts[1] if len(parts) > (2 if dates else 1) else ""
+                employers[-1]["roles"].append({"line": None, "title": parts[0], "place": place, **span})
+        for employer in employers:
+            # One role with no dates of its own has its employer's, as in "### Employer | dates" over "#### Title | Place".
+            if len(employer["roles"]) == 1 and not employer["roles"][0]["start"]:
+                employer["roles"][0].update(start=employer["start"], end=employer["end"])
+        if employers:
+            save("history", {"employers": employers}, "the Timeline")
+    return told
+
+
 # ---------- Name and contact ----------
 
 def _basics(texts: dict, cfg: dict, edits: dict) -> Draft:
@@ -802,7 +847,8 @@ def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer
                     found = same[0] if same else named[0] if len(named) == 1 else None
                     if found is None:
                         plan.insert(_block_end(doc, mine["line"], top), [new_role_head(role)])
-                    elif " | ".join(found["parts"]) != new_role_head(role)[5:]:
+                    # An empty field, as in "Title | | dates", is how a heading with no place may be written.
+                    elif " | ".join(part for part in found["parts"] if part) != new_role_head(role)[5:]:
                         plan.set(found["line"], found["prefix"] + new_role_head(role)[5:])
                 continue
             start, end = _span_text([r["new"] for r in roles])
