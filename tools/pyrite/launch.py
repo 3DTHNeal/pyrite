@@ -15,7 +15,7 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from .store import CODE_ROOT
+from .store import CODE_ROOT, ROOT
 
 DEFAULT_PORT = 8787
 TITLE = b"<title>Pyrite</title>"
@@ -109,14 +109,17 @@ def start(port: int) -> subprocess.Popen:
     python = Path(sys.executable)
     args = [str(python), str(CODE_ROOT / "tools" / "pyrite.py"), "serve", "--port", str(port)]
     null = subprocess.DEVNULL
+    # The workspace this found, by its whole path. The dashboard starts in the code folder, where a relative path from
+    # PYRITE_HOME or a .pyrite-home edited since would name some other folder, and it must open this one.
+    env = {**os.environ, "PYRITE_HOME": str(ROOT)}
     if sys.platform == "win32":
         # pythonw has no console of its own, and a detached process doesn't share this one, so closing it stops nothing.
         windowless = python.with_name("pythonw.exe")
         if windowless.exists():
             args[0] = str(windowless)
-        return subprocess.Popen(args, stdin=null, stdout=null, stderr=null, cwd=CODE_ROOT,
+        return subprocess.Popen(args, stdin=null, stdout=null, stderr=null, cwd=CODE_ROOT, env=env,
                                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
-    return subprocess.Popen(args, stdin=null, stdout=null, stderr=null, cwd=CODE_ROOT, start_new_session=True)
+    return subprocess.Popen(args, stdin=null, stdout=null, stderr=null, cwd=CODE_ROOT, env=env, start_new_session=True)
 
 
 def open_dashboard(port: int, browse: Callable[[str], object] = webbrowser.open) -> None:

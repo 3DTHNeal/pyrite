@@ -3,14 +3,17 @@ the commands a person runs say what they found in words on a terminal and in JSO
 import contextlib
 import io
 import json
+import os
 import shutil
+import stat
 import tempfile
 import unittest
 import unittest.mock as mock
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
-from support import BAD_DRAFT, CFG, MODEL, Base  # Points Pyrite at a throwaway workspace before it loads.
+from support import BAD_DRAFT, CFG, MODEL, Base, ClaudeRun  # Points Pyrite at a throwaway workspace before it loads.
 
 from pyrite import checks, cli, discover, store, words, workday
 
@@ -121,8 +124,12 @@ class WordsOrJson(Base):
         self.assertIn("Staff Firmware Engineer", block)
         self.assertIn("Real text.[2J", block)
         self.assertNotIn("\x1b", said)
-        piped = self.command("job", str(job))
-        self.assertEqual(json.loads(piped.partition("<untrusted_posting>")[0])["id"], job)
+        # Piped, stdout is one JSON document, with the fenced block whole inside it.
+        piped = json.loads(self.command("job", str(job)))
+        self.assertEqual(piped["id"], job)
+        self.assertTrue(piped["untrusted_posting"].startswith("<untrusted_posting>\n"))
+        self.assertTrue(piped["untrusted_posting"].endswith("</untrusted_posting>"))
+        self.assertIn("Real text.", piped["untrusted_posting"])
 
     def test_discover_says_what_a_pan_found(self):
         new = self.add(source_id="found", score=63)
@@ -134,10 +141,8 @@ class WordsOrJson(Base):
             piped = self.command("discover")
         self.assertEqual(said, "Read 675 postings from 1 source. 1 new, 674 filtered out (588 by title, 86 by location).\n"
                                f"New: #{new} Acme, Staff Firmware Engineer (score 63)\n")
-        # Just as before, for the daily run and the scheduled pan.
-        body, _, ids = piped.partition("New job ids: ")
-        self.assertEqual(json.loads(body), stats)
-        self.assertEqual(ids, f"[{new}]\n")
+        # One JSON document, with the new job ids in it rather than on a line after it.
+        self.assertEqual(json.loads(piped), {**stats, "new_ids": [new]})
 
     def test_sources_prints_its_table_wherever_it_goes_and_json_when_asked(self):
         report = [{"source": "greenhouse:acme", "company": "Acme", "ok": True, "count": 12},
@@ -250,3 +255,188 @@ class Outreach(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
             cli.main(["outreach", str(job)])
         self.assertIn("application you've sent", str(caught.exception.code))
+
+
+class SentJob(ClaudeRun):
+    """A job you've applied to is a record. Nothing on the command line puts it back in line for the daily run, which
+    would judge or tailor it again and rewrite its folder, or writes a new fill sheet into that folder."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(store, "DB_PATH", self.root / "t.db")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def send(self):
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+        store.set_status(self.conn, self.job, "applied")
+        self.conn.commit()
+
+    def refused(self, *argv):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            cli.main(list(argv))
+        return str(caught.exception.code)
+
+    def test_a_sent_job_cant_go_back_to_new_or_shortlisted(self):
+        self.send()
+        for status in cli.NOT_YET_SENT:
+            with self.subTest(status):
+                said = self.refused("status", str(self.job), status)
+                self.assertIn("was sent on", said)
+                self.assertIn(f"pyrite status {self.job} applied", said)
+                self.assertEqual(store.get_job(self.conn, self.job)["status"], "applied")
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["status", str(self.job), "withdrawn"])  # Closing it out is still yours to do.
+        self.assertEqual(store.get_job(self.conn, self.job)["status"], "withdrawn")
+
+    def test_the_queue_triage_and_tailoring_skip_a_sent_job_whatever_its_status_says(self):
+        from pyrite import daily
+
+        self.send()
+        # As an older version could leave one: sent, and back among the jobs waiting on a run.
+        waiting = self.add(source_id="2", status="shortlisted", priority=1)
+        self.conn.execute("UPDATE jobs SET status = 'shortlisted', priority = 1 WHERE id = ?", (self.job,))
+        self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_tailor"]], [waiting])
+        with self.assertRaisesRegex(ValueError, "was sent on"):
+            cli.apply_triage(self.conn, self.job, "skip", "Not a fit")
+        with mock.patch.object(daily, "_ask", side_effect=AssertionError("Claude was asked to rewrite a sent application")):
+            self.assertFalse(daily.tailor(self.conn, CFG, self.job, "claude", deadline=float("inf")))
+        fresh = self.add(source_id="3")
+        self.conn.execute("UPDATE jobs SET status = 'new' WHERE id = ?", (self.job,))
+        self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_triage"]], [fresh])
+
+    def test_fill_writes_no_sheet_for_a_sent_job_or_into_a_folder_with_a_sent_copy(self):
+        self.send()
+        self.assertIn("folder is a record", self.refused("fill", str(self.job)))
+        self.assertIn(f"{store.SENT_FOLDER}/", self.refused("fill", str(self.folder)))
+        self.assertFalse((self.folder / "fill-sheet.md").exists())
+
+    def test_finish_json_is_one_document_and_the_built_files_go_to_stderr(self):
+        self.build.return_value = "applications/acme/Alex_Rivera_Resume_Acme.docx (drafter 3)"
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cli.main(["finish", str(self.job), "--json"])
+        self.assertTrue(json.loads(out.getvalue())["ok"])
+        self.assertIn("Alex_Rivera_Resume_Acme.docx (drafter 3)", err.getvalue())
+
+    def test_the_day_it_was_sent_is_the_local_one(self):
+        self.send()
+        late = "2026-11-09T02:08:21+00:00"  # The evening of the 8th, in the Americas.
+        self.conn.execute("UPDATE jobs SET applied_at = ? WHERE id = ?", (late, self.job))
+        local = datetime.fromisoformat(late).astimezone().date().isoformat()
+        self.assertIn(f"Applied on {local},", cli.finish_job(self.conn, CFG, self.job)["errors"][0])
+
+
+class Arguments(unittest.TestCase):
+    """Values a command can't use are turned away when the command line is read, in a line, before anything runs."""
+
+    def parse_error(self, *argv):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            cli.build_parser().parse_args(list(argv))
+        self.assertEqual(caught.exception.code, 2)
+        return err.getvalue()
+
+    def test_a_queue_limit_below_one_is_refused(self):
+        for limit in ("0", "-1"):
+            self.assertIn("use 1 or more", self.parse_error("queue", "--limit", limit))
+        self.assertIn("isn't a whole number", self.parse_error("queue", "--limit", "many"))
+        self.assertEqual(cli.build_parser().parse_args(["queue", "--limit", "3"]).limit, 3)
+
+    def test_a_port_out_of_range_is_refused_and_the_demo_loads_nothing(self):
+        for command in ("serve", "open", "demo"):
+            for port in ("0", "70000"):
+                with self.subTest(command=command, port=port):
+                    self.assertIn("use 1 to 65535", self.parse_error(command, "--port", port))
+        with mock.patch.object(cli.demo, "load") as load, contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.main(["demo", "--port", "70000"])
+        load.assert_not_called()
+        self.assertEqual(cli.build_parser().parse_args(["serve", "--port", "8790"]).port, 8790)
+
+
+class Database(unittest.TestCase):
+    """A database that can't be used, or a run that isn't there, is said in a line rather than a traceback."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "pyrite.db"
+        patcher = mock.patch.object(store, "DB_PATH", self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def refused(self, *argv):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            cli.main(list(argv))
+        return str(caught.exception.code)
+
+    def test_a_damaged_database_is_named_and_left_alone(self):
+        self.path.write_bytes(b"not a database at all")
+        said = self.refused("queue", "--json")
+        self.assertIn(str(self.path), said)
+        self.assertIn("file is not a database", said)
+        self.assertEqual(self.path.read_bytes(), b"not a database at all")
+
+    def test_a_read_only_database_is_named_before_anything_runs(self):
+        store.connect().close()
+        os.chmod(self.path, stat.S_IREAD)
+        self.addCleanup(os.chmod, self.path, stat.S_IREAD | stat.S_IWRITE)
+        self.assertIn("is read-only", self.refused("brief", "Morning."))
+
+    def test_a_run_that_isnt_there_is_named(self):
+        self.assertIn("No run 999.", self.refused("task", "999"))
+
+
+class FolderNames(unittest.TestCase):
+    def test_accents_are_folded_and_a_name_with_no_latin_letters_keeps_its_own(self):
+        self.assertEqual(cli._slug("Acmé Robotics", 3), "acme-robotics")
+        self.assertEqual(cli._slug("Société Générale, Zürich"), "societe-generale-zurich")
+        self.assertEqual(cli._slug("李雷 机器人"), "李雷-机器人")
+        self.assertEqual(cli._slug("Firmware Engineer II"), "firmware-engineer-ii")
+
+
+class Bytes(io.TextIOWrapper):
+    """Output that keeps what it's sent as bytes, the way a pipe to another program does."""
+
+    def __init__(self, terminal=False):
+        super().__init__(io.BytesIO(), encoding="utf-8")
+        self.terminal = terminal
+
+    def isatty(self):
+        return self.terminal
+
+    def sent(self) -> bytes:
+        self.flush()
+        return self.buffer.getvalue().strip()
+
+
+class WhereForScripts(unittest.TestCase):
+    """`pyrite where` piped to a script on Windows, where PowerShell 5.1 reads a program's output in the console's code
+    page: `$ws = pyrite where` must get the folder's name right, accents and all."""
+
+    PATH = Path("C:/Jobs/Café")
+
+    def where(self, page, terminal=False, path=PATH):
+        out = Bytes(terminal)
+        with mock.patch.object(cli, "ROOT", path), mock.patch.object(store, "IS_EXAMPLE", False), \
+                mock.patch.object(cli, "_console_code_page", return_value=page), contextlib.redirect_stdout(out):
+            cli.cmd_where(None)
+        return out.sent()
+
+    def test_a_pipe_gets_the_consoles_code_page(self):
+        self.assertEqual(self.where(850), str(self.PATH).encode("cp850"))
+        self.assertEqual(self.where(1252), str(self.PATH).encode("cp1252"))
+
+    def test_a_terminal_or_no_console_keeps_utf8(self):
+        self.assertEqual(self.where(850, terminal=True), str(self.PATH).encode("utf-8"))
+        self.assertEqual(self.where(0), str(self.PATH).encode("utf-8"))
+
+    def test_a_character_the_code_page_lacks_becomes_a_question_mark(self):
+        self.assertEqual(self.where(437, path=Path("C:/Jobs/李")), str(Path("C:/Jobs/?")).encode("cp437"))
+
+    def test_json_stays_ascii_whatever_the_console(self):
+        # Escapes, which every code page reads the same, so the JSON commands need none of this.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli._print_json({"folder": "Café"})
+        self.assertTrue(out.getvalue().isascii())

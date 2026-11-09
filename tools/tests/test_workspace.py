@@ -77,6 +77,13 @@ class Seed(unittest.TestCase):
         self.assertEqual(list(self.statuses()), ["Hooli"])
 
 
+def made(folder: Path) -> Path:
+    """A folder that's a workspace as far as finding one goes: it has a profile/search.toml."""
+    (folder / "profile").mkdir(parents=True)
+    (folder / "profile" / "search.toml").write_text("", encoding="utf-8")
+    return folder
+
+
 class Workspace(unittest.TestCase):
     def find(self, env=None, pointer=None):
         with mock.patch.dict(os.environ, {"PYRITE_HOME": env or ""}), mock.patch.object(store, "HOME_POINTER", pointer or Path("no-such-file")):
@@ -87,9 +94,7 @@ class Workspace(unittest.TestCase):
 
     def test_environment_wins_over_the_pointer_file(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
-            first, second = Path(folder) / "first", Path(folder) / "second"
-            first.mkdir()
-            second.mkdir()
+            first, second = made(Path(folder) / "first"), made(Path(folder) / "second")
             pointer = Path(folder) / "pointer"
             pointer.write_text(f"{second}\n", encoding="utf-8")
             self.assertEqual(self.find(pointer=pointer), second.resolve())
@@ -111,6 +116,11 @@ class Workspace(unittest.TestCase):
             script = str(CODE_ROOT / "tools" / "pyrite.py")
             ran = subprocess.run([sys.executable, script, "--help"], env=env, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(ran.returncode, 0, ran.stderr)
+            # So does help on one command, wherever the flag is.
+            for argv in (["queue", "--help"], ["fill", "-h"]):
+                ran = subprocess.run([sys.executable, script, *argv], env=env, capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn(f"usage: pyrite {argv[0]}", ran.stdout)
             ran = subprocess.run([sys.executable, script, "doctor"], env=env, capture_output=True, text=True, encoding="utf-8")
             self.assertIn("doesn't exist", ran.stderr)
             ran = subprocess.run([sys.executable, script, "init", str(target), "--name", "Sam Doe"], env=env, capture_output=True,
@@ -126,8 +136,7 @@ class Workspace(unittest.TestCase):
 
     def test_a_pointer_saved_by_powershell_or_with_a_byte_order_mark_is_read(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
-            target = Path(folder) / "workspace"
-            target.mkdir()
+            target = made(Path(folder) / "workspace")
             pointer = Path(folder) / "pointer"
             for encoding in ("utf-8", "utf-8-sig", "utf-16"):
                 with self.subTest(encoding):
@@ -146,9 +155,7 @@ class Workspace(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Git Bash paths only come up on Windows")
     def test_a_pointer_written_from_git_bash_finds_the_workspace(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
-            target = Path(folder) / "workspace"
-            target.mkdir()
-            target = target.resolve()
+            target = made(Path(folder) / "workspace").resolve()
             pointer = Path(folder) / "pointer"
             pointer.write_text(f"/{target.drive[0].lower()}{target.as_posix()[2:]}\n", encoding="utf-8")
             self.assertEqual(self.find(pointer=pointer), target)
@@ -165,6 +172,71 @@ class Workspace(unittest.TestCase):
         with mock.patch.object(store, "CONFIG_PATH", WORKSPACE / "profile" / "no-such.toml"), self.assertRaises(SystemExit) as caught:
             store.load_config()
         self.assertIn("example/profile/", str(caught.exception.code))
+        self.assertIn("pyrite init", str(caught.exception.code))
+
+    def test_a_folder_that_isnt_a_workspace_stops_rather_than_getting_an_empty_database(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            empty = Path(folder) / "empty"
+            empty.mkdir()
+            with self.assertRaises(SystemExit) as caught:
+                self.find(env=str(empty))
+            self.assertIn("isn't a Pyrite workspace", str(caught.exception.code))
+            self.assertIn(f"pyrite init {empty.resolve()}", str(caught.exception.code))
+            (empty / "profile").mkdir()
+            with self.assertRaises(SystemExit) as caught:
+                self.find(env=str(empty))
+            self.assertIn("Copy example/profile/search.toml", str(caught.exception.code))
+            self.assertFalse((empty / "data").exists())
+            # A database alone is enough: it's what can't be lost, and load_config says what else is missing.
+            (empty / "data").mkdir()
+            (empty / "data" / "pyrite.db").write_bytes(b"")
+            self.assertEqual(self.find(env=str(empty)), empty.resolve())
+            with mock.patch.dict(os.environ, {store.MAY_BE_MISSING: "1"}):
+                self.assertEqual(self.find(env=folder), store.EXAMPLE_ROOT)  # For `init` and help.
+
+    def test_a_command_starts_no_database_where_there_is_no_search_toml(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            db = Path(folder) / "data" / "pyrite.db"
+            with mock.patch.object(store, "DB_PATH", db), mock.patch.object(store, "CONFIG_PATH", Path(folder) / "profile" / "search.toml"), \
+                    contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as caught:
+                cli.main(["brief", "Morning."])
+            self.assertIn("search.toml", str(caught.exception.code))
+            self.assertNotIn("saved", out.getvalue())
+            self.assertFalse(db.exists())
+
+    def test_a_workspace_inside_the_repository_is_refused_but_the_demos_example_is_not(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.find(env=str(CODE_ROOT / "docs"))
+        self.assertIn("inside the code repository", str(caught.exception.code))
+        self.assertIn("pyrite init ../my-job-search", str(caught.exception.code))
+        # A relative path read from inside the repository is the same folder.
+        with mock.patch.object(store.Path, "cwd", return_value=CODE_ROOT), self.assertRaises(SystemExit) as caught:
+            self.find(env="docs")
+        self.assertIn("inside the code repository", str(caught.exception.code))
+        self.assertEqual(self.find(env=str(CODE_ROOT / "example")), store.EXAMPLE_ROOT)
+
+    def test_a_relative_pointer_is_read_from_its_own_folder_past_comments_and_blank_lines(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            target = made(Path(folder) / "my-job-search").resolve()
+            code = Path(folder) / "code"
+            code.mkdir()
+            pointer = code / ".pyrite-home"
+            pointer.write_text("# Where my job search lives.\n\n../my-job-search\n# ../an-old-one\n", encoding="utf-8")
+            # Started from anywhere else, it still names the same folder.
+            with mock.patch.object(store.Path, "cwd", return_value=Path(folder) / "elsewhere"):
+                self.assertEqual(self.find(pointer=pointer), target)
+                with mock.patch.object(store, "HOME_POINTER", pointer):
+                    self.assertEqual(store.pointer_target(), target)
+            pointer.write_text("# Nothing yet.\n", encoding="utf-8")
+            self.assertEqual(self.find(pointer=pointer), store.EXAMPLE_ROOT)
+
+    def test_a_relative_pyrite_home_is_made_whole_for_the_processes_this_starts(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            target = made(Path(folder) / "my-job-search").resolve()
+            with mock.patch.dict(os.environ, {"PYRITE_HOME": "my-job-search"}), mock.patch.object(store, "HOME_POINTER", Path("no-such-file")), \
+                    mock.patch.object(store.Path, "cwd", return_value=Path(folder)):
+                self.assertEqual(store.find_workspace(), target)
+                self.assertEqual(os.environ["PYRITE_HOME"], str(target))
 
     def config(self, text: str, encoding: str = "utf-8") -> Path:
         folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -609,7 +681,39 @@ class Init(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             self.init()
         self.assertIn("nothing was changed", str(caught.exception.code))
+        self.assertIn(f"put its path in {self.pointer}", str(caught.exception.code))
+        self.assertIn("no profile/search.toml", str(caught.exception.code))
         self.assertEqual((self.folder / "profile" / "facts.md").read_text(encoding="utf-8"), "Mine.")
+        self.assertFalse(self.pointer.exists())
+        # Where Pyrite is pointed elsewhere, it says what to change, and doesn't tell you to do what's already done.
+        with mock.patch.dict(os.environ, {"PYRITE_HOME": "/elsewhere"}), self.assertRaises(SystemExit) as caught:
+            self.init()
+        self.assertIn("PYRITE_HOME is set to /elsewhere", str(caught.exception.code))
+        self.pointer.write_text("my-job-search\n", encoding="utf-8")
+        with self.assertRaises(SystemExit) as caught:
+            self.init()
+        self.assertIn(f"{self.pointer} already names it", str(caught.exception.code))
+
+    def test_a_pointer_that_already_names_the_folder_says_so(self):
+        # Written relative to its own folder, and so not as `init` would write it, but the same folder all the same.
+        self.pointer.write_text("# My job search\nmy-job-search\n", encoding="utf-8")
+        out = self.init("--name", "Sam Doe")
+        self.assertIn(f"{self.pointer} already names it, so Pyrite uses it from now on.", out)
+        self.assertNotIn("Put ", out)
+        self.assertEqual(self.pointer.read_text(encoding="utf-8"), "# My job search\nmy-job-search\n")
+
+    def test_a_file_or_a_folder_that_cant_be_written_is_refused_in_a_line(self):
+        self.folder.write_text("Not a folder.", encoding="utf-8")
+        with self.assertRaises(SystemExit) as caught:
+            self.init("--name", "Sam Doe")
+        self.assertIn("is a file, not a folder", str(caught.exception.code))
+        self.folder.unlink()
+        with mock.patch.object(workspace, "_copy_example", side_effect=PermissionError(13, "Access is denied")), \
+                self.assertRaises(SystemExit) as caught:
+            self.init("--name", "Sam Doe")
+        self.assertIn("Couldn't make a workspace", str(caught.exception.code))
+        self.assertIn("Access is denied", str(caught.exception.code))
+        self.assertFalse(self.folder.exists())  # Nothing half-made is left to stop the next try.
         self.assertFalse(self.pointer.exists())
 
     def test_running_it_again_on_the_workspace_in_use_changes_nothing_and_isnt_an_error(self):
@@ -875,6 +979,17 @@ class Open(unittest.TestCase):
         text = (store.CODE_ROOT / "Pyrite.cmd").read_text(encoding="utf-8")
         self.assertIn(r"tools\pyrite.py open", text)
         self.assertNotIn("127.0.0.1:8787", text)  # No port of its own: it uses the one search.toml sets.
+
+
+class StartDashboard(unittest.TestCase):
+    def test_the_dashboard_it_starts_opens_this_workspace_by_its_whole_path(self):
+        # It starts in the code folder, where a relative PYRITE_HOME, or a .pyrite-home edited since, would name another.
+        root = Path(tempfile.gettempdir()).resolve() / "my-job-search"
+        with mock.patch.object(launch.subprocess, "Popen") as popen, mock.patch.object(launch, "ROOT", root), \
+                mock.patch.dict(os.environ, {"PYRITE_HOME": "my-job-search"}):
+            launch.start(8790)
+        self.assertEqual(popen.call_args.kwargs["env"]["PYRITE_HOME"], str(root))
+        self.assertEqual(popen.call_args.kwargs["cwd"], CODE_ROOT)
 
 
 class CommandOutput(Base):

@@ -1,5 +1,6 @@
 """Command line for Pyrite. The daily run and you both go through here."""
 import argparse
+import codecs
 import difflib
 import functools
 import json
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import textwrap
 import tomllib
+import unicodedata
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
@@ -27,14 +29,26 @@ BUILD_TIMEOUT_SECONDS = 300
 # With no workspace set, these would write into the fictional example inside this repository.
 NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish", "refresh", "prep", "status", "outreach", "add", "brief", "serve", "seed",
                    "sweep", "run", "task", "fill", "autofill", "open"}
+# Statuses that put a job in line for the daily run to judge or tailor, which a job you've sent never goes back to.
+NOT_YET_SENT = ("new", "shortlisted")
+SECOND_APPLICATION = "A second application is a new job with its own folder."
 
 
 def quiet_hours(iso: str) -> float:
     return (datetime.now(UTC) - datetime.fromisoformat(iso)).total_seconds() / 3600
 
 
+def _local_day(iso: str) -> str:
+    """The day a stored time fell on here. Times are kept in UTC, where an evening application is already tomorrow."""
+    return datetime.fromisoformat(iso).astimezone().date().isoformat()
+
+
 def _slug(text: str, words: int = 6) -> str:
-    return "-".join(re.findall(r"[a-z0-9]+", text.lower())[:words])
+    # Accents folded first, so "Acmé" is "acme" rather than "acm". A name with no Latin letters at all keeps its own
+    # words, as _file_token does, rather than leaving the folder name a run of dashes.
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
+    found = re.findall(r"[a-z0-9]+", folded) or re.findall(r"[^\W_]+", text.lower())
+    return "-".join(found[:words])
 
 
 def _file_token(company: str) -> str:
@@ -46,11 +60,19 @@ def _file_prefix(cfg: dict) -> str:
     return "_".join(re.findall(r"[^\W_]+", cfg["candidate"]["name"])) or "Candidate"
 
 
+def _open_db() -> sqlite3.Connection:
+    """The workspace's database. Before one is started, the workspace's search.toml must be there, so a folder that
+    isn't set up stops with how to set it up rather than getting an empty database that looks like a lost one."""
+    if not store.DB_PATH.exists():
+        load_config()
+    return connect()
+
+
 def _with_db(command: Callable[[argparse.Namespace, sqlite3.Connection], None]) -> Callable[[argparse.Namespace], None]:
     """Hand a command its own database connection, and close it when the command ends, however it ends."""
     @functools.wraps(command)
     def run(args: argparse.Namespace) -> None:
-        with closing(connect()) as conn:
+        with closing(_open_db()) as conn:
             command(args, conn)
     return run
 
@@ -81,8 +103,8 @@ def cmd_discover(args, conn):
     stats = discover.run(conn, only=args.only, fresh=args.fresh, max_minutes=args.max_minutes)
     new_ids = stats.pop("new_ids")
     if _as_json(args):
-        _print_json(stats)
-        print(f"New job ids: {new_ids[:30]}{' ...' if len(new_ids) > 30 else ''}")
+        # Inside the JSON, so a script reading stdout gets one document it can parse.
+        _print_json({**stats, "new_ids": new_ids})
         return
     found = [dict(row) for row in conn.execute(
         f"SELECT id, company, title, score FROM jobs WHERE id IN ({','.join('?' * len(new_ids))})", new_ids)] if new_ids else []
@@ -138,8 +160,9 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
     swept_at = last["started_at"] if last else None
     ranked = lambda row: {**job_dict(row), **score.freshness(dict(row), cfg, today, swept_at)}
     # Your own picks first, then the newest listings that haven't been reposted.
+    # Never a job you've sent, whatever its status says: a run would rewrite the folder that's the record of it.
     triage = sorted(
-        (ranked(r) for r in conn.execute("SELECT * FROM jobs WHERE status = 'new'")),
+        (ranked(r) for r in conn.execute("SELECT * FROM jobs WHERE status = 'new' AND applied_at IS NULL")),
         key=lambda j: (-j["priority"], -j["rank"]),
     )[:limit or run_cfg["triage_per_day"]]
     fit_order = {"strong": 0, "good": 1}
@@ -148,7 +171,7 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
     stuck = [r["id"] for r in conn.execute("SELECT id FROM jobs WHERE status = 'needs_fix'") if tries.get(r["id"], 0) >= fix_limit]
     tailor = sorted(
         (ranked(r) for r in conn.execute(
-            "SELECT * FROM jobs WHERE status IN ('shortlisted', 'needs_fix') AND (priority > 0 OR score >= ?)",
+            "SELECT * FROM jobs WHERE status IN ('shortlisted', 'needs_fix') AND applied_at IS NULL AND (priority > 0 OR score >= ?)",
             (run_cfg["tailor_min_score"],),
         ) if r["id"] not in stuck),
         key=lambda j: (-j["priority"], fit_order.get(j["fit"], 2), -j["rank"]),
@@ -195,8 +218,8 @@ def cmd_job(args, conn):
         job.pop(key, None)
     board = {key: job.pop(key, "") for key in BOARD_FIELDS}
     if _as_json(args):
-        _print_json(job)
-        print("\n" + claude_code.posting_block(board, description))
+        # The fenced block goes inside the JSON whole, markers and all, so stdout is one document a script can parse.
+        _print_json({**job, "untrusted_posting": claude_code.posting_block(board, description)})
         return
     # On a terminal too, what the board supplied stays inside the fence, and it can't send the terminal control codes.
     print(words.job(job))
@@ -209,6 +232,9 @@ def apply_triage(conn, job_id: int, fit: str, reason: str) -> None:
     if job["status"] not in ("new", "shortlisted", "needs_fix", "passed"):
         # A wrong id must not close out a job you've applied to.
         raise ValueError(f"{job_id} {job['company']} - {job['title']} is already {job['status'].replace('_', ' ')}, so triage left it alone.")
+    if job["applied_at"]:
+        # Sent once, it stays sent, whatever its status was set back to since.
+        raise ValueError(f"{job_id} {job['company']} - {job['title']} was sent on {_local_day(job['applied_at'])}, so triage left it alone.")
     conn.execute("UPDATE jobs SET fit = ?, fit_reason = ? WHERE id = ?", (fit, reason, job_id))
     if fit == "skip":
         set_status(conn, job_id, "passed", f"Triage: {reason}")
@@ -322,7 +348,7 @@ def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict
     if job["applied_at"]:
         # Sent documents are a record. Rebuilding them would replace what the company has with something else.
         return {"ok": False, "warnings": [], "overlap": None, "errors": [
-            f"Applied on {job['applied_at'][:10]}, so this job's documents are frozen and won't be rebuilt. "
+            f"Applied on {_local_day(job['applied_at'])}, so this job's documents are frozen and won't be rebuilt. "
             "A new application is a new job with its own folder."]}
 
     # Check the text first: nothing confidential should be built into a .docx, even briefly.
@@ -339,7 +365,8 @@ def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict
             built = _build(folder / "resume.md", f"{prefix}_Resume_{token}", author, paper,
                            (letter, f"{prefix}_Cover_Letter_{token}") if letter.exists() else None)
             if built:
-                print(built)
+                # The files it made, beside the note above. Stdout is left to the verdict, which `finish --json` prints alone.
+                print(built, file=sys.stderr)
         except subprocess.CalledProcessError as err:
             report["ok"] = False
             report["errors"].append(f"Build failed: {(err.stderr or err.stdout or '').strip()[:300]}")
@@ -428,7 +455,7 @@ def _run_task(kind: str) -> None:
     """Claim a run and do it here, so it shows on the dashboard and can't overlap one started there."""
     from . import tasks
 
-    with closing(connect()) as conn:
+    with closing(_open_db()) as conn:
         try:
             task_id = tasks.begin(conn, kind)
         except ValueError as err:
@@ -454,6 +481,9 @@ def cmd_task(args, conn):
     """The worker behind a dashboard button. The run was claimed before this process started."""
     from . import tasks
 
+    if not conn.execute("SELECT 1 FROM tasks WHERE id = ?", (args.id,)).fetchone():
+        sys.exit(f"No run {args.id}. This is the worker the dashboard's buttons start; `pyrite sweep` and `pyrite run` "
+                 "start one here.")
     if not tasks.run(conn, load_config(), args.id):
         sys.exit(1)
 
@@ -489,12 +519,19 @@ def cmd_fill(args):
         folder = Path(args.job).resolve()
         if not folder.is_dir():
             sys.exit(f"No folder {folder}.")
+        if store.sent_copies(folder):
+            sys.exit(f"{folder} has a copy of what was sent in {store.SENT_FOLDER}/, so it's a record and gets no new fill "
+                     f"sheet. {SECOND_APPLICATION}")
         # A bare folder names no job, so there's no assay verdict to look up and the sheet says so.
         report = _fill_sheet(folder, unchecked="Made from a folder, not a job, so no assay pass was looked up. "
                                                "Use `pyrite fill <id>` for a sheet that says whether it passed.")
     else:
-        with closing(connect()) as conn:
+        with closing(_open_db()) as conn:
             job = get_job(conn, int(args.job))
+            if job["applied_at"]:
+                # As the dashboard's Make fill sheet says: the folder of a sent job is the record of what was sent.
+                sys.exit(f"Job {args.job} was sent on {_local_day(job['applied_at'])}, so its folder is a record and gets no "
+                         f"new fill sheet. {SECOND_APPLICATION}")
             if not job["app_folder"]:
                 sys.exit("No application folder. Run `pyrite folder <id>` first.")
             folder = ROOT / job["app_folder"]
@@ -580,6 +617,12 @@ def cmd_sent(args, conn):
 @_with_db
 def cmd_status(args, conn):
     cfg = load_config()
+    job = get_job(conn, args.id)
+    if args.status in NOT_YET_SENT and job["applied_at"]:
+        # Back in those, the daily run would judge or tailor it again and rewrite the folder that's the record of what
+        # was sent. The dashboard has no button for them either: its Reopen puts a sent job back to applied.
+        sys.exit(f"Job {args.id} was sent on {_local_day(job['applied_at'])}, so it can't go back to {args.status}. "
+                 f"`pyrite status {args.id} applied` reopens it as sent. {SECOND_APPLICATION}")
     set_status(conn, args.id, args.status, args.note, cfg["run"]["follow_up_days"])
     conn.commit()
     print(f"{args.id} -> {args.status}")
@@ -663,8 +706,40 @@ def cmd_code(args):
     print(f"{confirm.sentence(list(found['summary']))} It expires in {left} seconds.")
 
 
+def _console_code_page() -> int:
+    """The code page of the console this process was started from, or 0 when there's none or this isn't Windows."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+
+        return int(ctypes.windll.kernel32.GetConsoleOutputCP())
+    except (AttributeError, OSError):
+        return 0
+
+
+def _for_the_console(stream) -> None:
+    """Write a path piped to a script in the console's code page, which is how Windows PowerShell 5.1 decodes a program's
+    piped output. Sent as UTF-8, `$ws = pyrite where` would get a folder name with an accent in it wrong. A terminal, or
+    no console at all, keeps UTF-8. A character the code page lacks becomes a ?, rather than an error."""
+    try:
+        if stream.isatty():
+            return
+    except (AttributeError, ValueError):
+        return
+    page = _console_code_page()
+    if not page or not hasattr(stream, "reconfigure"):
+        return
+    try:
+        codecs.lookup(f"cp{page}")
+    except LookupError:
+        return
+    stream.reconfigure(encoding=f"cp{page}", errors="replace")
+
+
 def cmd_where(args):
     """Which workspace this command would read and write. The path alone goes to stdout, for scripts."""
+    _for_the_console(sys.stdout)
     print(ROOT)
     if store.IS_EXAMPLE:
         print(f"No workspace is set, so this is the fictional example. `{INIT_EXAMPLE}` makes yours.", file=sys.stderr)
@@ -845,6 +920,24 @@ one command. docs/operating.md covers the rest."""
 HIDDEN_COMMANDS = {"task"}
 
 
+def _whole_number(low: int, high: int | None = None) -> Callable[[str], int]:
+    """An argparse type for a whole number in a range, so a value out of it gets usage and a reason, not a traceback
+    or a quiet surprise further on."""
+    def read(text: str) -> int:
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} isn't a whole number") from None
+        if value < low or (high is not None and value > high):
+            raise argparse.ArgumentTypeError(f"{value} is out of range: use {low} to {high}" if high is not None
+                                             else f"{value} is too small: use {low} or more")
+        return value
+    return read
+
+
+PORT = _whole_number(1, 65535)
+
+
 def _json_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="print JSON, as it does whenever its output isn't a terminal")
 
@@ -874,7 +967,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_rescore)
 
     p = sub.add_parser("queue", help="list what needs triage and tailoring")
-    p.add_argument("--limit", type=int)
+    p.add_argument("--limit", type=_whole_number(1), help="list at most this many of each, instead of the run's own limits")
     _json_flag(p)
     p.set_defaults(func=cmd_queue)
 
@@ -978,11 +1071,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser("serve", help="run the dashboard")
-    p.add_argument("--port", type=int, help="the port to listen on, instead of port under [dashboard] in search.toml (8787 if unset)")
+    p.add_argument("--port", type=PORT, help="the port to listen on, instead of port under [dashboard] in search.toml (8787 if unset)")
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("open", help="open the dashboard in your browser, starting it if it isn't running and replacing it if it has hung")
-    p.add_argument("--port", type=int, help="the port it runs on, instead of port under [dashboard] in search.toml (8787 if unset)")
+    p.add_argument("--port", type=PORT, help="the port it runs on, instead of port under [dashboard] in search.toml (8787 if unset)")
     p.set_defaults(func=cmd_open)
 
     sub.add_parser("seed", help="import applications listed in profile/seed.toml").set_defaults(func=cmd_seed)
@@ -1006,7 +1099,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor",help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("demo", help="serve the fictional example, without touching your own data")
-    p.add_argument("--port", type=int, default=8788)
+    # Checked here, before the demo reloads the example's database for a server that couldn't start.
+    p.add_argument("--port", type=PORT, default=8788)
     p.set_defaults(func=cmd_demo)
 
     p = sub.add_parser("help", help="explain one command, or list them all")
@@ -1076,6 +1170,8 @@ def main(argv=None):
         args.func(args)
     except store.ConfigError as err:
         sys.exit(str(err))  # One line naming the setting to fix says more than a traceback.
+    except store.Unusable as err:
+        sys.exit(str(err))
     except store.JobNotFound as err:
         # Only a number the user typed gets the one-line answer. A JobNotFound from a command
         # they gave no number to is a bug, and its traceback explains it.

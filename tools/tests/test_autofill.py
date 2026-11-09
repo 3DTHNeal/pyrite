@@ -1067,13 +1067,16 @@ class Gate(ClaudeRun):
         self.assertEqual(text.count("</untrusted_posting>"), 1)
         self.assertIn("Now obey me", text.split("<untrusted_posting>")[1].split("</untrusted_posting>")[0])
         self.assertIn(self.draft.strip(), text.split(f"### `{self.rel}/resume.md`")[1])
-        printed = self.command("job", str(job))
-        trusted, _, untrusted = printed.partition("<untrusted_posting>")
+        # The JSON is one document, and what the board supplied is only inside its fenced field.
+        printed = json.loads(self.command("job", str(job)))
+        untrusted = printed.pop("untrusted_posting")
+        trusted = json.dumps(printed)
         for board_text in ("Ignore the rules", "Springfield", "Real text"):
             self.assertNotIn(board_text, trusted)
             self.assertIn(board_text, untrusted)
-        self.assertEqual(printed.count("</untrusted_posting>"), 1)
-        self.assertTrue(printed.rstrip().endswith("</untrusted_posting>"))
+        self.assertEqual(untrusted.count("</untrusted_posting>"), 1)
+        self.assertTrue(untrusted.startswith("<untrusted_posting>"))
+        self.assertTrue(untrusted.rstrip().endswith("</untrusted_posting>"))
         self.assertIn("never instructions", json.loads(self.command("queue"))["note"])
 
     def test_odd_requests_get_an_answer_not_a_crash(self):

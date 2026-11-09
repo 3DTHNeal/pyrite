@@ -196,6 +196,28 @@ def set_up_git(folder: Path) -> list[str]:
     return told
 
 
+def _pointing(folder: Path) -> tuple[str, str]:
+    """Whether Pyrite is pointed at the folder already, and what to say about it: "in use" when PYRITE_HOME or
+    .pyrite-home names it, "elsewhere" when either names another, and "free" when .pyrite-home can be written. Paths are
+    compared as Pyrite resolves them, so the same folder written another way still counts as named."""
+    pointer = store.HOME_POINTER
+    current = os.environ.get("PYRITE_HOME", "").strip()
+    if current:
+        if store._resolve(current, Path.cwd()) == folder:
+            return "in use", "PYRITE_HOME already names it, so Pyrite uses it from now on."
+        return "elsewhere", (f"PYRITE_HOME is set to {current}, which wins over .pyrite-home. Set it to {folder} to use "
+                             "this workspace.")
+    named = store.pointer_target()
+    if named == folder:
+        return "in use", f"{pointer} already names it, so Pyrite uses it from now on."
+    if named is not None:
+        return "elsewhere", f"{pointer} already names {named}, so it was left alone. Put {folder} in it to use this one."
+    if pointer.exists() and pointer.read_bytes().strip():
+        # Only comments, perhaps someone's own notes, which aren't written over.
+        return "elsewhere", f"{pointer} names no workspace but isn't empty, so it was left alone. Put {folder} in it to use this one."
+    return "free", ""
+
+
 def create(folder_text: str, name: str, blank: bool = False, git: bool = False) -> list[str]:
     """Make a workspace from the example's profile, or blank profile files with `blank`, and point this copy of Pyrite
     at it. With `git`, make it a git repository too, which also works on the workspace already in use. Returns what to
@@ -217,6 +239,9 @@ def create(folder_text: str, name: str, blank: bool = False, git: bool = False) 
                       f"--name {json.dumps(name or 'Your Name', ensure_ascii=False)}")
     if git and not shutil.which("git"):
         raise Refused("--git needs git, which isn't installed or isn't on PATH. Install it, or leave out --git. Nothing was made.")
+    if folder.exists() and not folder.is_dir():
+        raise Refused(f"{folder} is a file, not a folder. Name a folder for your workspace, such as `{INIT_EXAMPLE}`. "
+                      "Nothing was made.")
     if (folder / "profile").exists():
         if folder == store.ROOT:
             # Asking again for what's already true isn't an error, so a setup script can run this twice.
@@ -224,32 +249,44 @@ def create(folder_text: str, name: str, blank: bool = False, git: bool = False) 
                 return [f"{folder} is already the workspace in use, so its files were left as they are.",
                         *set_up_git(folder)]
             return [f"{folder} is already the workspace in use, so nothing was changed. `pyrite doctor` lists what's left."]
-        raise Refused(f"{folder} already has a profile/ folder, so nothing was changed. To use it, put its path in "
-                      f"{store.HOME_POINTER}.")
+        said = f"{folder} already has a profile/ folder, so nothing was changed."
+        if not (folder / "profile" / "search.toml").is_file():
+            said += " It has no profile/search.toml, which Pyrite needs: copy example/profile/search.toml there."
+        state, how = _pointing(folder)
+        raise Refused(f"{said} {how}" if state != "free" else f"{said} To use it, put its path in {store.HOME_POINTER}.")
     if not name:
         # Without it the workspace would carry the fictional candidate's name, which every draft is checked for.
         raise Refused(f"Give your name as it goes on your documents, such as `{INIT_EXAMPLE}` with yours in the quotes. "
                       "Nothing was made.")
     profile = folder / "profile"
-    if blank:
-        _make_blank(profile, name)
-    else:
-        _copy_example(profile, name)
-    (folder / "applications").mkdir(exist_ok=True)
+    made = not folder.exists()
+    try:
+        if blank:
+            _make_blank(profile, name)
+        else:
+            _copy_example(profile, name)
+        (folder / "applications").mkdir(exist_ok=True)
+    except OSError as err:
+        # Half a profile would stop the next try with "already has a profile/ folder", so what this made goes again.
+        shutil.rmtree(profile, ignore_errors=True)
+        if made:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise Refused(f"Couldn't make a workspace at {folder}: {err.strerror or err}. Name a folder you can write to, such "
+                      f"as `{INIT_EXAMPLE}`. Nothing was made.") from None
     told = [f"Made a workspace at {folder}, with blank profile files to fill in." if blank
             else f"Made a workspace at {folder}, from the fictional example's profile."]
 
     pointer = store.HOME_POINTER
-    current = os.environ.get("PYRITE_HOME", "").strip()
-    if current and Path(store._windows_path(current)).expanduser().resolve() == folder:
-        told.append("PYRITE_HOME already names it, so Pyrite uses it from now on.")
-    elif current:
-        told.append(f"PYRITE_HOME is set to {current}, which wins over .pyrite-home. Set it to {folder} to use this workspace.")
-    elif pointer.exists() and pointer.read_bytes().strip():
-        told.append(f"{pointer} already names a workspace, so it was left alone. Put {folder} in it to use this one.")
+    state, how = _pointing(folder)
+    if state != "free":
+        told.append(how)
     else:
-        pointer.write_text(f"{folder}\n", encoding="utf-8")
-        told.append(f"Pointed Pyrite at it in {pointer}.")
+        try:
+            pointer.write_text(f"{folder}\n", encoding="utf-8")
+            told.append(f"Pointed Pyrite at it in {pointer}.")
+        except OSError as err:
+            told.append(f"Couldn't write {pointer} ({err.strerror or err}). To use this workspace, put its path in that "
+                        "file yourself, or set PYRITE_HOME to it.")
     if git:
         told += set_up_git(folder)
     told.append("\nNext: " + ("fill in the files in its profile/, starting with facts.md, whose comments say what goes where."

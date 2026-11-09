@@ -17,13 +17,54 @@ MAY_BE_MISSING = "PYRITE_WORKSPACE_MAY_BE_MISSING"
 
 
 def _read_pointer(path: Path) -> str:
-    """The path in the pointer file, however it was saved. PowerShell's `>` writes UTF-16, and some editors add a byte-order mark."""
+    """The path in the pointer file, however it was saved. PowerShell's `>` writes UTF-16, and some editors add a byte-order mark.
+
+    Only the first line that names something counts, so a blank line or a `#` comment around it is a note to whoever
+    reads the file, not part of the path."""
     raw = path.read_bytes()
     encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
     try:
-        return raw.decode(encoding).strip().strip('"')
+        text = raw.decode(encoding)
     except UnicodeError:
         raise SystemExit(f"Can't read {path}. Save it as plain text holding one line: the path to your workspace.") from None
+    for line in text.splitlines():
+        line = line.strip().strip('"').strip()
+        if line and not line.startswith("#"):
+            return line
+    return ""
+
+
+def _resolve(chosen: str, base: Path) -> Path:
+    """A workspace path made whole. A relative one is read from `base`, so the same words name the same folder from
+    wherever Pyrite was started: the pointer file's own folder for .pyrite-home, the starting folder for PYRITE_HOME."""
+    return (base / Path(_windows_path(chosen)).expanduser()).resolve()
+
+
+def pointer_target() -> Path | None:
+    """The workspace .pyrite-home names, or None when there's no such file or it names nothing."""
+    if not HOME_POINTER.exists():
+        return None
+    chosen = _read_pointer(HOME_POINTER)
+    return _resolve(chosen, HOME_POINTER.parent) if chosen else None
+
+
+def _not_a_workspace(workspace: Path, origin: str) -> str:
+    """Why a folder can't be the workspace, with what to do about it, or "" when it can be."""
+    said = f"That path comes from {origin}."
+    make = f"make a workspace with `pyrite init {workspace} --name \"Your Name\"`, with your own name."
+    if not workspace.is_dir():
+        return f"The Pyrite workspace doesn't exist: {workspace}\n{said} Fix the path, or {make}"
+    if workspace == CODE_ROOT or CODE_ROOT in workspace.parents:
+        # Its applications and database would sit where `git add` picks them up, in a repository meant to be public.
+        return (f"The Pyrite workspace {workspace} is inside the code repository, where your applications and database "
+                f"could be committed and published.\n{said} Move the workspace outside {CODE_ROOT} and point that at it, "
+                "or make a new one beside the repository with `pyrite init ../my-job-search --name \"Your Name\"`.")
+    if not (workspace / "profile" / "search.toml").is_file() and not (workspace / "data" / "pyrite.db").is_file():
+        # Used as it is, the first command would start an empty database there, and that looks exactly like a lost one.
+        fix = ("Copy example/profile/search.toml into its profile/ to start." if (workspace / "profile").is_dir()
+               else f"Fix the path, or {make}")
+        return f"{workspace} isn't a Pyrite workspace: it has no profile/search.toml and no data/pyrite.db.\n{said} {fix}"
+    return ""
 
 
 def find_workspace() -> Path:
@@ -31,19 +72,26 @@ def find_workspace() -> Path:
 
     The code and the data are separate on purpose, so that nothing personal can be
     committed from this repository. A workspace that was named but can't be found
-    stops here, because an empty database would look exactly like a lost one.
+    stops here, because an empty database would look exactly like a lost one. So does
+    a folder that isn't a workspace, and one inside this repository.
     """
-    chosen, origin = os.environ.get("PYRITE_HOME", "").strip(), "PYRITE_HOME"
+    chosen, origin, base = os.environ.get("PYRITE_HOME", "").strip(), "PYRITE_HOME", Path.cwd()
     if not chosen and HOME_POINTER.exists():
-        chosen, origin = _read_pointer(HOME_POINTER), str(HOME_POINTER)
+        chosen, origin, base = _read_pointer(HOME_POINTER), str(HOME_POINTER), HOME_POINTER.parent
     if not chosen:
         return EXAMPLE_ROOT
-    workspace = Path(_windows_path(chosen)).expanduser().resolve()
-    if not workspace.is_dir():
+    workspace = _resolve(chosen, base)
+    if workspace == EXAMPLE_ROOT:
+        return workspace  # The demo, which the entry point points here on purpose.
+    problem = _not_a_workspace(workspace, origin)
+    if problem:
         if os.environ.get(MAY_BE_MISSING):
             return EXAMPLE_ROOT
-        raise SystemExit(f"The Pyrite workspace doesn't exist: {workspace}\nThat path comes from {origin}. Fix the path, or make a "
-                         f"workspace there with `pyrite init {workspace} --name \"Your Name\"`, with your own name.")
+        raise SystemExit(problem)
+    if origin == "PYRITE_HOME":
+        # Made whole once, here, for every process this one starts: the dashboard's workers start in the code folder,
+        # where a relative path would name some other folder.
+        os.environ["PYRITE_HOME"] = str(workspace)
     return workspace
 
 
@@ -283,7 +331,8 @@ def read_config(path: Path) -> dict:
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
-        raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/ into your workspace to start, then run `pyrite doctor`.")
+        raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/search.toml there, or make a new workspace with "
+                         "`pyrite init ../my-job-search --name \"Your Name\"`, then run `pyrite doctor`.")
     cfg = read_config(CONFIG_PATH)
     problems = config_problems(cfg)
     if problems:
@@ -291,16 +340,31 @@ def load_config() -> dict:
     return cfg
 
 
+class Unusable(sqlite3.DatabaseError):
+    """A database file Pyrite can't open or can't write. `str()` says which, and what to do, in plain words."""
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     path = path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not os.access(path, os.W_OK):
+        # It opens, and the first change fails halfway through a command. Every run writes, so say so before any starts.
+        raise Unusable(f"{path} is read-only, and Pyrite writes to its database on every run. Make it writable again. "
+                       "Nothing was changed.")
     conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    _stamp_scoring(conn)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        _stamp_scoring(conn)
+    except sqlite3.DatabaseError as err:
+        conn.close()
+        if "locked" in str(err):
+            raise  # Busy rather than broken, and the caller decides whether to wait.
+        raise Unusable(f"Pyrite can't use its database, {path}: {err}. If the file is damaged, put back your latest backup "
+                       "of it. Nothing was changed.") from err
     return conn
 
 

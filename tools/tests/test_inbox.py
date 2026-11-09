@@ -440,10 +440,12 @@ class ReplySetup(InboxBase):
             self._cli(self.creds)
         self.assertEqual(caught.exception.code, 1)
 
-    def test_sweep_unit_cannot_fail_because_of_mail(self):
+    def test_sweep_unit_runs_the_sweep_the_dashboard_runs(self):
+        # `pyrite sweep` claims the run, so the timer and the button can't overlap, and trouble with mail never fails it
+        # (test_trouble_with_mail_never_fails_a_sweep). Running discover and then inbox did neither.
         unit = (store.CODE_ROOT / "tools/pyrite/systemd/pyrite-sweep.service").read_text(encoding="utf-8")
-        self.assertIn("ExecStart=-%h/pyrite/.venv/bin/python tools/pyrite.py inbox", unit)
-        self.assertLess(unit.index("pyrite.py discover"), unit.index("pyrite.py inbox"))
+        starts = [line for line in unit.splitlines() if line.startswith("ExecStart=")]
+        self.assertEqual(starts, ["ExecStart=%h/pyrite/.venv/bin/python tools/pyrite.py sweep"])
 
 
 def exported(from_address="sam@contoso.com", subject="Your application", **kw):

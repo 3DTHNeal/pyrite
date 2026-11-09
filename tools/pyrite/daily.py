@@ -162,8 +162,8 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambd
     feedback = ""
     for attempt in range(1, ATTEMPTS + 1):
         job = get_job(conn, job_id)
-        if job["status"] not in TAILORING or not _time_left(deadline):
-            return False  # You moved it on during the run, or time ran out. Either way it's left as it is.
+        if job["status"] not in TAILORING or job["applied_at"] or not _time_left(deadline):
+            return False  # You moved it on or sent it, or time ran out. Either way it's left as it is.
         kept = _keep(files)
         say(f"writing draft {attempt}")
         _ask(conn, job_id, "tailor", cmd, tailor_prompt(job, folder, cfg, feedback), deadline)
