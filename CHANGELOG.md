@@ -86,6 +86,14 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- Workday autofill no longer answers a question that only shares words with a sheet row. A question asked the other way round ("Are you under 18?"), one about someone else ("a relative who worked here"), one about experience with something the row doesn't name ("years with Kubernetes"), and a passport or travel-visa question are left for you.
+- Names and places with a full stop, such as "Mary St. John", "J. Robert Smith" and "St. Louis", are typed whole.
+- A ``` block left open on `workday-paste.md` no longer swallows the sections after it. It ends at the next heading, and the fill sheet says so at the top. If the roles still don't read back as the paste sheet has them, no sheet is made.
+- A company or name with "letter" in it, such as Letterbox Labs, no longer makes the resume the cover letter on the fill sheet.
+- Marking a job applied while a document is locked no longer leaves a half-made `sent/` that counts as the record, and `sent/` holds only the resume, the letter and their built documents, not the autofill log or other files.
+- A resume.md saved with a byte-order mark builds with its name as the name. A `#### Role` line without a place builds, and one with a fourth part fails with a sentence that says so. A failed build shows the end of what went wrong.
+- `* ` and `+ ` bullets build as bullets, and `<!-- notes -->` are left out of the documents.
+- `pyrite import-resume` reads text in Word content controls, text boxes, nested tables and the page footer, and names anything it still couldn't reach. It reads Pyrite's own PDFs back as the master they came from, and reads a `.txt` saved as UTF-16 or with a byte-order mark.
 - `pyrite status <id> new` or `shortlisted` is refused for a job you've applied to, since it put a sent application back in line for the daily run, which could rewrite its folder. `pyrite status <id> applied` reopens it, as the dashboard's Reopen does, and the run's queue, triage and tailoring skip any job you've sent, whatever its status says.
 - `pyrite fill` writes no fill sheet for a job you've applied to, or into a folder with a copy of what was sent, as the dashboard already didn't.
 - `--json` prints one JSON document: `pyrite job` puts the fenced posting in an `untrusted_posting` field, `pyrite discover` lists new job ids in `new_ids`, and `pyrite finish` writes the built file names to stderr.
@@ -173,6 +181,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Security
 
+- `python -m pyrite.workday` checks the `[workday]` switch, that the job hasn't been sent, and the assay's pass, as `pyrite autofill` does. Autofill no longer presses a button that agrees to, accepts or sends anything, even one that also says "continue".
+- `check_public.py` catches more: phone numbers written with a leading +1, with or without dots, or as ten digits after "phone"; lowercase `c:\users` paths; private files in any case, plus database journals and backups and `.env` copies; GitHub fine-grained, OpenAI project, Google, Stripe live and Slack webhook keys, JWTs, and secrets written as settings; fastmail, comcast and pm.me addresses; annotated tags' messages and taggers; names split across a document's runs or written as entities, and every file inside a zip-based document; and UTF-16 text in image metadata. It reports a submodule instead of crashing, and allows only `.docx`, `.pdf` and `.png` under `example/applications/` and `docs/screenshots/`.
 - Pyrite refuses a workspace inside its own repository, where applications and the database could be committed to a public repository, and a folder that isn't a workspace, which used to get an empty database. `pyrite init` says how to make one.
 - PRIVACY.md now lists the Industries tab's downloads from the Bureau of Labor Statistics and its outlook research run, which sends the industry, your area and the employers you follow to Claude with web search.
 - The Gmail mail check denies every Gmail tool that sends, drafts, labels, trashes or marks mail, so even a workspace `.claude/settings.json` can't allow one. It is told only the companies you've applied to and those under `[inbox.domains]`, fenced as data, not every company a job board listed.
