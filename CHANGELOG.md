@@ -8,10 +8,11 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 - A posting past its own firm deadline is a pass: the pan doesn't store a new one, and the next pan or run passes on a job you haven't sent, once, so **Undo pass** sticks. "Accepted at least until" is read as a floor, not a deadline, and past it the job shows **May close any day**.
 - `decide_days` under `[run]` (5 if unset): a job closing within that many days goes on the to-do list as **Closing soon**, saying to tailor it or pass, and the daily run judges and tailors it before the rest.
-- `[pay]` in `search.toml`, with `floor`, `target` and `currency`. A new posting paying under your floor isn't stored, one meeting your target ranks higher, and every range is compared with what similar roles Pyrite has seen pay, so one far above or below is marked, as is a range wide enough to span levels.
+- Pay is judged against the position: each range is compared with what postings for the same track at the same level have paid. One too low to bother with sinks in priority and isn't judged by the daily run unless you pick it, one under the going rate ranks lower, and one well above similar roles is marked, as is a range wide enough to span levels. `[pay]` in `search.toml` sets the currency compared.
 - Asks for more years of a skill than it has existed, such as "8+ years of AI agents", show as **Asks the impossible** rather than as your gap, and Claude is told the age of each young skill a posting asks for when it judges and tailors. `pyrite skills` lists the ages Pyrite knows. `research = true` under `[skills]` has the daily run look up the ones it doesn't, on the web, keeping only dated answers with a source the run found. `pyrite skills --research` and `pyrite skills "<skill>"` do it on request.
 - **Rare near you**: a local role in a track that rarely comes up nearby ranks higher, by `rare_points` under `[freshness]`.
 - The job panel's **What Pyrite read into it** gives the sentences behind the pay, rarity and skill-age tags.
+- `reach_out = false` under `[dashboard]` leaves the **Reach out** reminders off the to-do list.
 - **Reached out** in the job panel of a sent application logs a note to the hiring manager or a recruiter: the day, and who and what if you like. It shows in the timeline and on the card, an application one to three days old with nothing logged gets a **Reach out** to-do item, and the follow-up reminder moves to a week after the note. `pyrite outreach <id>` logs one from the command line.
 - The database records which scoring its prospects have. When an update changes how postings are scored, the next pan rescores the prospects you haven't acted on, so none keeps an old score or reason, and names any it dropped beside the sweep's result.
 - A **Profile** tab, the start of one place for the fact bank and the search settings. It lists each section with what it holds now, a **Needs you** list of what setup still needs with a button to the section that fixes it, and a **History** of every save it makes, where any file's earlier copy can be compared and put back. Sections whose editors aren't built yet say where to make the change meanwhile. The Facts and Settings tabs work as before.
@@ -44,6 +45,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- **Reach out** is one to-do item however many applications are due a note, naming the one whose window closes first and counting the rest, below the other items.
 - The systemd sweep unit runs `pyrite sweep`, the same sweep as the dashboard's button, so a timed sweep and one you start can't overlap.
 - A place under `places` that ends in a US state matches the state written out or first: "Madison, WI" also matches "Madison, Wisconsin" and "US-WI-Madison". Periods and parentheses count as spaces, so "St. Louis" matches "St Louis".
 - A `**Deadline:**` line in a job's notes.md now wins over the date read from the posting.

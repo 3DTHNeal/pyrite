@@ -166,11 +166,13 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
         return signals.apply(job, signals.read(dict(row), cfg, context, folder))
 
     # Your own picks first, then any whose deadline leaves just enough time to tailor, then the best of the rest.
-    # One whose firm deadline has passed waits for the sweep to pass on it, unless you picked it. Never a job you've
-    # sent, whatever its status says: a run would rewrite the folder that's the record of it.
+    # One whose firm deadline has passed waits for the sweep to pass on it, and one paying too little for the role to
+    # bother with isn't judged, unless you picked it. Never a job you've sent, whatever its status says: a run would
+    # rewrite the folder that's the record of it.
     current = lambda job: job["priority"] or not job["deadline_expired"]
+    worth = lambda job: current(job) and (job["priority"] or not job["pay_too_low"])
     triage = sorted(
-        filter(current, map(ranked, conn.execute("SELECT * FROM jobs WHERE status = 'new' AND applied_at IS NULL"))),
+        filter(worth, map(ranked, conn.execute("SELECT * FROM jobs WHERE status = 'new' AND applied_at IS NULL"))),
         key=lambda j: (-j["priority"], not j["decide_soon"], -j["rank"]),
     )[:limit or run_cfg["triage_per_day"]]
     fit_order = {"strong": 0, "good": 1}
@@ -196,7 +198,7 @@ def cmd_queue(args, conn):
     found = queue(conn, load_config(), args.limit)
     keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "promoted", "age_days", "reposts", "redates",
             "is_new", "ghost_risk", "ghost_reason", "unconfirmed", "scam_signs", "track", "flags", "fit", "priority", "status", "comp", "url",
-            "deadline", "days_to_deadline", "decide_soon", "pay_low", "pay_high", "pay_signs", "rare", "rare_reason", "impossible_asks")
+            "deadline", "days_to_deadline", "decide_soon", "pay_low", "pay_high", "pay_too_low", "pay_signs", "rare", "rare_reason", "impossible_asks")
     trim = lambda job: {k: job[k] for k in keep}
     last = found["last"]
     data = {

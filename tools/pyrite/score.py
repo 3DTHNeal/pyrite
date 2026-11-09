@@ -303,6 +303,15 @@ def _in_any_industry(names: list, job: dict, cfg: dict) -> bool:
     return any(_in_industry(i, job, needed) for i in rules.get("industry", []) if i["name"] in names)
 
 
+def level(title: str, cfg: dict) -> str:
+    """How senior a title reads: "top" for a level_top word, "mid" for a level_mid one, or "" for neither."""
+    scoring = cfg["scoring"]
+    # Grouped, so a pattern with alternatives such as "principal|staff" is whole words too, not "Principality".
+    if _any([rf"\b(?:{p})\b" for p in scoring["level_top"]], title or ""):
+        return "top"
+    return "mid" if _any([rf"\b(?:{p})\b\.?" for p in scoring["level_mid"]], title or "") else ""
+
+
 def match_track(title: str, cfg: dict, job: dict | None = None, industry_unknown: bool = False) -> tuple[str, int] | None:
     """Return (track name, seniority points) for an eligible title, else None.
 
@@ -315,9 +324,8 @@ def match_track(title: str, cfg: dict, job: dict | None = None, industry_unknown
     scoring = cfg["scoring"]
     if _any([rf"\b(?:{p})\b" for p in scoring["exclude_titles"]], title):
         return None
-    # Grouped, so a pattern with alternatives such as "principal|staff" is whole words too, not "Principality".
-    top = _any([rf"\b(?:{p})\b" for p in scoring["level_top"]], title)
-    mid = _any([rf"\b(?:{p})\b\.?" for p in scoring["level_mid"]], title)
+    seniority = level(title, cfg)
+    top, mid = seniority == "top", seniority == "mid"
     level_points = 10 if top else 5 if mid else 0
     for track in cfg.get("track", []):  # A blank search.toml has none yet.
         if _any(title_patterns(track), title):

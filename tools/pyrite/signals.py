@@ -3,7 +3,8 @@ and how rare a role like it is where you live. All plain code, worked out afresh
 
 - Deadline (deadline.py): a firm deadline that has passed makes a job a pass, and one within [run] decide_days puts
   the tailor-or-pass decision in front of you while there's still time to tailor.
-- Pay (pay.py): against your [pay] floor and target, and against what similar roles Pyrite has seen pay.
+- Pay (pay.py): against what postings for the same kind of role, at the same level, pay. Too low to bother means the
+  daily run doesn't spend Claude judging it.
 - Skill ages (skillage.py): asks for more years of a skill than it has existed.
 - Rarity: how many other postings in the same track, near you, Pyrite has seen lately. A role that rarely comes up
   where you live is worth more of a look than one that turns up every week, since there may not be another soon.
@@ -20,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import deadline, pay, skillage
+from . import deadline, pay, score, skillage
 
 RARE_DAYS = 90
 RARE_WATCHED_DAYS = 30
@@ -47,7 +48,8 @@ def _recent(first_seen: str | None, today: date) -> bool:
 
 
 def context(conn, cfg: dict, today: date) -> Context:
-    rows = conn.execute("SELECT track, location_kind, first_seen, comp FROM jobs").fetchall()
+    rows = [{**dict(row), "level": score.level(row["title"], cfg)}
+            for row in conn.execute("SELECT title, track, location_kind, first_seen, comp FROM jobs")]
     local = Counter(row["track"] for row in rows if row["location_kind"] == "local" and row["track"] and _recent(row["first_seen"], today))
     first = conn.execute("SELECT MIN(started_at) FROM runs").fetchone()[0]
     watched = (today - date.fromisoformat(first[:10])).days if first else None
@@ -85,7 +87,7 @@ def read(job: dict, cfg: dict, ctx: Context, folder: Path | None) -> dict:
     # A note that only restates an ask nobody could meet isn't something to settle before applying.
     found["impossible_blockers"] = [b for b in found["blockers"] if skillage.only_restates(b, ctx.today)]
     found["blockers"] = [b for b in found["blockers"] if b not in found["impossible_blockers"]]
-    money = pay.judge(job.get("comp") or "", job.get("track") or "", cfg, ctx.peers)
+    money = pay.judge(job.get("comp") or "", job.get("track") or "", score.level(job.get("title") or "", cfg), cfg, ctx.peers)
     rare = rarity(job, cfg, ctx)
     reasons = list(money["pay_reasons"])
     if rare["rare"]:
