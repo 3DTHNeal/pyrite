@@ -38,6 +38,9 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- History offers **Put back this whole save** for a save that changed several files, and warns that putting back one of them leaves the others as they are.
+- The job panel works as a dialog: the page behind it can't be clicked or tabbed to while it's open, and closing it returns focus to the job you opened.
+- In `approved-terms.txt`, a line starting with `#` is a comment and approves nothing. The Facts tab says so, and adding one needs no code.
 - The assay blocks each capitalized name listed under "Do not use" in `facts.md`, so a name is written once and needs no pattern under `[guard] forbidden`. The error names where it's listed. A name your sources also state as fact isn't blocked this way, since every draft that states it would fail, and `pyrite doctor` and the Off limits section name it instead of asking for a pattern for every term.
 - `<!-- comments -->` in a fact bank or master approve nothing, and a comment under Contact isn't taken for the contact line.
 - `rescore` no longer drops a prospect you've acted on (a note, a next step, a pick, a fit verdict or a status of your own, such as one put back by **Undo pass**). It says how many it kept that way, and names the ones it dropped.
@@ -78,6 +81,14 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- A save that would be refused anyway, for text that can't be saved or a form that's out of date, is refused before a code is sent. It no longer uses up a code and a notification. This covers the Profile tab, the Facts tab and Put back.
+- Saves on the Facts and Settings tabs now go into History on the Profile tab, so every earlier version can be put back. Before, only one `.previous` copy was kept beside the file, so a second save lost the original.
+- Notes, next steps and update notes that are too long are refused with a message rather than cut short without saying so, and the boxes stop typing at the limit. An impossible date such as 30 February is refused.
+- Got a reply, Interview, Offer and Rejected can only be logged on an application you've sent.
+- A malformed request, such as a huge job number or deeply nested data, gets a clear refusal instead of a server error.
+- A posting added by hand can't have a company, title or location over 200 characters. Very long company names and titles show at most three lines in tables and cards.
+- On a phone, long folder paths and notes wrap instead of running off the screen.
+- `pyrite serve --port` with a port out of range says so instead of showing a traceback.
 - The assay no longer counts the digits of your phone number or zip code as measured numbers, so "a team of 10" can't pass on the strength of a phone number with 010 in it.
 - The assay no longer takes praise for a denial: "Never failed an X audit", "not a single X finding", "...and I couldn't have done it alone", "...and I never regretted it" are claims of X.
 - A name under `forbidden` that's a plain word, such as `Bluebird`, is also blocked split by a space or a hyphen ("blue bird", "Sky-Lift") and as a plural. The example blocks "hives" as well as "hive".
@@ -120,6 +131,11 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - A fill sheet made from a draft the assay hasn't passed, or whose pass no longer covers it, is still written, but it says at the top that its role text hasn't passed the assay and why, and so do the job's history and `pyrite fill`. `pyrite fill <folder>` says no pass was looked up.
 - Prospects says `1 posting`, not `1 postings`.
 - At about 1000px wide, Prospects' **Tailor** and **Pass** stay in view at the right edge instead of scrolling off it.
+
+### Security
+
+- `allowed_hosts` under `[dashboard]` must be a list of names, matched exactly and ignoring case. A single string, which used to match any piece of a host name, now allows nothing, and `pyrite doctor` says so. A request with no Host header is refused.
+- An unexpected server error no longer sends its details to the page. They go to the window the dashboard runs in.
 
 ## [0.1.0] - 2026-11-09
 
