@@ -178,17 +178,31 @@ NEVER_READ = (
 NEVER_WRITE = tuple(f"{tool}(./{path})" for path in ("profile/**", "data/**", ".claude/**", "CLAUDE.md") for tool in ("Edit", "Write"))
 
 
-def command(claude: str, editable: list[str]) -> list[str]:
+def model_args(cfg: dict | None) -> list[str]:
+    """Which model judges and writes, and how hard it thinks: `model` and `effort` under [claude] in search.toml.
+
+    Left unset, a run gets Claude Code's default for each. Your own Claude Code settings don't decide it, since a run
+    reads only the workspace's. load_config has already refused a value Claude Code wouldn't take.
+    """
+    chosen = (cfg or {}).get("claude")
+    if not isinstance(chosen, dict):
+        return []
+    return [part for flag, key in (("--model", "model"), ("--effort", "effort")) if chosen.get(key)
+            for part in (flag, str(chosen[key]))]
+
+
+def command(claude: str, editable: list[str], cfg: dict | None = None) -> list[str]:
     """Reading and writing only. dontAsk refuses anything these rules don't allow, and your user settings can't widen them.
 
     With nothing editable, Claude gets no tools at all, so everything it needs must be in the prompt. The workspace's
     own .claude/settings.json is still read, so it could allow more, which is why what a run must never read or change
-    is denied outright as well.
+    is denied outright as well. `cfg` is search.toml, for the model and effort it names.
     """
     limits = ["--tools", "Read,Write,Edit", "--allowedTools", ",".join(f"Edit(./{path})" for path in editable)] if editable else ["--tools", ""]
     return [
         claude, "-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config",
         "--setting-sources", "project", "--permission-mode", "dontAsk", "--max-turns", "30",
+        *model_args(cfg),
         *limits,
         "--disallowedTools", ",".join(NEVER_READ + NEVER_WRITE),
     ]

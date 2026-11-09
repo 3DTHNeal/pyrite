@@ -89,6 +89,31 @@ class SetValue(unittest.TestCase):
         new = tomledit.set_value(CONFIG, "candidate", "pronouns", "they/them")
         self.assertIn('name = "Sam Doe"  # as it goes on documents\npronouns = "they/them"\n', new)
 
+    def test_a_new_key_takes_the_place_of_its_commented_out_example(self):
+        text = ('[inbox]\nlookback_days = 14\n# Where the mail comes from.\n# source = "gmail"\n'
+                '  # model = "claude-sonnet-5-5"  # copies the mail out\n\n[market]\nstate = "Wisconsin"\n')
+        new = tomledit.set_value(text, "inbox", "source", "imap")
+        self.assertEqual(new, text.replace('# source = "gmail"', 'source = "imap"'))
+        new = tomledit.set_value(text, "inbox", "model", "haiku")
+        self.assertEqual(new, text.replace('# model = "claude-sonnet-5-5"', 'model = "haiku"'))
+        # Set again, it's an existing value like any other, and taking it out leaves no example behind.
+        self.assertIn('  model = "opus"  # copies the mail out\n', tomledit.set_value(new, "inbox", "model", "opus"))
+        self.assertEqual(tomllib.loads(tomledit.delete_value(new, "inbox", "model"))["inbox"], {"lookback_days": 14})
+        windows = text.replace("\n", "\r\n")
+        self.assertEqual(tomledit.set_value(windows, "inbox", "source", "imap"), windows.replace('# source = "gmail"', 'source = "imap"'))
+
+    def test_only_a_real_example_in_the_keys_own_table_is_taken_for_one(self):
+        # A sentence with the key and an = in it, and a comment inside a list, aren't examples.
+        text = '[claude]\n# effort = how hard it thinks\nnames = [\n  "a",\n  # effort = "low"\n]\n'
+        new = tomledit.set_value(text, "claude", "effort", "high")
+        self.assertEqual(new, text + 'effort = "high"\n')
+        # Nor is another table's example, or one for a key that only starts the same.
+        text = '[a]\nx = 1\n# y = 2\n# yy = 3\n[b]\n# yy = 4\nz = 3\n'
+        self.assertEqual(tomledit.set_value(text, "b", "y", 5), text + "y = 5\n")
+        self.assertEqual(tomledit.set_value(text, "a", "y", 5), text.replace("# y = 2", "y = 5"))
+        # A root key's example sits before the first table.
+        self.assertEqual(tomledit.set_value("# version = 1\n[a]\nx = 1\n", "", "version", 2), "version = 2\n[a]\nx = 1\n")
+
     def test_a_new_table_goes_at_the_end_and_a_root_key_before_the_first_table(self):
         new = tomledit.set_value(CONFIG, "documents", "paper", "a4")
         self.assertTrue(new.endswith('allowed_hosts = []\n\n[documents]\npaper = "a4"\n'))

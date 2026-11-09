@@ -334,7 +334,25 @@ textarea { width: 100%; resize: vertical; }
 .demo-tag { font-size: 13px; font-weight: 600; color: var(--bad); }
 .demo-tag[hidden] { display: none; }
 
-/* Settings */
+/* Settings. Its sections are named in a menu under its heading, and the one you're on is underlined in brass. */
+.subnav-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+.subnav { display: flex; flex-wrap: wrap; gap: 0 4px; }
+.subnav button { border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; padding: 6px 12px 8px; font-size: 13px; font-weight: 600; color: var(--ink-3); cursor: pointer; white-space: nowrap; }
+.subnav button:hover { color: var(--ink); }
+.subnav button[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+.subnav-row > .btn { flex: none; margin-bottom: 6px; }
+.settings-section[hidden] { display: none; }
+.settings .settings-lead { max-width: 80ch; margin-bottom: 14px; }
+.settings .settings-note { max-width: 80ch; margin-top: 14px; }
+.option-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px 20px; align-items: start; }
+.option-fields input:not([type="checkbox"]), .option-fields select { width: 100%; max-width: 340px; }
+.settings label.check { display: flex; gap: 8px; align-items: start; }
+.settings label.check input { flex: none; margin-top: 3px; }
+.settings label.check span { display: grid; gap: 3px; }
+.connection { display: grid; gap: 6px; justify-items: start; }
+.connection p { margin: 0; overflow-wrap: anywhere; }
+.connection .what { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-weight: 600; }
+.connection .fix { white-space: pre-wrap; font-size: 13px; }
 .settings .panel { margin-bottom: 12px; }
 .settings p { margin: 0 0 10px; }
 .settings label { display: grid; gap: 3px; align-content: start; font-weight: 600; font-size: 13px; }

@@ -3,6 +3,7 @@ import json
 import re
 import tempfile
 import threading
+import tomllib
 import unittest
 import unittest.mock as mock
 import urllib.error
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from support import CFG
 
-from pyrite import checks, facts, profile, score, server, settings, store
+from pyrite import checks, doctor, facts, inbox, options, profile, score, server, settings, store
 
 SETTINGS_TOML = """# Top of the file
 [run]
@@ -218,6 +219,111 @@ class SettingsInTheDemo(SettingsBase):
         self.assertEqual(self.text(), SETTINGS_TOML)
 
 
+class HowPyriteRuns(SettingsBase):
+    """The Settings tab's sections on Claude, mail, the daily run and the dashboard: single keys of search.toml."""
+
+    def save(self, **values):
+        return options.save({"version": options.view()["version"], "values": {name.replace("__", "."): value for name, value in values.items()}})
+
+    def shown(self, name: str) -> dict:
+        return next(field for section in options.view()["sections"] for panel in section["panels"]
+                    for field in panel["fields"] if field["id"] == name)
+
+    def test_each_setting_shows_what_the_file_holds_or_what_pyrite_does_without_it(self):
+        self.path.write_text(SETTINGS_TOML + '\n[inbox]\nsource = "gmail"\nlookback_days = 21\n', encoding="utf-8", newline="\n")
+        self.assertEqual(self.shown("inbox.source")["value"], "gmail")
+        self.assertEqual(self.shown("inbox.lookback_days")["value"], 21)
+        # Unset: a box stays empty and names the default, and a switch or a list shows the default itself.
+        self.assertEqual((self.shown("claude.model")["value"], self.shown("claude.model")["unset"]), (None, "Claude Code's default"))
+        self.assertEqual((self.shown("run.fix_attempts")["value"], self.shown("run.fix_attempts")["unset"]), (None, str(store.DEFAULT_FIX_ATTEMPTS)))
+        self.assertIs(self.shown("dashboard.reach_out")["value"], True)
+        self.assertIsNone(self.shown("claude.effort")["value"])
+        self.assertNotIn("table", self.shown("claude.model"))
+
+    def test_a_save_sets_the_keys_it_names_and_leaves_every_other_line_alone(self):
+        self.save(claude__model="opus", claude__effort="high", run__tailor_per_day=3, dashboard__reach_out=False, inbox__source="gmail")
+        text, cfg = self.text(), store.load_config()
+        for line in SETTINGS_TOML.splitlines():
+            self.assertIn(line, text)
+        self.assertEqual(cfg["claude"], {"model": "opus", "effort": "high"})
+        self.assertEqual(cfg["run"], {"min_score": 40, "tailor_per_day": 3})
+        self.assertEqual(cfg["dashboard"], {"allowed_hosts": ["tower"], "reach_out": False})
+        self.assertEqual(cfg["inbox"], {"source": "gmail"})
+        self.assertEqual(cfg["promote"], tomllib.loads(SETTINGS_TOML)["promote"])
+        self.assertEqual(self.kept("config"), [("Changed on the Settings tab", SETTINGS_TOML)])
+
+    def test_emptying_a_setting_takes_its_line_out_so_the_default_applies(self):
+        self.save(claude__model="sonnet", inbox__lookback_days=30, claude__effort="low")
+        self.save(claude__model="", inbox__lookback_days=None, claude__effort=None)
+        cfg = store.load_config()
+        self.assertEqual((cfg["claude"], cfg["inbox"]), ({}, {}))
+
+    def test_a_setting_left_at_its_default_is_not_written(self):
+        self.save(dashboard__check_updates=True, inbox__source="imap", run__cover_letters=True, inbox__model=options.mail.DEFAULT_MODEL)
+        self.assertEqual(self.text(), SETTINGS_TOML)
+        self.assertEqual(self.kept("config"), [])
+
+    def test_what_a_setting_can_not_hold_is_refused_and_the_file_left_alone(self):
+        refused = (
+            {"claude.model": "--dangerously-skip-permissions"}, {"claude.model": "two words"}, {"claude.model": 7},
+            {"claude.effort": "extreme"}, {"inbox.source": "pop3"}, {"inbox.source": ""},
+            {"run.tailor_per_day": 500}, {"run.tailor_per_day": "3"}, {"run.tailor_per_day": True}, {"run.tailor_per_day": 2.5},
+            {"run.triage_per_day": None}, {"inbox.lookback_days": 0}, {"dashboard.reach_out": "yes"}, {},
+            # One good value doesn't carry a bad one in with it.
+            {"claude.effort": "high", "run.tailor_per_day": -1},
+        )
+        for values in refused:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                options.save({"version": options.view()["version"], "values": values})
+        self.assertEqual(self.text(), SETTINGS_TOML)
+
+    def test_nothing_outside_the_list_can_be_reached(self):
+        for name, value in (("guard.forbidden", []), ("guard.max_resume_pages", 9), ("dashboard.allowed_hosts", ["evil.test"]),
+                            ("dashboard.port", 80), ("workday.autofill", True), ("promote.city_points", 50), ("run", {}), ("claude", "x")):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "isn't a setting this tab can change"):
+                options.save({"version": options.view()["version"], "values": {name: value}})
+        self.assertEqual(self.text(), SETTINGS_TOML)
+        # The fact check's rules, the filters and the names the dashboard answers to are never in the list.
+        self.assertLessEqual({field["table"] for field in options.FIELDS.values()}, {"claude", "inbox", "market", "skills", "run", "dashboard"})
+        self.assertNotIn("dashboard.allowed_hosts", options.FIELDS)
+        self.assertNotIn("dashboard.port", options.FIELDS)
+
+    def test_a_setting_that_would_loosen_a_check_is_refused_even_if_it_were_listed(self):
+        autofill = {"id": "workday.autofill", "table": "workday", "key": "autofill", "kind": "switch", "label": "Autofill", "default": False}
+        with mock.patch.dict(options.FIELDS, {"workday.autofill": autofill}), self.assertRaisesRegex(ValueError, "loosen a check"):
+            self.save(workday__autofill=True)
+        self.assertEqual(self.text(), SETTINGS_TOML)
+
+    def test_a_stale_form_is_refused_but_a_change_elsewhere_in_the_file_is_not_a_conflict(self):
+        version = options.view()["version"]
+        settings.save(self.body(city_points=7))
+        options.save({"version": version, "values": {"claude.effort": "high"}})
+        with self.assertRaises(settings.Conflict):
+            options.save({"version": version, "values": {"claude.effort": "low"}})
+        self.assertEqual(store.load_config()["claude"], {"effort": "high"})
+        self.assertEqual(store.load_config()["promote"]["city_points"], 7)
+
+    def test_windows_line_endings_are_kept(self):
+        self.path.write_bytes(SETTINGS_TOML.replace("\n", "\r\n").encode("utf-8"))
+        self.save(claude__model="opus", run__tailor_per_day=3)
+        self.assertNotIn("\n", self.text().replace("\r\n", ""))
+
+    def test_the_demo_can_not_write_into_the_example(self):
+        version = options.view()["version"]
+        with mock.patch.object(store, "IS_EXAMPLE", True):
+            self.assertIs(options.view()["editable"], False)
+            with self.assertRaises(ValueError):
+                options.save({"version": version, "values": {"claude.effort": "high"}})
+        self.assertEqual(self.text(), SETTINGS_TOML)
+
+    def test_the_example_holds_every_number_the_run_can_not_do_without(self):
+        with (store.EXAMPLE_ROOT / "profile" / "search.toml").open("rb") as handle:
+            example = tomllib.load(handle)
+        for field in options.FIELDS.values():
+            if field.get("required"):
+                self.assertIsInstance(example[field["table"]][field["key"]], int, field["id"])
+
+
 class FactsTab(SettingsBase):
     """The Facts tab reads and writes two named files in the workspace's profile folder, and nothing else."""
 
@@ -346,8 +452,8 @@ class SettingsOverHttp(SettingsBase):
         self.addCleanup(self.httpd.server_close)
         self.addCleanup(self.httpd.shutdown)
 
-    def call(self, method="GET", headers=None, body=None):
-        url = f"http://127.0.0.1:{self.httpd.server_address[1]}/api/settings"
+    def call(self, method="GET", headers=None, body=None, path="/api/settings"):
+        url = f"http://127.0.0.1:{self.httpd.server_address[1]}{path}"
         request = urllib.request.Request(url, method=method, headers=headers or {}, data=body)
         try:
             with urllib.request.urlopen(request, timeout=5) as resp:
@@ -356,8 +462,44 @@ class SettingsOverHttp(SettingsBase):
             with err:
                 return err.code, json.loads(err.read())
 
-    def post(self, body, **headers):
-        return self.call("POST", {"Content-Type": "application/json", **headers}, json.dumps(body).encode())
+    def post(self, body, path="/api/settings", **headers):
+        return self.call("POST", {"Content-Type": "application/json", **headers}, json.dumps(body).encode(), path)
+
+    def test_how_pyrite_runs_is_read_and_saved_beside_the_cities_and_industries(self):
+        status, data = self.call()
+        self.assertEqual((status, [section["id"] for section in data["options"]["sections"]]), (200, ["claude", "mail", "run", "dashboard"]))
+        status, data = self.post({"version": data["options"]["version"], "values": {"claude.effort": "high"}}, "/api/settings/options")
+        self.assertEqual((status, store.load_config()["claude"]), (200, {"effort": "high"}))
+        # The answer is the whole tab again, so the page's copy of the other half stays whole.
+        self.assertEqual(data["promote"]["cities"], [{"name": "Springfield"}])
+        status, data = self.post({"version": data["version"], "promote": self.form(city_points=7)})
+        self.assertEqual((status, data["options"]["version"]), (200, options.view()["version"]))
+
+    def test_a_refused_setting_gets_a_clear_answer_and_changes_nothing(self):
+        version = self.call()[1]["options"]["version"]
+        path = "/api/settings/options"
+        status, data = self.post({"version": version, "values": {"claude.model": "--print"}}, path)
+        self.assertEqual(status, 400)
+        self.assertIn("isn't a model's name", data["error"])
+        self.assertEqual(self.post({"version": "old", "values": {"claude.model": "opus"}}, path)[0], 409)
+        body = {"version": version, "values": {"claude.model": "opus"}}
+        self.assertEqual(self.post(body, path, Origin="https://evil.test")[0], 403)
+        self.assertEqual(self.post(body, path, Host="evil.test")[0], 403)
+        self.assertEqual(self.text(), SETTINGS_TOML)
+
+    def test_the_connections_are_reported_without_asking_claude_code_each_time(self):
+        signed_in = {"ok": True, "what": "Claude Code, signed in, at claude", "fix": ""}
+        with mock.patch.object(options, "_claude_seen", None), mock.patch.object(doctor, "claude_check", return_value=signed_in) as asked, \
+                mock.patch.object(doctor, "DB_PATH", Path(self.tmp.name) / "none.db"), \
+                mock.patch.object(inbox, "CREDENTIALS_PATH", Path(self.tmp.name) / "imap.env"):
+            status, data = self.call(path="/api/settings/status")
+            self.assertEqual((status, data["claude"]), (200, signed_in))
+            self.assertEqual((data["mail"]["ok"], data["mail"]["last_ok"]), (None, ""))
+            self.call(path="/api/settings/status")
+            self.assertEqual(asked.call_count, 1)
+            self.call(path="/api/settings/status?fresh=1")
+            self.assertEqual(asked.call_count, 2)
+            self.assertEqual(self.call(headers={"Host": "evil.test"}, path="/api/settings/status")[0], 403)
 
     def test_read_and_save(self):
         status, data = self.call()

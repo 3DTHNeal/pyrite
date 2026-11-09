@@ -53,7 +53,8 @@ def is_workday(url: str) -> bool:
 def enabled() -> bool:
     """Experimental, so off unless the workspace's search.toml says `autofill = true` under [workday].
 
-    The dashboard's Settings tab edits only [promote], so a page can't turn this on.
+    The dashboard's Settings tab can't reach [workday], and any other save that would turn this on needs a code from
+    this computer.
     """
     try:
         return store.read_config(store.ROOT / "profile" / "search.toml").get("workday", {}).get("autofill") is True

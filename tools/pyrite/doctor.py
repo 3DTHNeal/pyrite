@@ -366,17 +366,48 @@ def install_fix(in_venv: bool | None = None) -> str:
             f"Then run {venv_python} -m pip install -r tools/requirements.txt, and use {venv_python} for Pyrite from then on.")
 
 
-def last_mail_error(source: str) -> str:
-    """Why the last mail check failed, from the Sources tab's record, or "" if it worked or never ran. Read-only."""
+def last_mail_check(source: str) -> tuple[str, str]:
+    """When mail was last read without trouble, and why the last check failed, from the Sources tab's record. Each is
+    "" if it never happened: a check that worked leaves no error. Read-only."""
     if not DB_PATH.exists():
-        return ""
+        return "", ""
     key = "inbox:gmail" if source == "gmail" else inbox.SOURCE_KEY
     try:
         with closing(sqlite3.connect(f"{DB_PATH.as_uri()}?mode=ro", uri=True)) as conn:
-            row = conn.execute("SELECT last_error FROM source_status WHERE source_key = ?", (key,)).fetchone()
+            row = conn.execute("SELECT last_ok, last_error FROM source_status WHERE source_key = ?", (key,)).fetchone()
     except sqlite3.Error:
-        return ""
-    return (row[0] or "").strip() if row else ""
+        return "", ""
+    return ((row[0] or "").strip(), (row[1] or "").strip()) if row else ("", "")
+
+
+def last_mail_error(source: str) -> str:
+    """Why the last mail check failed, or "" if it worked or never ran."""
+    return last_mail_check(source)[1]
+
+
+def claude_check() -> dict:
+    """Whether Claude Code is here and signed in, as {"ok", "what", "fix"}. Asking it takes a second or two."""
+    claude = find_claude()
+    if not claude:
+        return {"ok": False, "what": "Claude Code, which the daily run, Refresh resume and Interview prep use",
+                "fix": "Install Claude Code and sign in. Everything else works without it."}
+    if not signed_in(claude):
+        return {"ok": False, "what": f"Claude Code is at {claude} but isn't signed in", "fix": f"Run once: {claude} auth login"}
+    return {"ok": True, "what": f"Claude Code, signed in, at {claude}", "fix": ""}
+
+
+def mail_check(cfg: dict | None) -> dict:
+    """Where replies are read from and whether the last read worked, as {"ok", "what", "fix"}. None means it's
+    optional and not set up."""
+    source = (cfg or {}).get("inbox", {}).get("source", "imap")
+    trouble = last_mail_error(source)
+    if trouble:
+        return {"ok": False, "what": "Reply detection's last check failed", "fix": f"{trouble}\nTry again with `pyrite inbox`."}
+    if source == "gmail":
+        return {"ok": True, "what": "Reply detection reads Gmail through Claude Code", "fix": "Test it with `pyrite inbox`."}
+    if inbox.CREDENTIALS_PATH.exists():
+        return {"ok": True, "what": f"Reply detection reads mail with the login in {inbox.CREDENTIALS_PATH}", "fix": "Test it with `pyrite inbox`."}
+    return {"ok": None, "what": "Reply detection isn't set up", "fix": 'Optional. See docs/mail.md.'}
 
 
 def tool_checks(cfg: dict | None) -> list[dict]:
@@ -393,22 +424,4 @@ def tool_checks(cfg: dict | None) -> list[dict]:
                       "fix": "Install LibreOffice and put `soffice` on PATH. Until then `pyrite finish` can't build a draft."})
     found.append({"ok": True if shutil.which("pdftotext") else None, "what": "poppler's pdftotext, which reads each PDF back as a parser would",
                   "fix": "" if shutil.which("pdftotext") else "Optional. Git for Windows includes it. Without it that step is skipped."})
-    claude = find_claude()
-    if not claude:
-        found.append({"ok": False, "what": "Claude Code, which the daily run, Refresh resume and Interview prep use",
-                      "fix": "Install Claude Code and sign in. Everything else works without it."})
-    elif not signed_in(claude):
-        found.append({"ok": False, "what": f"Claude Code is at {claude} but isn't signed in", "fix": f"Run once: {claude} auth login"})
-    else:
-        found.append({"ok": True, "what": f"Claude Code, signed in, at {claude}", "fix": ""})
-    source = (cfg or {}).get("inbox", {}).get("source", "imap")
-    trouble = last_mail_error(source)
-    if trouble:
-        found.append({"ok": False, "what": "Reply detection's last check failed", "fix": f"{trouble}\nTry again with `pyrite inbox`."})
-    elif source == "gmail":
-        found.append({"ok": True, "what": "Reply detection reads Gmail through Claude Code", "fix": "Test it with `pyrite inbox`."})
-    elif inbox.CREDENTIALS_PATH.exists():
-        found.append({"ok": True, "what": f"Reply detection reads mail with the login in {inbox.CREDENTIALS_PATH}", "fix": "Test it with `pyrite inbox`."})
-    else:
-        found.append({"ok": None, "what": "Reply detection isn't set up", "fix": 'Optional. See docs/mail.md.'})
-    return found
+    return [*found, claude_check(), mail_check(cfg)]

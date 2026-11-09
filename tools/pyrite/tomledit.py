@@ -325,19 +325,78 @@ def _refuse_arrays(items: list[Header | Pair], table: Path) -> None:
         raise EditError(f"[[{'.'.join(table)}]] is a list of tables. Replace the whole list with replace_table.")
 
 
+def _example(text: str, items: list[Header | Pair], table: Path, key: str) -> tuple[int, int, int, int] | None:
+    """A commented-out line in a table that sets this key, as search.toml writes its examples: `# model = "opus"`.
+
+    Returns where the line starts, where its statement starts after the #, and the span of its value. Only a line
+    that would read as TOML with the # gone counts, so a sentence that happens to hold the key and an = doesn't.
+    """
+    headers = [item for item in items if isinstance(item, Header)]
+    if table == ():
+        low, high = 0, headers[0].start if headers else len(text)
+    else:
+        at = next((index for index, header in enumerate(headers) if header.name == table and not header.array), None)
+        if at is None:
+            return None
+        low, high = headers[at].end, headers[at + 1].start if at + 1 < len(headers) else len(text)
+    # A comment inside a value that runs over several lines is part of that value, so those lines are passed over.
+    inside = [(item.start, item.end) for item in items if isinstance(item, Pair) and low <= item.start < high]
+    i = low
+    while i < high:
+        within = next((end for start, end in inside if start <= i < end), None)
+        if within:
+            i = within
+            continue
+        end = _line_end(text, i)
+        hash_at = _ws(text, i)
+        if text.startswith("#", hash_at):
+            statement = _ws(text, hash_at + 1)
+            try:
+                found, after = _key(text, statement)
+                if found == (key,) and text.startswith("=", after):
+                    value_start = _ws(text, after + 1)
+                    value_end = _value_end(text, value_start)
+                    if _rest_of_line(text, value_end) == end:
+                        tomllib.loads(f"v = {text[value_start:value_end]}")
+                        return i, statement, value_start, value_end
+            except (EditError, tomllib.TOMLDecodeError):
+                pass
+        i = end
+    return None
+
+
+def _in_place_of_example(text: str, items: list[Header | Pair], table: Path, key: str, written: str) -> str | None:
+    """The text with a commented-out example of this key turned into the setting itself, or None if its table has no
+    such line or the result wouldn't read. The example's own comment stays beside it."""
+    found = _example(text, items, table, key)
+    if not found:
+        return None
+    line, statement, value_start, value_end = found
+    new = text[:_ws(text, line)] + text[statement:value_start] + written + text[value_end:]
+    try:
+        tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return None
+    return new
+
+
 def set_value(text: str, table: str | Path, key: str, value: Any, literal: bool = False) -> str:
     """The text with one key set. An existing value keeps its place, its comment and whether it was split over lines.
-    A new key goes after the last key in its table, and a new table at the end of the file."""
+    A new key takes the place of a commented-out example of itself, if its table has one. Otherwise it goes after the
+    last key in its table, and a new table at the end of the file."""
     table = path(table)
     items = scan(text)
     _refuse_arrays(items, table)
     eol = _eol(text)
     pairs = [item for item in items if isinstance(item, Pair) and item.table == table and not item.array]
     same = [pair for pair in pairs if pair.key == (key,)]
+    uncommented = None if same else _in_place_of_example(text, items, table, key, dump(value, literal, None, eol))
     if same:
         pair = same[0]
         layout = _layout(text[pair.value_start:pair.value_end], value)
         new = text[:pair.value_start] + dump(value, literal, layout, eol) + text[pair.value_end:]
+    elif uncommented is not None:
+        new = uncommented
     else:
         line = f"{key_text(key)} = {dump(value, literal, None, eol)}{eol}"
         headers = [item for item in items if isinstance(item, Header)]

@@ -8,7 +8,7 @@ Commands use the Windows path `.venv/Scripts/python.exe`. Elsewhere, it's `.venv
 
 A match never changes a status, so a wrong one can't affect the response rate. Read the email, then use the usual buttons if it's real, or **Dismiss** if it isn't.
 
-There are two ways to read the mailbox. IMAP with an app password is the plain one and never downloads a message body. The Gmail connector in Claude Code needs no password on disk and also warns about job scams, at the cost of one short Claude run per pan.
+There are two ways to read the mailbox. IMAP with an app password is the plain one and never downloads a message body. The Gmail connector in Claude Code needs no password on disk and also warns about job scams, at the cost of one short Claude run per pan. **Settings** on the dashboard, under **Mail**, picks between them and says whether the last read worked. It sets `source` and `lookback_days` under `[inbox]`, and the IMAP login stays in its own file, which Settings never shows or changes.
 
 ## Through the Gmail connector
 

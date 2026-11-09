@@ -123,14 +123,15 @@ def _ask(conn, job_id: int, kind: str, cmd: list[str], text: str, deadline: floa
         raise
 
 
-def judge(conn, job_id: int, claude: str, deadline: float, marks: dict | None = None) -> str | None:
+def judge(conn, job_id: int, claude: str, deadline: float, marks: dict | None = None, cfg: dict | None = None) -> str | None:
     """Have Claude judge one posting, and record the verdict here. Returns the fit, or None if it couldn't be judged.
 
-    `marks` is the posting as the queue ranked it, whose ghost and scam markings go to Claude with it."""
+    `marks` is the posting as the queue ranked it, whose ghost and scam markings go to Claude with it. `cfg` is
+    search.toml, for the model and effort it names."""
     job = get_job(conn, job_id)
     if job["status"] != "new" or not job["description"].strip():
         return None  # Moved on meanwhile, or nothing to read. An empty posting is left for you.
-    reply = _ask(conn, job_id, "triage", claude_code.command(claude, []), triage_prompt(job, marks), deadline)
+    reply = _ask(conn, job_id, "triage", claude_code.command(claude, [], cfg), triage_prompt(job, marks), deadline)
     verdict = parse_verdict(reply)
     if not verdict or get_job(conn, job_id)["status"] != "new":
         return None
@@ -190,7 +191,7 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambd
 
     `say` hears each step before it starts, so a long job keeps showing signs of life on the dashboard."""
     folder = ensure_folder(conn, job_id)
-    cmd = claude_code.command(claude, tailor_files(folder, cfg))
+    cmd = claude_code.command(claude, tailor_files(folder, cfg), cfg)
     files = [ROOT / path for path in tailor_files(folder, cfg)]
     profile = claude_code.profile_snapshot(ROOT)
     feedback = ""
@@ -323,7 +324,7 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
             continue
         report(f"Judging posting {index} of {len(waiting)}: {job['company']}")
         try:
-            fit = judge(conn, job["id"], claude, deadline, job)
+            fit = judge(conn, job["id"], claude, deadline, job, cfg)
         except NotSignedIn:
             raise
         except ClaudeFailed:

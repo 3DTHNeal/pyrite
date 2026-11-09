@@ -1,9 +1,10 @@
-"""Edits the [promote] section of search.toml for the dashboard's Settings tab.
+"""Edits the [promote] section of search.toml for Cities and industries on the dashboard's Settings tab.
 
-Only this section of search.toml can change from the browser. The dashboard has no login, so
-the patterns under [guard], the filters and the allowed hosts stay out of its reach. A save
-rewrites this one block and proves that everything else in the file still reads the same.
-The candidate's own facts are a separate matter, handled in facts.py.
+This module changes only that section. The dashboard has no login, so the patterns under [guard],
+the filters and the allowed hosts stay out of its reach. A save rewrites this one block and proves
+that everything else in the file still reads the same. The settings for how Pyrite runs are
+single keys elsewhere in the file, handled in options.py, and the candidate's own facts are
+handled in facts.py.
 """
 import hashlib
 import json

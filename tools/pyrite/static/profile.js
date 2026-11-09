@@ -326,7 +326,8 @@ function profileRail(current) {
 
 // A section whose editor isn't built yet: what it holds now, and where to change it until then.
 function profileFallback(step) {
-  const tab = PROFILE_TABS[step.fallback];
+  // A fallback may name a section of its tab, as settings/ranking does.
+  const tab = PROFILE_TABS[String(step.fallback || "").split("/")[0]];
   return h("div", { class: "stack profile-fallback" },
     h("p", {}, h("b", {}, "Now: "), step.summary),
     h("div", { class: "callout info" }, h("b", {}, "This section's editor isn't built yet."), h("p", {}, step.meanwhile)),
