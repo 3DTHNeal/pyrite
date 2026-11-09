@@ -870,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
                 tasks.start(conn, str(body.get("kind") or ""))
                 return self._json({"ok": True}, 202)
             if path == "/api/update":
-                return self._update(conn)
+                return self._update(conn, cfg)
             if path == "/api/industries/outlook":
                 outlook.start(cfg, str(body.get("name") or ""))
                 return self._json({"ok": True}, 202)
@@ -891,8 +891,12 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _update(self, conn) -> None:
+    def _update(self, conn, cfg: dict) -> None:
         """Update Pyrite's code to GitHub's main, then restart on it once the page has heard what happened."""
+        # The page hides the button then, but `check_updates = false` promises GitHub is never asked, so this keeps it.
+        if not updates_on(cfg):
+            raise ValueError("check_updates = false under [dashboard], so Pyrite doesn't ask GitHub. Update with "
+                             "`git pull` instead.")
         running = tasks.going(conn)
         if running:
             raise ValueError(f"A {running} is going, and updating the code under it could break it. Update once it's done.")
@@ -903,10 +907,15 @@ class Handler(BaseHTTPRequestHandler):
             restart()
 
 
+def updates_on(cfg: dict) -> bool:
+    """Whether the dashboard may ask GitHub for a newer Pyrite: anything but `check_updates = false` under [dashboard]."""
+    return cfg.get("dashboard", {}).get("check_updates", True) is not False
+
+
 def update_state(cfg: dict) -> dict:
     """What the Update available button needs: whether GitHub's main is ahead of this copy, and anything stopping the
     update. `check_updates = false` under [dashboard] means GitHub is never asked."""
-    if cfg.get("dashboard", {}).get("check_updates", True) is False:
+    if not updates_on(cfg):
         return {"available": False, "off": True}
     found = update.check(demo=IS_EXAMPLE)
     if found.get("available") and not found.get("why_not"):

@@ -28,6 +28,9 @@ REQUIREMENTS = "tools/requirements.txt"
 # console program started from pythonw would otherwise open a window of its own.
 NO_PROMPT = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Schemes git fetches over with nothing to say the code came from where it claims. Anyone on the network could hand
+# over code of their own, and the update would run it, so a copy cloned over one of these is never updated from here.
+PLAIN = ("http://", "git://")
 
 
 class GitError(Exception):
@@ -80,6 +83,11 @@ def _look(repo: Path, demo: bool) -> dict:
     if not (repo / ".git").exists():
         return {"available": False, "error": f"{repo} isn't a git clone, so Pyrite can't tell whether it's up to date."}
     try:
+        # get-url applies any url.insteadOf rewrite, so this is the address the fetch really uses.
+        if _git(repo, "remote", "get-url", REMOTE).lower().startswith(PLAIN):
+            return {"available": False, "error": f"Pyrite's code folder fetches from {REMOTE} over an unencrypted "
+                                                 "connection, so it isn't updated from here. Point it at an https:// "
+                                                 "or SSH address with `git remote set-url`."}
         _git(repo, "fetch", "--quiet", "--no-tags", REMOTE, BRANCH)
         behind = int(_git(repo, "rev-list", "--count", f"HEAD..{LATEST}"))
         ahead = int(_git(repo, "rev-list", "--count", f"{LATEST}..HEAD"))

@@ -150,6 +150,24 @@ class Updating(unittest.TestCase):
         self.assertFalse(found["available"])
         self.assertIn("Couldn't check GitHub", found["error"])
 
+    def test_a_copy_cloned_over_an_unencrypted_address_is_never_updated(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        for address in ("http://example.invalid/pyrite.git", "GIT://example.invalid/pyrite.git"):
+            with self.subTest(address=address):
+                self.git(self.copy, "remote", "set-url", "origin", address)
+                with mock.patch.object(update, "_git", wraps=update._git) as git:
+                    found = self.check()
+                self.assertFalse(found["available"])
+                self.assertIn("unencrypted", found["error"])
+                self.assertNotIn("fetch", [call.args[1] for call in git.call_args_list])
+                with self.assertRaisesRegex(ValueError, "unencrypted"):
+                    update.apply(self.copy)
+
+    def test_an_insteadof_rewrite_to_an_unencrypted_address_counts(self):
+        self.git(self.copy, "remote", "set-url", "origin", "https://example.invalid/pyrite.git")
+        self.git(self.copy, "config", "url.http://example.invalid/.insteadOf", "https://example.invalid/")
+        self.assertIn("unencrypted", self.check()["error"])
+
     def test_a_folder_that_isnt_a_clone_says_so(self):
         with tempfile.TemporaryDirectory() as folder:
             found = update.check(Path(folder), fresh=True)
@@ -202,6 +220,15 @@ class Endpoints(unittest.TestCase):
         with mock.patch.object(update, "check") as check:
             self.assertEqual(server.update_state(cfg), {"available": False, "off": True})
         check.assert_not_called()
+
+    def test_check_updates_false_refuses_the_update_too(self):
+        cfg = {**store.load_config(), "dashboard": {"check_updates": False}}
+        with mock.patch.object(server, "load_config", return_value=cfg), \
+                mock.patch.object(update, "apply") as apply:
+            status, said = self.call("/api/update", {})
+        apply.assert_not_called()
+        self.assertEqual(status, 400)
+        self.assertIn("check_updates = false", said["error"])
 
     def test_a_run_going_holds_the_update_back(self):
         with mock.patch.object(update, "check", return_value=dict(self.BEHIND)), \
