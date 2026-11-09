@@ -93,6 +93,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- Reply detection through the Gmail connector no longer fails about one check in three. Claude Code could start the run before its Gmail connector had connected, leaving Claude with no tools, so it read no mail and wrote its first tool call out as text. The run now has Claude Code wait for its connectors first. A run that still starts without Gmail is caught from what Claude Code says it started with, and tried once more 30 seconds later. If that fails too, the Sources tab says the connector wasn't connected, or that it needs signing in again or isn't set up, instead of "Claude didn't hand back a usable list".
 - Workday autofill no longer answers a question that only shares words with a sheet row. A question asked the other way round ("Are you under 18?"), one about someone else ("a relative who worked here"), one about experience with something the row doesn't name ("years with Kubernetes"), and a passport or travel-visa question are left for you.
 - Names and places with a full stop, such as "Mary St. John", "J. Robert Smith" and "St. Louis", are typed whole.
 - A ``` block left open on `workday-paste.md` no longer swallows the sections after it. It ends at the next heading, and the fill sheet says so at the top. If the roles still don't read back as the paste sheet has them, no sheet is made.

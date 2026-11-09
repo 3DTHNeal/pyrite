@@ -303,16 +303,49 @@ def spawn_worker(subcommand: str, job_id: int, cwd: Path) -> None:
     )
 
 
+STREAM_EVENTS = {"system", "assistant", "user"}
+
+
+def _events(output: str) -> tuple[list[dict], str]:
+    """The events of a stream-json run, one a line, and any lines that weren't one."""
+    events, plain = [], []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            plain.append(line)
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events, "\n".join(plain).strip()
+
+
 def _read_result(output: str) -> tuple[str, dict]:
-    """Claude Code's closing message and its JSON result. Plain text, from a failure that printed no JSON, has no result."""
+    """Claude Code's closing message and its JSON result, from `json` output or the last event of `stream-json`.
+    Plain text, from a failure that printed no JSON, has no result."""
     text = output.strip()
     try:
-        data = json.loads(text)
+        whole = json.loads(text)
     except ValueError:
-        return text, {}
-    if not isinstance(data, dict) or data.get("type") != "result":
-        return text, {}
+        whole = None
+    if isinstance(whole, dict) and whole.get("type") == "result":
+        return str(whole.get("result") or whole.get("subtype") or "").strip(), whole
+    events, plain = _events(text)
+    results = [event for event in events if event.get("type") == "result"]
+    if not results:
+        # A stream cut off before its result leaves only what Claude Code printed besides it. Plain text that merely
+        # has a JSON line in it, such as a verdict, is kept whole.
+        streamed = any(event.get("type") in STREAM_EVENTS for event in events)
+        return (plain if streamed else text), {}
+    data = results[-1]
     return str(data.get("result") or data.get("subtype") or "").strip(), data
+
+
+def startup(output: str) -> dict | None:
+    """What a stream-json run started with: its tools and the state of each MCP server. None for `json` output, which
+    doesn't say."""
+    events, _ = _events(output)
+    return next((event for event in events if event.get("type") == "system" and event.get("subtype") == "init"), None)
 
 
 def _count(value) -> float | None:
@@ -335,8 +368,10 @@ def record(conn, job_id: int | None, kind: str, result: dict, seconds: float, ok
 
 
 class Answer(str):
-    """A run's closing message, which remembers the row that counts the run, so that row can be marked failed later."""
+    """A run's closing message, which remembers the row that counts the run, so that row can be marked failed later,
+    and, for a stream-json run, what the run started with."""
     run_id: int | None = None
+    init: dict | None = None
 
 
 def mark_failed(conn, answer: str) -> None:
@@ -363,11 +398,13 @@ def _kill_tree(process: subprocess.Popen) -> None:
     process.kill()
 
 
-def run_process(cmd: list[str], input: str, cwd: Path, timeout: float) -> subprocess.CompletedProcess:
-    """subprocess.run with a time limit, except that running out of time ends the whole process tree, not just its top."""
+def run_process(cmd: list[str], input: str, cwd: Path, timeout: float, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run with a time limit, except that running out of time ends the whole process tree, not just its top.
+    `env` is added to this process's environment, not put in place of it."""
     process = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, encoding="utf-8",
         errors="replace", creationflags=NO_WINDOW | NEW_GROUP, start_new_session=sys.platform != "win32",
+        env={**os.environ, **env} if env else None,
     )
     with process:
         try:
@@ -382,7 +419,8 @@ def run_process(cmd: list[str], input: str, cwd: Path, timeout: float) -> subpro
     return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
-def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Path, seconds: float, limit_minutes: int) -> Answer:
+def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Path, seconds: float, limit_minutes: int,
+        env: dict[str, str] | None = None) -> Answer:
     """One Claude run. Returns its closing message, and records what the run used.
 
     Raises OutOfTime without starting anything if less than a minute is left of `seconds`.
@@ -391,7 +429,7 @@ def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Pat
         raise OutOfTime("Time ran out before Claude could be asked again.")
     began = time.monotonic()
     try:
-        out = run_process(cmd, input=text, cwd=cwd, timeout=seconds)
+        out = run_process(cmd, input=text, cwd=cwd, timeout=seconds, env=env)
     except subprocess.TimeoutExpired as err:
         record(conn, job_id, kind, {}, time.monotonic() - began, ok=False)
         raise ClaudeFailed(f"Claude hadn't finished after {limit_minutes} minutes.") from err
@@ -401,11 +439,13 @@ def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Pat
     failed = bool(out.returncode or result.get("is_error"))
     run_id = record(conn, job_id, kind, result, time.monotonic() - began, ok=not failed)
     if failed:
+        message = message or (out.stderr or "").strip()
         if "not logged in" in message.lower():
             raise ClaudeFailed(sign_in_help(cmd[0]))
         raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
     answer = Answer(message)
     answer.run_id = run_id
+    answer.init = startup(out.stdout or "")
     return answer
 
 
