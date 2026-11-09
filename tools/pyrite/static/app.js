@@ -667,12 +667,22 @@ function renderUsage() {
 }
 
 // ---- Settings ----
-// Each panel saves by itself. A save sends what's already saved with only that panel's part
-// replaced, so half-finished edits in another panel are never written by accident.
+// Settings has a menu of its own. Its first sections say how Pyrite runs: Claude, mail, the daily run and the
+// dashboard, each drawn from the list the server sends. The last holds the cities and industries to see first.
+// Every section is drawn when the tab loads and only the one picked shows, so edits you haven't saved in one are
+// still there after a look at another.
+// Each panel saves by itself. A save sends only that panel's part, so half-finished edits in another panel are
+// never written by accident.
 
 let settings = null;
+// The section on show, as the address names it. "" is the first one.
+let settingsAt = "";
+const SETTINGS_RANKING = { id: "ranking", label: "Cities and industries" };
+const MODEL_ALIASES = ["fable", "opus", "sonnet", "haiku"];
 const dirtyParts = new Set();
 const settingsRedraw = [];
+// Where each section shows whether its connection is working, by the name the server gives it.
+const settingsStatusBoxes = {};
 
 const settingsLines = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
 const settingsNumber = (input) => (input.value.trim() === "" ? null : Number(input.value));
@@ -704,8 +714,8 @@ function numberInput(value, placeholder) {
 }
 
 // One panel that saves by itself: its Save button, its status, and whether it has unsaved edits.
-// `change` is handed a copy of what's saved and puts this panel's part into it.
-function settingsPart(root, change, afterSave) {
+// `request` returns where to send the panel's part and what to send, and throws to say why it can't be sent.
+function settingsPart(root, request, afterSave) {
   const save = h("button", { class: "btn primary", type: "button", disabled: true }, "Save");
   const status = h("span", { class: "muted part-status", role: "status" });
   const error = h("p", { class: "error", role: "alert" });
@@ -721,13 +731,12 @@ function settingsPart(root, change, afterSave) {
     save.disabled = true;
     status.textContent = text;
   };
-  part.send = async (edit) => {
+  part.send = async (how = request) => {
     status.textContent = "Saving…";
     error.textContent = "";
-    const promote = savedPromote();
     try {
-      edit(promote);
-      settings = await api("/api/settings", { version: settings.version, promote });
+      const [path, body] = how();
+      settings = await api(path, body);
     } catch (err) {
       status.textContent = "Not saved";
       error.textContent = err.message;
@@ -740,9 +749,110 @@ function settingsPart(root, change, afterSave) {
     return true;
   };
   root.addEventListener("input", part.touch);
-  save.addEventListener("click", () => part.send(change));
+  save.addEventListener("click", () => part.send());
   return part;
 }
+
+// A panel of the cities and industries. `change` is handed a copy of what's saved and puts this panel's part into
+// it, and part.edit(change) sends some other change the same way.
+function promotePart(root, change, afterSave) {
+  const request = (edit) => () => {
+    const promote = savedPromote();
+    edit(promote);
+    return ["/api/settings", { version: settings.version, promote }];
+  };
+  const part = settingsPart(root, request(change), afterSave);
+  part.edit = (edit) => part.send(request(edit));
+  return part;
+}
+
+// ---- How Pyrite runs ----
+
+const savedOption = (id) => settings.options.sections.flatMap((section) => section.panels)
+  .flatMap((panel) => panel.fields).find((field) => field.id === id);
+
+// One setting's control, and read(), which gives its value as the server takes it: null means left to the default.
+function optionControl(field) {
+  const hint = field.hint ? h("span", { class: "muted hint" }, field.hint) : null;
+  if (field.kind === "switch") {
+    const box = h("input", { type: "checkbox", checked: field.value === true });
+    return { node: h("label", { class: "check" }, box, h("span", {}, field.label, hint)), read: () => box.checked };
+  }
+  if (field.kind === "choice") {
+    const select = h("select", {}, field.unset ? h("option", { value: "" }, field.unset) : null,
+      field.choices.map(([value, label]) => h("option", { value, selected: value === field.value }, label)));
+    return { node: h("label", {}, field.label, select, hint), read: () => select.value || null };
+  }
+  if (field.kind === "number") {
+    const input = h("input", { type: "number", min: field.min, max: field.max, step: "1", value: field.value ?? "", placeholder: field.unset ? `${field.unset} (default)` : null });
+    return { node: h("label", {}, field.label, input, hint), read: () => settingsNumber(input) };
+  }
+  const input = h("input", { type: "text", value: field.value ?? "", placeholder: field.unset, list: "model-options", spellcheck: "false", autocomplete: "off" });
+  return { node: h("label", {}, field.label, input, hint), read: () => input.value.trim() || null };
+}
+
+// A panel of settings. Its save sends only the ones you changed, so one you left alone is never written to the file.
+function optionsPanel(panel) {
+  const root = h("div", { class: "panel" });
+  const controls = panel.fields.map((field) => ({ id: field.id, ...optionControl(field) }));
+  const part = settingsPart(root, () => {
+    const values = {};
+    for (const control of controls) {
+      const value = control.read();
+      if (value !== savedOption(control.id).value) values[control.id] = value;
+    }
+    if (!Object.keys(values).length) throw new Error("Nothing here differs from what's saved.");
+    return ["/api/settings/options", { version: settings.options.version, values }];
+  }, () => loadSettingsStatus());  // What was saved may be what a connection hangs on, such as where mail is read from.
+  // fill, since append would write a missing hint out as the word "null".
+  return fill(root, h("h2", {}, panel.title),
+    panel.hint ? h("p", { class: "muted hint" }, panel.hint) : null,
+    h("div", { class: "option-fields" }, controls.map((control) => control.node)),
+    h("div", { class: "part-actions" }, part.save, part.status), part.error);
+}
+
+// Whether a section's connection is working: Claude Code for the Claude section, the mail reader for Mail.
+function drawSettingsStatus(status, error) {
+  for (const [name, box] of Object.entries(settingsStatusBoxes)) {
+    const found = status ? status[name] : null;
+    const again = h("button", { class: "btn small", type: "button", onclick: () => loadSettingsStatus(true) }, "Check again");
+    if (!found) {
+      fill(box, h("p", { class: error ? "error" : "muted" }, error || "Checking…"), error ? again : null);
+      continue;
+    }
+    const [tone, label] = found.ok === true ? ["good", "Working"] : found.ok === false ? ["bad", "Needs you"] : ["", "Not set up"];
+    fill(box,
+      h("p", { class: "what" }, pill(tone, label), h("span", {}, found.what)),
+      found.fix ? h("p", { class: "fix muted" }, found.fix) : null,
+      found.last_ok ? h("p", { class: "muted hint" }, `Mail was last read without trouble ${ago(found.last_ok)}.`) : null,
+      again);
+  }
+}
+
+async function loadSettingsStatus(fresh = false) {
+  if (fresh) drawSettingsStatus(null);
+  try {
+    drawSettingsStatus(await api(`/api/settings/status${fresh ? "?fresh=1" : ""}`));
+  } catch (err) {
+    drawSettingsStatus(null, err.message);
+  }
+}
+
+function optionsSection(section) {
+  let connection = null;
+  if (section.status) {
+    settingsStatusBoxes[section.status] = h("div", { class: "connection", "aria-live": "polite" });
+    connection = h("div", { class: "panel" }, h("h2", {}, "Connection"), settingsStatusBoxes[section.status]);
+  }
+  return [
+    h("p", { class: "muted settings-lead" }, section.intro),
+    connection,
+    section.panels.map(optionsPanel),
+    (section.notes || []).map((note) => h("p", { class: "muted hint settings-note" }, note)),
+  ];
+}
+
+// ---- Cities and industries ----
 
 function pointsPanel() {
   const promote = savedPromote();
@@ -754,7 +864,7 @@ function pointsPanel() {
   // The cities and industries without points of their own show the default they get, so a change shows there at once.
   [city, industry].forEach((input) => input.addEventListener("input", () => settingsRedraw.forEach((redraw) => redraw())));
   const root = h("div", { class: "panel" });
-  const part = settingsPart(root, (p) => {
+  const part = promotePart(root, (p) => {
     p.city_points = settingsNumber(city);
     p.industry_points = settingsNumber(industry);
     p.mentions_needed = settingsNumber(mentions);
@@ -823,8 +933,8 @@ function citiesPanel() {
   const rows = new Set();
   const body = h("tbody", {});
   const root = h("div", { class: "panel" });
-  const part = settingsPart(root, (p) => {
-    p.cities = [...rows].map((row) => row.collect()).filter((city) => city.name.trim() || city.match.trim());
+  const part = promotePart(root, (p) => {
+    p.cities =[...rows].map((row) => row.collect()).filter((city) => city.name.trim() || city.match.trim());
   });
   const addRow = (city) => {
     const name = h("input", { value: city.name || "", list: "place-options", placeholder: "Start typing a city", "aria-label": "City name", autocomplete: "off" });
@@ -910,7 +1020,7 @@ function industryCard(industry, index, cards) {
       ].filter(Boolean).join(" · ") : "Not saved yet"));
     fill(skills, saved ? skillsSummary(facts) : null);
   };
-  const part = settingsPart(root, (p) => {
+  const part = promotePart(root, (p) => {
     if (card.index === null) p.industry.push(collect());
     else p.industry[card.index] = collect();
   }, () => {
@@ -925,7 +1035,7 @@ function industryCard(industry, index, cards) {
     }
     if (!window.confirm(`Remove ${savedPromote().industry[card.index].name}? This is saved straight away.`)) return;
     const gone = card.index;
-    if (!await part.send((p) => { p.industry.splice(gone, 1); })) return;
+    if (!await part.edit((p) => { p.industry.splice(gone, 1); })) return;
     cards.delete(card);
     cards.forEach((other) => { if (other.index !== null && other.index > gone) other.index -= 1; });
     root.remove();
@@ -945,18 +1055,15 @@ function industryCard(industry, index, cards) {
   return root;
 }
 
-function renderSettings() {
-  dirtyParts.clear();
-  settingsRedraw.length = 0;
+function rankingSection() {
   const cards = new Set();
   const industries = h("div", { class: "industries" });
   const addIndustry = (industry, index) => industries.append(industryCard(industry, index, cards));
-  fill($("settings-form"),
-    h("div", { class: "settings-intro" },
-      h("p", { class: "muted" }, "Preferred cities and industries move postings up your prospects. They don't change what's kept or tailored. Each panel saves by itself."),
-      h("button", { class: "btn", type: "button", onclick: reloadSettings }, "Reload")),
+  savedPromote().industry.forEach((industry, index) => addIndustry(industry, index));
+  return [
+    h("p", { class: "muted settings-lead" }, "Preferred cities and industries move postings up your prospects. They don't change what's kept or tailored."),
     h("details", { class: "more" }, h("summary", {}, "How this works"),
-      h("p", { class: "muted" }, "A match adds points to a posting's priority, which only changes the order you and the daily run see things in. It can't bring back a posting the filters dropped: to accept a new city at all, add it under [location] in profile/search.toml too. An industry counts when the employer is listed, a word is in the employer's name or the title, or the words appear often enough in the description. Filters and everything else stay in profile/search.toml. Saving writes the [promote] section of that file out again in its usual layout, so comments of your own in that section are replaced. A setting there that this tab doesn't show stops the save instead of being lost.")),
+      h("p", { class: "muted" }, "A match adds points to a posting's priority, which only changes the order you and the daily run see things in. It can't bring back a posting the filters dropped: to accept a new city at all, add it under [location] in profile/search.toml too. An industry counts when the employer is listed, a word is in the employer's name or the title, or the words appear often enough in the description. Filters and everything else stay in profile/search.toml. Saving here writes the [promote] section of that file out again in its usual layout, so comments of your own in that section are replaced. A setting there that this section doesn't show stops the save instead of being lost.")),
     pointsPanel(),
     citiesPanel(),
     h("div", { class: "settings-heading-row" }, h("h2", { class: "settings-heading" }, "Industries"),
@@ -964,8 +1071,50 @@ function renderSettings() {
         addIndustry({}, null);
         industries.lastChild.querySelector("input").focus();
       } }, "Add an industry")),
-    industries);
-  savedPromote().industry.forEach((industry, index) => addIndustry(industry, index));
+    industries,
+  ];
+}
+
+// Shows the section the address names, or the first when it names none that exists. Returns the one on show.
+function pickSettingsSection() {
+  const sections = [...document.querySelectorAll("#settings-form .settings-section")];
+  if (!sections.length) return settingsAt;
+  const shown = sections.find((section) => section.dataset.section === settingsAt) || sections[0];
+  sections.forEach((section) => { section.hidden = section !== shown; });
+  document.querySelectorAll("#settings-form .subnav button").forEach((button) => {
+    if (button.dataset.section === shown.dataset.section) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  settingsAt = shown === sections[0] ? "" : shown.dataset.section;
+  return settingsAt;
+}
+
+// Called by showTab with whatever follows "settings/" in the address.
+function settingsShow(at) {
+  const moved = at !== settingsAt;
+  settingsAt = at;
+  const shown = pickSettingsSection();
+  if (moved) window.scrollTo(0, 0);
+  return shown;
+}
+
+function renderSettings() {
+  dirtyParts.clear();
+  settingsRedraw.length = 0;
+  Object.keys(settingsStatusBoxes).forEach((name) => delete settingsStatusBoxes[name]);
+  const sections = [...settings.options.sections.map((section) => ({ ...section, body: optionsSection(section) })),
+    { ...SETTINGS_RANKING, body: rankingSection() }];
+  fill($("settings-form"),
+    h("div", { class: "subnav-row" },
+      h("nav", { class: "subnav", "aria-label": "Settings sections" }, sections.map((section) => h("button", {
+        type: "button", "data-section": section.id, onclick: () => showTab(`settings/${section.id}`),
+      }, section.label))),
+      h("button", { class: "btn small", type: "button", onclick: reloadSettings }, "Reload")),
+    h("datalist", { id: "model-options" }, MODEL_ALIASES.map((name) => h("option", { value: name }))),
+    sections.map((section) => h("div", { class: "settings-section", "data-section": section.id, hidden: true }, section.body)));
+  pickSettingsSection();
+  drawSettingsStatus(null);
+  loadSettingsStatus();
 }
 
 async function loadSettings() {
@@ -1942,7 +2091,7 @@ function officialRow(area) {
 function officialPart(industry, about) {
   const heading = h("h3", { class: "info-heading" }, "Official numbers");
   if (!industry.codes.length) {
-    return [heading, h("p", { class: "muted" }, "Add this industry's codes (NAICS) on the Settings tab to see official employment, pay and growth here. ",
+    return [heading, h("p", { class: "muted" }, "Add this industry's codes (NAICS) under Settings, in Cities and industries, to see official employment, pay and growth here. ",
       h("a", { href: "https://www.census.gov/naics/", target: "_blank", rel: "noopener" }, "Look up codes at census.gov"), ".")];
   }
   const partial = industry.official.filter((a) => a.jobs !== undefined && a.jobs !== null && ((a.withheld || []).length || (a.absent || []).length));
@@ -2033,7 +2182,7 @@ function renderIndustries() {
   const data = industryData;
   const view = $("industries-view");
   if (!data.industries.length) {
-    return fill(view, h("p", { class: "muted" }, "You don't follow any industries yet. Add them on the Settings tab, and they'll show here."));
+    return fill(view, h("p", { class: "muted" }, "You don't follow any industries yet. Add them under Settings, in Cities and industries, and they'll show here."));
   }
   const m = data.market;
   const place = [m.metro, m.state, m.us ? "the United States" : null].filter(Boolean).join(", ");
@@ -2060,8 +2209,8 @@ function renderIndustries() {
 // The views are named in the rail. Each is still called a tab in the code and the address, as it was.
 const tabs = [...document.querySelectorAll(".rail-nav button[data-tab]")];
 
-// The tab you're on is in the address, so a reload or a bookmark comes back to it. On the Profile tab so is the
-// section, as #profile/achievements.
+// The tab you're on is in the address, so a reload or a bookmark comes back to it. On the Profile and Settings tabs
+// so is the section, as #profile/achievements or #settings/mail.
 function showTab(name, focus = false) {
   const [base, ...rest] = String(name || "").split("/");
   const tab = tabs.find((t) => t.dataset.tab === base) || tabs[0];
@@ -2070,21 +2219,27 @@ function showTab(name, focus = false) {
     else b.removeAttribute("aria-current");
   });
   // A new view starts at its top, as a new page would.
-  if (document.querySelector(`#view-${tab.dataset.tab}[hidden]`)) window.scrollTo(0, 0);
+  const arriving = Boolean(document.querySelector(`#view-${tab.dataset.tab}[hidden]`));
+  if (arriving) window.scrollTo(0, 0);
   document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== `view-${tab.dataset.tab}`; });
   if (focus) tab.focus();
-  const section = tab.dataset.tab === "profile" ? profileShow(rest.join("/")) : "";
+  const section = tab.dataset.tab === "profile" ? profileShow(rest.join("/"))
+    : tab.dataset.tab === "settings" ? settingsShow(rest.join("/")) : "";
   const hash = tab === tabs[0] ? "" : `#${tab.dataset.tab}${section ? `/${section}` : ""}`;
   // While a job's panel is open the address is the job's, and the tab's waits for the panel to close.
   if (openJobId) hashBeforeJob = hash;
   else if (location.hash !== hash) history.replaceState(null, "", hash || location.pathname + location.search);
-  if (tab.dataset.tab === "settings" && !dirtyParts.size) loadSettings();
+  // Settings loads when you come to it, not on each move between its sections, and never over edits you haven't saved.
+  if (tab.dataset.tab === "settings" && !dirtyParts.size && (arriving || !settings)) loadSettings();
   if (tab.dataset.tab === "facts" && !factsOpen) loadFacts();
   if (tab.dataset.tab === "industries") loadIndustries();
 }
 
-// Coming back to the Profile tab returns to the section you left it on.
-const tabTarget = (tab) => (tab.dataset.tab === "profile" && profileAt ? `profile/${profileAt}` : tab.dataset.tab);
+// Coming back to the Profile or Settings tab returns to the section you left it on.
+const tabTarget = (tab) => {
+  const at = { profile: profileAt, settings: settingsAt }[tab.dataset.tab];
+  return at ? `${tab.dataset.tab}/${at}` : tab.dataset.tab;
+};
 
 // The address of the tab on show, as showTab writes it, for when a job's panel closes over it.
 function tabAddress() {

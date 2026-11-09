@@ -69,6 +69,26 @@ A third, **Tailor these now**, sits in the **Being tailored** column of the Pipe
 
 Each runs in the background, shows its progress in the status line while the crystal beside the name throws sparks, and refuses to start while one of its kind is already going. The Claude run and the tailoring batch also refuse to start while the other is going, since both write drafts. The demo starts none of them.
 
+## Settings
+
+**Settings** is how Pyrite runs. It has a menu of its own under its name, and the address keeps the section you're on, as `#settings/mail`:
+
+| Section | What it sets | In `search.toml` |
+|---|---|---|
+| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks and skill ages | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]` and `[skills]` |
+| **Mail** | Whether replies are read over IMAP or through the Gmail connector, and how many days back | `[inbox]` `source` and `lookback_days` |
+| **Daily run** | How many postings are judged and resumes written each morning, how many tries a draft gets, and whether a cover letter is written | `[run]` `triage_per_day`, `tailor_per_day`, `fix_attempts` and `cover_letters` |
+| **Dashboard** | When the to-do list reminds you to follow up, calls an application ghosted or a deadline close, whether it reminds you to reach out, and whether it asks GitHub for updates | `[run]` `follow_up_days`, `quiet_days` and `decide_days`; `[dashboard]` `reach_out` and `check_updates` |
+| **Cities and industries** | The places and industries to see first. [Preferred cities and industries](prospects.md#preferred-cities-and-industries) covers it | `[promote]` |
+
+Claude and Mail open with a **Connection** panel: whether Claude Code is on this computer and signed in, and where replies are read from, whether the last read worked and when. **Check again** asks Claude Code afresh, which takes a second or two.
+
+Each panel has its own **Save**, which writes only the settings you changed in that panel. A setting is one key in `search.toml`: the save sets that key where it is, or adds it to its table, and every other line and comment stays as it was. Emptying a box takes the key out, so Pyrite's default applies again, and the box names that default. The file from before each save is kept in the Profile tab's History, where **Put back** restores it.
+
+The model and effort apply to judging, tailoring, Refresh resume and Interview prep. Left empty, Claude Code uses its own default for each, and your own Claude Code settings don't decide it, since a run reads only the workspace's. A model is a name or alias Claude Code knows, such as `opus`, `sonnet` or `claude-sonnet-5-5`.
+
+Nothing in Settings can let drafts say more. The patterns under `[guard]`, the filters, the port and the names under `allowed_hosts` aren't there, because the dashboard has no login. The demo can't save settings.
+
 ## Updating Pyrite
 
 Once an hour while the page is open, the dashboard fetches GitHub's `main` into Pyrite's code folder and compares it with the copy you're running. When GitHub's is ahead, an **Update available** button appears at the top, beside **Add a posting**. It lists what the new commits say, leaving out merges, and **Update and restart** moves the code forward to match, runs `pip install -r tools/requirements.txt` with the Python running Pyrite if that file changed, and restarts the dashboard so it runs the new code. The page reloads on its own once the new one answers. Your workspace isn't touched.

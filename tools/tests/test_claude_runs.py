@@ -350,6 +350,29 @@ class RunLimits(ClaudeRun):
                 self.assertIn(f"{tool}(./{path})", denied)
         self.assertEqual(cmd[cmd.index("--allowedTools") + 1], "Edit(./applications/acme/resume.md)")
 
+    def test_judging_and_writing_runs_use_the_model_and_effort_search_toml_names(self):
+        chosen = {**CFG, "claude": {"model": "opus", "effort": "high"}}
+        for cmd in (claude_code.command("claude", [], chosen), claude_code.command("claude", ["applications/acme/resume.md"], chosen),
+                    refresh.command("claude", chosen), prep.command("claude", chosen)):
+            self.assertEqual(cmd[cmd.index("--model") + 1], "opus")
+            self.assertEqual(cmd[cmd.index("--effort") + 1], "high")
+        only_effort = claude_code.command("claude", [], {"claude": {"effort": "low"}})
+        self.assertNotIn("--model", only_effort)
+        self.assertEqual(only_effort[only_effort.index("--effort") + 1], "low")
+        # Unset, neither is named, so Claude Code picks.
+        for cmd in (claude_code.command("claude", []), claude_code.command("claude", [], CFG), refresh.command("claude")):
+            self.assertNotIn("--model", cmd)
+            self.assertNotIn("--effort", cmd)
+
+    def test_a_model_or_effort_claude_code_would_not_take_stops_the_file_loading(self):
+        for claude, said in (({"model": "--dangerously-skip-permissions"}, "model under"), ({"model": "two words"}, "model under"),
+                             ({"model": 5}, "model under"), ({"effort": "extreme"}, "effort under")):
+            problems = store.config_problems({**CFG, "claude": claude})
+            self.assertEqual(len(problems), 1, claude)
+            self.assertIn(f"{said} [claude]", problems[0])
+        for claude in ({}, {"model": "claude-sonnet-5-5"}, {"model": "opus[1m]", "effort": "xhigh"}):
+            self.assertEqual(store.config_problems({**CFG, "claude": claude}), [])
+
     def test_marking_a_run_failed_marks_that_run_not_the_latest_of_its_kind(self):
         other = self.add(source_id="other", status="ready")
         first = claude_code.record(self.conn, self.job, "refresh", {}, 1.0, ok=True)

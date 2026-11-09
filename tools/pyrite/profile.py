@@ -35,7 +35,8 @@ DIFF_LINES = 400
 
 # The Profile tab's sections, in the order it shows them. Setup walks the same ones. `files` are the keys a section
 # writes, and `required` ones must be set before Pyrite can do its job. Until a section's own editor is built,
-# `meanwhile` says where to change it instead, and `fallback` names the older tab that edits it, if one does.
+# `meanwhile` says where to change it instead, and `fallback` names the tab that edits it, if one does, with the
+# section of that tab after a slash.
 STEPS: tuple[dict, ...] = (
     {"id": "basics", "group": "About you", "label": "Name and contact", "required": True, "fallback": "facts",
      "files": ("config", "facts", "resume", "letter"),
@@ -90,9 +91,9 @@ STEPS: tuple[dict, ...] = (
      "meanwhile": "Until it's built: [watch.*] and [[manual_check]] in profile/search.toml. The Sources tab shows how each board is answering.",
      "why": "Pyrite reads these companies' job boards every morning.",
      "writes": ("search.toml › [watch.*], [[manual_check]] and [workday] queries",)},
-    {"id": "priorities", "group": "Your search", "label": "What comes first", "required": False, "fallback": "settings",
+    {"id": "priorities", "group": "Your search", "label": "What comes first", "required": False, "fallback": "settings/ranking",
      "files": ("config",),
-     "meanwhile": "Until it's built: the Settings tab, which works as before.",
+     "meanwhile": "Until it's built: Cities and industries on the Settings tab, which works as before.",
      "why": "Cities and industries you want to see first. These change the order of what you see, not what's kept.",
      "writes": ("search.toml › [promote]",)},
     {"id": "tools", "group": "Automation", "label": "Tools check", "required": False, "fallback": None,
@@ -101,9 +102,9 @@ STEPS: tuple[dict, ...] = (
      "why": "What Pyrite needs on this computer, and what each thing is for. Everything else works without the "
             "missing ones.",
      "writes": ()},
-    {"id": "schedule", "group": "Automation", "label": "Schedule and mail", "required": False, "fallback": None,
+    {"id": "schedule", "group": "Automation", "label": "Schedule and mail", "required": False, "fallback": "settings/run",
      "files": ("config",),
-     "meanwhile": "Until it's built: [run] and [inbox] in profile/search.toml. The daily runs are set up as described in docs/schedule.md.",
+     "meanwhile": "Until it's built: Daily run and Mail on the Settings tab. The daily runs are set up as described in docs/schedule.md.",
      "why": "How much Pyrite does each morning, and where it reads replies from.",
      "writes": ("search.toml › [run] and [inbox]",)},
     {"id": "workspace", "group": "Workspace", "label": "Workspace and backup", "required": False, "fallback": None,

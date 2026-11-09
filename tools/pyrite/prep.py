@@ -74,9 +74,9 @@ def start(conn, job_id: int) -> None:
         raise ValueError(f"Couldn't start the interview prep: {err}") from err
 
 
-def command(claude: str) -> list[str]:
+def command(claude: str, cfg: dict | None = None) -> list[str]:
     """No tools: everything Claude needs is in the prompt, and the brief comes back in its closing message."""
-    return claude_code.command(claude, [])
+    return claude_code.command(claude, [], cfg)
 
 
 def prompt(job, folder: str, feedback: str = "", last: str = "") -> str:
@@ -101,7 +101,7 @@ def _write(conn, cfg, job_id: int, folder: str, claude: str) -> tuple[str, list[
     missing: NoDocument | None = None
     for _ in range(ATTEMPTS):
         job = get_job(conn, job_id)
-        answer = claude_code.ask(conn, job_id, "prep", command(claude), prompt(job, folder, feedback, last),
+        answer = claude_code.ask(conn, job_id, "prep", command(claude, cfg), prompt(job, folder, feedback, last),
                                  ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
         try:
             found, summary = claude_code.documents(answer, BRIEF)

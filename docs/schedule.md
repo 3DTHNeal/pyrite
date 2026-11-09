@@ -13,6 +13,14 @@ any    You               read each draft, apply on the company's site, log what 
 - **The pan** is `pyrite sweep`, which is `pyrite discover` followed by `pyrite inbox`. On Windows, use Task Scheduler. On Linux, `tools/pyrite/systemd/` has unit files.
 - **The daily run** is `pyrite run`. Schedule it the same way, for after the pan. It needs Claude Code installed and signed in.
 
+How much the run does, and which model does it, are set under **Settings** on the dashboard, in **Daily run** and **Claude**, or in `search.toml`: `triage_per_day` and `tailor_per_day` under `[run]`, and `model` and `effort` under `[claude]`. Without a `[claude]` line, Claude Code uses its own default for it.
+
+```toml
+[claude]
+model = "opus"   # a name or alias Claude Code knows
+effort = "high"  # low, medium, high, xhigh or max
+```
+
 ## Locking down the daily run
 
 `pyrite run` is the daily run with its limits built in. The code does every step that changes anything: it records each verdict, makes each folder, builds the documents and runs the assay. Claude is started once per posting to judge it, with tools that can only read, and once per application to write it, able to change only that application's `resume.md`, `cover-letter.md` and `notes.md`. It never gets a shell or web access, so an instruction hidden in a posting has nothing to reach. Your fact bank and the rest of `profile/`, the database and the workspace's `.claude/` settings are denied outright, so even a workspace `.claude/settings.json` that allowed more couldn't open them to a run, and if anything in `profile/` changes while a draft is written, the run puts that draft back and stops. Judging gets Pyrite's own possible-ghost and scam-sign markings for each posting, outside the posting's fence. The run says what it's doing before every Claude call and every build, so a long job never looks stopped while it works. Its instructions are `tools/pyrite/triage.md` and `tools/pyrite/tailor.md`, and the field report is written by the code from what the run did.

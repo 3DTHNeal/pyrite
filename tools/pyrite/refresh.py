@@ -87,9 +87,9 @@ def start(conn, job_id: int) -> None:
         raise ValueError(f"Couldn't start the refresh: {err}") from err
 
 
-def command(claude: str) -> list[str]:
+def command(claude: str, cfg: dict | None = None) -> list[str]:
     """No tools: everything Claude needs is in the prompt, and the rewrite comes back in its closing message."""
-    return claude_code.command(claude, [])
+    return claude_code.command(claude, [], cfg)
 
 
 def prompt(job, folder: str, feedback: str = "", polish: str = "", unusable: bool = False) -> str:
@@ -105,13 +105,13 @@ def prompt(job, folder: str, feedback: str = "", polish: str = "", unusable: boo
     return text + claude_code.hand_back(DRAFT, (NOTES,))
 
 
-def _ask(conn, job_id: int, folder: str, claude: str, text: str, deadline: float) -> str:
+def _ask(conn, cfg, job_id: int, folder: str, claude: str, text: str, deadline: float) -> str:
     """One run, its rewrite saved in the folder. Returns Claude's sentence for the dashboard.
 
     An answer with no resume in it counts as a failed run and raises NoDocument, leaving the files as they were. So
     does moving the job on while Claude wrote, since the resume on file is then the one you sent.
     """
-    answer = claude_code.ask(conn, job_id, "refresh", command(claude), text, ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
+    answer = claude_code.ask(conn, job_id, "refresh", command(claude, cfg), text, ROOT, deadline - time.monotonic(), TIME_LIMIT_MINUTES)
     try:
         found, summary = claude_code.documents(answer, DRAFT, (NOTES,))
     except NoDocument:
@@ -133,7 +133,7 @@ def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, dead
     kept = {path: path.read_bytes() for path in files if path.exists()}
     try:
         text = prompt(get_job(conn, job_id), folder, polish="\n".join(f"- {ask}" for ask in asks))
-        _ask(conn, job_id, folder, claude, text, deadline)
+        _ask(conn, cfg, job_id, folder, claude, text, deadline)
         if finish_job(conn, cfg, job_id)["ok"]:
             return
     except ClaudeFailed:
@@ -151,7 +151,7 @@ def _rewrite(conn, cfg, job_id: int, folder: str, claude: str) -> str:
     for _ in range(ATTEMPTS):
         job = get_job(conn, job_id)
         try:
-            summary = _ask(conn, job_id, folder, claude, prompt(job, folder, feedback, unusable=missing is not None), deadline)
+            summary = _ask(conn, cfg, job_id, folder, claude, prompt(job, folder, feedback, unusable=missing is not None), deadline)
         except NoDocument as err:
             missing = err
             feedback = f"- Your answer had no {DRAFT} block, so nothing was saved. Hand back the whole resume, as the end of these instructions says."

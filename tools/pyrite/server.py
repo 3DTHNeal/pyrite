@@ -35,6 +35,7 @@ from . import (
     launch,
     mail,
     market,
+    options,
     outlook,
     prep,
     profile,
@@ -801,7 +802,10 @@ class Handler(BaseHTTPRequestHandler):
                 finally:
                     conn.close()
             if path == "/api/settings":
-                return self._json(settings.view())
+                return self._json(_settings_page())
+            if path == "/api/settings/status":
+                fresh = parse_qs(urlparse(self.path).query).get("fresh") == ["1"]
+                return self._json(options.status(load_config(), fresh))
             if path == "/api/facts":
                 return self._json(facts.view())
             if path == "/api/profile":
@@ -964,6 +968,21 @@ def update_state(cfg: dict) -> dict:
     return found
 
 
+def _settings_page() -> dict:
+    """Everything the Settings tab shows: how Pyrite runs, and the cities and industries to see first."""
+    return {**settings.view(), "options": options.view()}
+
+
+def _save_settings(body: dict) -> dict:
+    settings.save(body)
+    return _settings_page()
+
+
+def _save_options(body: dict) -> dict:
+    options.save(body)
+    return _settings_page()
+
+
 def _save_facts(body: dict) -> dict:
     """The Facts tab's save. Approving a term or unlisting a "Do not use" item needs a code, as on the Profile tab."""
     # The demo refuses every save, so it shouldn't send a code first.
@@ -1054,7 +1073,8 @@ def _profile_code(body: dict) -> dict:
 # that loosens a check asks for a code first.
 PROFILE_WRITES = {
     "/api/profile/draft": _draft_profile,
-    "/api/settings": settings.save,
+    "/api/settings": _save_settings,
+    "/api/settings/options": _save_options,
     "/api/facts": _save_facts,
     "/api/profile": _save_profile,
     "/api/profile/put-back": _put_back,

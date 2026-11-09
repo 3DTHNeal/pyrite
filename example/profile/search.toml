@@ -37,6 +37,12 @@ decide_days = 5      # a deadline this close puts "tailor it or pass" on the to-
 # A posting whose own firm deadline has passed is passed on by the next pan, and a new one isn't stored at all.
 # "Accepted at least until" is a floor, not a deadline: past it, the job shows as closing any day instead.
 
+# Which Claude model judges postings and writes drafts, and how hard it thinks, for the daily run, Refresh resume and
+# Interview prep. Leave a line out and Claude Code uses its own default for it. Settings on the dashboard sets both.
+[claude]
+# model = "opus"   # a name or alias Claude Code knows, such as "sonnet" or "claude-sonnet-5-5"
+# effort = "high"  # low, medium, high, xhigh or max
+
 # Each posting's pay range, as a year's pay, is compared with what postings for the same kind of role pay: the same
 # track at the same level, once Pyrite has seen five. Even the top of the range under 75% of the typical middle is
 # too low to bother with, and the daily run doesn't judge it unless you pick it. Far above is marked too, since it

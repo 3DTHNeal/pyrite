@@ -282,13 +282,21 @@ NUMBERS = {
 }
 
 
+# How hard Claude Code can be asked to think, as its --effort takes it. `effort` under [claude] is one of these.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# A model's name or alias, such as "sonnet" or "claude-sonnet-5-5". It goes on Claude Code's command line, so it
+# starts with a letter or digit and can never read as an option.
+MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,79}")
+
+
 def _is_number(value) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def config_problems(cfg: dict) -> list[str]:
-    """Settings of the wrong kind, each as a sentence naming it: a number written as text, or a [scoring] list whose
-    entries aren't the [pattern, points] pairs it needs."""
+    """Settings of the wrong kind, each as a sentence naming it: a number written as text, a model or effort under
+    [claude] that Claude Code wouldn't take, or a [scoring] list whose entries aren't the [pattern, points] pairs it
+    needs."""
     problems = []
     for table, keys in NUMBERS.items():
         section = cfg.get(table)
@@ -297,7 +305,16 @@ def config_problems(cfg: dict) -> list[str]:
         for key in keys:
             if key in section and not _is_number(section[key]):
                 problems.append(f"{key} under [{table}] is {json.dumps(section[key])}, which needs to be a number, written without quotes.")
-    ages = (cfg.get("freshness") or {}).get("age_points", [])
+    claude = cfg.get("claude")
+    if isinstance(claude, dict):
+        model, effort = claude.get("model"), claude.get("effort")
+        if model is not None and not (isinstance(model, str) and MODEL_NAME.fullmatch(model)):
+            problems.append(f"model under [claude] is {json.dumps(model)}, which isn't a model's name. Use one such as "
+                            "\"sonnet\" or \"claude-sonnet-5-5\", or take the line out for Claude Code's default.")
+        if effort is not None and effort not in EFFORTS:
+            problems.append(f"effort under [claude] is {json.dumps(effort)}, which needs to be one of {', '.join(EFFORTS)}. "
+                            "Take the line out for Claude Code's default.")
+    ages =(cfg.get("freshness") or {}).get("age_points", [])
     if not isinstance(ages, list) or not all(isinstance(row, list) and len(row) == 2 and all(map(_is_number, row)) for row in ages):
         problems.append("age_points under [freshness] needs pairs of numbers, such as [[3, 30], [7, 20]].")
     scoring = cfg.get("scoring") or {}
