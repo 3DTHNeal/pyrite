@@ -333,6 +333,14 @@ def _keep(stamp: str, key: str, text: str, reason: str, step: str | None) -> Non
         old.unlink(missing_ok=True)
 
 
+def keep(before: dict[str, str], reason: str) -> None:
+    """Keep the text files had before a save made outside the Profile tab, as the Facts and Settings tabs make, so
+    History lists that save too and can put it back. The caller holds settings._lock and writes the files itself."""
+    stamp = _stamp(list(before))
+    for key, text in before.items():
+        _keep(stamp, key, text, reason, None)
+
+
 def refuse_stale(current: dict[str, str], based_on: dict) -> None:
     """Raise Conflict if any file changed since the version the page read."""
     for key, text in current.items():
@@ -408,9 +416,27 @@ def compare(key: str, stamp: str) -> dict:
             "diff": lines[:DIFF_LINES], "cut": max(0, len(lines) - DIFF_LINES)}
 
 
-def put_back_reason(key: str, stamp: str) -> str:
+def put_back_reason(keys: str | list[str], stamp: str) -> str:
+    """The History line for putting back one file, or several, as they were before the save at `stamp`."""
+    names = [Path(FILES[key]).name for key in ([keys] if isinstance(keys, str) else keys)]
+    named = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
     when = datetime.strptime(stamp, "%Y%m%dT%H%M%S%fZ").replace(tzinfo=UTC).astimezone()
-    return f"Put back {Path(FILES[key]).name} as it was before the save of {when:%d %b %Y %H:%M}"
+    return f"Put back {named} as {'it was' if len(names) == 1 else 'they were'} before the save of {when:%d %b %Y %H:%M}"
+
+
+def kept_save(stamp: str) -> dict[str, str]:
+    """Every file the save at `stamp` changed, as it was just before. A save that changed several files is put back
+    whole or not at all, so it can't leave them out of step, such as a name changed back in one file but not another."""
+    if not isinstance(stamp, str) or not STAMP.fullmatch(stamp):
+        raise ValueError("That isn't a saved copy.")
+    keys = list(dict.fromkeys(entry["key"] for entry in history(limit=10_000) if entry["stamp"] == stamp))
+    if not keys:
+        raise ValueError("That save isn't in History any more.")
+    try:
+        return {key: kept(key, stamp) for key in keys}
+    except ValueError:
+        raise ValueError("Some of that save's copies are no longer kept, so it can't be put back whole. "
+                         "Put back the files that are kept one at a time.") from None
 
 
 def kept(key: str, stamp: str) -> str:

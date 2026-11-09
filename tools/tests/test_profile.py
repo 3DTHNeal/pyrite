@@ -453,6 +453,25 @@ class Hub(Profile):
             with self.assertRaises(ValueError):
                 profile.compare(key, bad)
 
+    def test_a_whole_save_is_every_file_it_changed(self):
+        facts, terms, resume = profile.read("facts"), profile.read("terms"), profile.read("resume")
+        profile.write({"facts": facts + "- One more\n", "terms": terms + "Rust\n", "resume": resume}, profile.versions(), "Two files")
+        stamp = profile.history()[0]["stamp"]
+        # The resume didn't change, so it isn't part of the save.
+        self.assertEqual(profile.kept_save(stamp), {"facts": facts, "terms": terms})
+        self.assertTrue(profile.put_back_reason(["facts", "terms"], stamp).startswith(
+            "Put back facts.md and approved-terms.txt as they were before the save of"))
+        for bad in ("20261108T000000000000Z", "../x", None):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                profile.kept_save(bad)
+
+    def test_saves_from_other_tabs_are_kept_too(self):
+        terms = profile.read("terms")
+        with settings._lock:
+            profile.keep({"terms": terms}, "Changed on the Facts tab")
+        entry = profile.history()[0]
+        self.assertEqual((entry["reason"], entry.get("step"), profile.kept("terms", entry["stamp"])), ("Changed on the Facts tab", None, terms))
+
 
 class PageScripts(unittest.TestCase):
     def test_every_script_the_page_loads_is_served_and_every_section_file_is_loaded(self):

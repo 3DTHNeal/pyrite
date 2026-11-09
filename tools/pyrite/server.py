@@ -81,6 +81,14 @@ SOON = 2  # Days. A deadline this close puts a job near the top of the Sluice.
 ORDER_REASON = 200
 # Days after applying when a short note to the hiring manager is due, until one is logged.
 REACH_OUT_DAYS = range(1, 4)
+# The longest text each box on the page takes. The page stops typing at these, and the server refuses longer rather
+# than cutting it short without saying so.
+MAX_NOTE = 2000  # The note that goes with a status change.
+MAX_NOTES = 5000  # Your notes on a job.
+MAX_NEXT_STEP = 300
+MAX_NAME = 200  # A company, title or location you add by hand.
+# A job's or an alert's number. Longer ones can't be one, and SQLite can't even look them up.
+JOB_ID = r"(\d{1,18})"
 
 
 def safe_url(url: str) -> str:
@@ -103,12 +111,29 @@ def tracked_by_url(conn, url: str):
     return next((row for row in rows if _same_posting(row["url"]) == wanted), None)
 
 
+def _text(body: dict, key: str, label: str, limit: int) -> str:
+    """A text field from a request, trimmed. Anything but text, or text over `limit`, is refused rather than stored
+    some other way or cut short."""
+    value = body.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{label} should be text.")
+    value = value.strip()
+    if len(value) > limit:
+        raise ValueError(f"{label} can be at most {limit:,} characters, and that's {len(value):,}, so nothing was saved. Shorten it and try again.")
+    return value
+
+
 def add_manual_job(conn, cfg, company, title, url="", location="", description="") -> int:
     """A posting you found yourself always goes in, whatever the filters think, at the front of the line. One already
     tracked at the same link isn't added twice: that job's number comes back instead."""
     company, title = company.strip(), title.strip()
     if not company or not title:
         raise ValueError("Company and title are required.")
+    for label, value in (("Company", company), ("Title", title), ("Location", location.strip())):
+        if len(value) > MAX_NAME:
+            raise ValueError(f"{label} is over {MAX_NAME} characters. Shorten it, and paste the rest into the description.")
     url = safe_url(url)
     known = tracked_by_url(conn, url)
     if known:
@@ -504,7 +529,7 @@ def _reopen_target(job, cfg: dict) -> str:
 
 def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
     action = body.get("action")
-    note = str(body.get("note") or "").strip()[:2000]
+    note = _text(body, "note", "The note", MAX_NOTE)
     follow_up = cfg["run"]["follow_up_days"]
     job = get_job(conn, job_id)
 
@@ -516,13 +541,16 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         kind = body.get("kind")
         if not isinstance(kind, str) or kind not in HEARD_BACK:
             raise ValueError("Unknown kind of reply.")
+        # Hearing back is about an application, and the reply rate counts it against one.
+        if not job["applied_at"]:
+            raise ValueError("This one hasn't been sent, so there's no reply to log. Mark it applied first if you did apply.")
         set_status(conn, job_id, HEARD_BACK[kind], note, follow_up)
     elif action == "dismiss_reply":
         log_event(conn, job_id, REPLY_DISMISSED, note)
     elif action == "acknowledge_changes":
         store.acknowledge_sent_changes(conn, job_id)
     elif action == "reached_out":
-        store.log_outreach(conn, job_id, str(body.get("date") or ""), str(body.get("to") or ""), note, follow_up)
+        store.log_outreach(conn, job_id, _text(body, "date", "The day", 40), _text(body, "to", "Who you reached", 120), note, follow_up)
     elif action == "tailor_next":
         conn.execute("UPDATE jobs SET priority = 1 WHERE id = ?", (job_id,))
         # Also the marker that gives a draft the daily run gave up on a fresh set of tries.
@@ -568,18 +596,32 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         if not conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = ?", (job_id, SEEN)).fetchone():
             log_event(conn, job_id, SEEN)
     elif action == "note":
-        conn.execute("UPDATE jobs SET notes = ? WHERE id = ?", (str(body.get("notes") or "")[:5000], job_id))
+        conn.execute("UPDATE jobs SET notes = ? WHERE id = ?", (_text(body, "notes", "Your notes", MAX_NOTES), job_id))
     elif action == "next_action":
-        when = str(body.get("date") or "") or None
-        if when and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", when):
-            raise ValueError("Bad date.")
-        conn.execute(
-            "UPDATE jobs SET next_action = ?, next_action_date = ? WHERE id = ?",
-            (str(body.get("text") or "")[:300], when, job_id),
-        )
-        log_event(conn, job_id, "next_action", f"{body.get('text', '')} {when or ''}".strip())
+        text = _text(body, "text", "The next step", MAX_NEXT_STEP)
+        when = _text(body, "date", "The date", 40) or None
+        if when:
+            try:
+                # The pattern first, since fromisoformat also takes forms such as 20260102 that the page never sends.
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", when):
+                    raise ValueError
+                date.fromisoformat(when)
+            except ValueError:
+                raise ValueError(f"{when} isn't a date. Give it as YYYY-MM-DD.") from None
+        conn.execute("UPDATE jobs SET next_action = ?, next_action_date = ? WHERE id = ?", (text, when, job_id))
+        log_event(conn, job_id, "next_action", f"{text} {when or ''}".strip())
     else:
         raise ValueError(f"Unknown action {action!r}")
+
+
+def allowed_hosts(cfg: dict) -> set[str]:
+    """The extra names under [dashboard] allowed_hosts, in lower case. Only a list of names counts: a single string
+    would let any piece of it match, so it allows nothing, and `pyrite doctor` says so."""
+    dashboard = cfg.get("dashboard", {})
+    names = dashboard.get("allowed_hosts", []) if isinstance(dashboard, dict) else []
+    if not isinstance(names, list):
+        return set()
+    return {name.strip().lower() for name in names if isinstance(name, str) and name.strip()}
 
 
 def resolve_file(rel: str) -> Path | None:
@@ -604,12 +646,15 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _host_ok(self) -> bool:
-        # Refusing unknown Host headers stops DNS rebinding from reading this data.
-        host = re.sub(r":\d+$", "", self.headers.get("Host", ""))
+        # Refusing unknown Host headers stops DNS rebinding from reading this data. A request with no Host at all
+        # names nothing this server answers to, so it's refused too.
+        host = re.sub(r":\d+$", "", self.headers.get("Host", "")).strip().lower()
+        if not host:
+            return False
         try:
-            extra = load_config().get("dashboard", {}).get("allowed_hosts", [])
+            extra = allowed_hosts(load_config())
         except (OSError, tomllib.TOMLDecodeError):
-            extra = []  # Localhost still gets through, so the page can say what's wrong with the file.
+            extra = set()  # Localhost still gets through, so the page can say what's wrong with the file.
         return host in ALLOWED_HOSTS or host in extra
 
     def _guarded(self, handle) -> None:
@@ -625,9 +670,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": f"Database error: {err}"}, 500)
         except ConnectionError:
             pass  # The browser went away mid-answer.
-        except Exception as err:
+        except Exception:
+            # The details go to the window the dashboard runs in, not to whatever sent the request.
             traceback.print_exc()
-            self._json({"error": f"Something went wrong on the server. {type(err).__name__}: {err}"}, 500)
+            self._json({"error": "Something went wrong on the server, so that didn't work. The details are in the window "
+                                 "the dashboard is running in."}, 500)
 
     def _send(self, status: int, body: bytes, content_type: str, extra: dict | None = None) -> None:
         self.send_response(status)
@@ -683,7 +730,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(market.view(conn, load_config()))
                 finally:
                     conn.close()
-            match = re.fullmatch(r"/api/job/(\d+)", path)
+            match = re.fullmatch(rf"/api/job/{JOB_ID}", path)
             if match:
                 conn = connect()
                 try:
@@ -719,7 +766,8 @@ class Handler(BaseHTTPRequestHandler):
             if length > 500_000:
                 return self._json({"error": "too large"}, 413)
             body = json.loads(self.rfile.read(length) or b"{}")
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError is JSON nested deeper than Python will follow, which no page of this dashboard sends.
             return self._json({"error": "bad request"}, 400)
         if not isinstance(body, dict):
             return self._json({"error": "bad request"}, 400)
@@ -756,12 +804,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/industries/outlook":
                 outlook.start(cfg, str(body.get("name") or ""))
                 return self._json({"ok": True}, 202)
-            match = re.fullmatch(r"/api/job/(\d+)/action", path)
+            match = re.fullmatch(rf"/api/job/{JOB_ID}/action", path)
             if match:
                 apply_action(conn, int(match.group(1)), body, cfg)
                 conn.commit()
                 return self._json({"ok": True})
-            match = re.fullmatch(r"/api/alert/(\d+)/dismiss", path)
+            match = re.fullmatch(rf"/api/alert/{JOB_ID}/dismiss", path)
             if match:
                 mail.dismiss_alert(conn, int(match.group(1)))
                 conn.commit()
@@ -776,11 +824,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def _save_facts(body: dict) -> dict:
     """The Facts tab's save. Approving a term or unlisting a "Do not use" item needs a code, as on the Profile tab."""
-    key, text = body.get("file"), body.get("text")
     # The demo refuses every save, so it shouldn't send a code first.
-    if key in facts.FILES and isinstance(text, str) and not store.IS_EXAMPLE:
+    if not store.IS_EXAMPLE:
+        # A save that would be refused is refused before any code is sent, so it never costs a code or a notification.
+        key, text = facts._clean(body.get("file"), body.get("text"))
         current = facts._read(key)
-        # A stale form is refused before any code is sent, since that save can't go through anyway.
         if body.get("version") != facts._version(current):
             raise settings.Conflict("This file changed after you opened it, so nothing was saved. Reload the Facts tab to see the latest.")
         confirm.require({key: text}, {key: current}, {key: body.get("version")}, body.get("request_id"), body.get("code"))
@@ -792,13 +840,14 @@ def _save_profile(body: dict) -> dict:
 
 
 def _put_back(body: dict) -> dict:
-    """History's Put back: the copy a file had before an earlier save, read here rather than sent by the page, and
-    written like any other save, so one that loosens a check still needs a code."""
+    """History's Put back: the copy a file had before an earlier save, or with `whole`, every file that save changed.
+    The copies are read here rather than sent by the page, and written like any other save, so one that loosens a
+    check still needs a code."""
     key, stamp = str(body.get("key") or ""), str(body.get("stamp") or "")
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so the fictional candidate's profile can't be changed.")
-    text = profile.kept(key, stamp)
-    return _write_profile({key: text}, body.get("based_on"), body, profile.put_back_reason(key, stamp), None)
+    texts = profile.kept_save(stamp) if body.get("whole") is True else {key: profile.kept(key, stamp)}
+    return _write_profile(texts, body.get("based_on"), body, profile.put_back_reason(list(texts), stamp), None)
 
 
 def _write_profile(changes, based_on, body: dict, reason: str, step) -> dict:
@@ -806,13 +855,10 @@ def _write_profile(changes, based_on, body: dict, reason: str, step) -> dict:
         raise ValueError("This is the demo, so the fictional candidate's profile can't be changed.")
     if not isinstance(changes, dict) or not changes or not isinstance(based_on, dict):
         raise ValueError("Nothing to save.")
-    for key, text in changes.items():
-        if key not in profile.FILES:
-            raise ValueError("That isn't a file the Profile tab can change.")
-        if not isinstance(text, str):
-            raise ValueError(f"Nothing to save for {profile.FILES[key]}.")
+    # Everything that would refuse the save is checked before any code is sent, so a save that can't go through
+    # never costs a code or a notification: what each file would hold, then whether the form is stale.
+    changes = {key: profile._clean(key, text) for key, text in changes.items()}
     current = {key: profile.read(key) for key in changes}
-    # A stale form is refused before any code is sent, since that save can't go through anyway.
     profile.refuse_stale(current, based_on)
     confirm.require(changes, current, based_on, body.get("request_id"), body.get("code"))
     profile.write(changes, based_on, reason, step if isinstance(step, str) else None)
@@ -870,6 +916,8 @@ class DashboardServer(ThreadingHTTPServer):
 def make_server(port: int) -> DashboardServer:
     try:
         return DashboardServer(("127.0.0.1", port), Handler)
+    except OverflowError:
+        raise SystemExit(f"{port} isn't a port: a port is a number from 1 to 65535. Pick one with --port.") from None
     except OSError as err:
         raise SystemExit(f"Port {port} is already in use, so the dashboard didn't start ({err.strerror or err}).\n"
                          f"If Pyrite is already running, open http://127.0.0.1:{port}. Otherwise pick another port with --port.") from None

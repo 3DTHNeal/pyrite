@@ -196,8 +196,9 @@ function profileDiff(lines, cut) {
   }, line || " ")), cut ? h("span", { class: "hunk" }, `… and ${profileCount(cut, "more line")}`) : null);
 }
 
-// What putting back one file's earlier copy would change, and the button that does it.
-async function profileShowKept(entry, box) {
+// What putting back one file's earlier copy would change, and the button that does it. A save that changed other files
+// too says so, and offers to put the whole save back, since one file alone can leave the others out of step with it.
+async function profileShowKept(entry, box, save) {
   fill(box, h("p", { class: "muted" }, "Loading…"));
   let kept;
   try {
@@ -212,16 +213,28 @@ async function profileShowKept(entry, box) {
     kept.same ? h("span", { class: "muted" }, "The file is already the same as this copy.")
       : h("span", { class: "muted" }, profileData.editable ? "Lines marked + come back and lines marked − go. The file as it is now is kept in History too."
         : "Putting back is off in the demo."));
-  put.addEventListener("click", () => profilePutBack(entry, put, actions, error));
-  fill(box, kept.same ? null : profileDiff(kept.diff, kept.cut), actions, error);
+  put.addEventListener("click", () => profilePutBack({ key: entry.key, stamp: entry.stamp }, entry.path, put, actions, error));
+  const others = save.files.filter((file) => file.key !== entry.key);
+  let whole = null;
+  if (others.length) {
+    const names = others.map((file) => file.path.split("/").pop()).join(", ");
+    const all = save.files.every((file) => file.kept);
+    const button = h("button", { class: "btn small", type: "button", disabled: !profileData.editable || !all }, "Put back this whole save");
+    whole = h("div", { class: "callout" },
+      h("p", {}, `This save also changed ${names}. Putting back ${entry.path.split("/").pop()} alone leaves ${others.length > 1 ? "those" : "that"} as ${others.length > 1 ? "they are" : "it is"} now, which can leave your files disagreeing, such as a name changed back in one but not the other.`),
+      h("div", { class: "part-actions" }, button, all ? null : h("span", { class: "muted" }, "Not every file from this save is still kept.")));
+    button.addEventListener("click", () => profilePutBack({ stamp: entry.stamp, whole: true }, "this save's files", button, whole, error));
+  }
+  fill(box, kept.same ? null : profileDiff(kept.diff, kept.cut), actions, whole, error);
 }
 
-async function profilePutBack(entry, button, actions, error) {
+// `what` is what's being put back, by its copy's stamp and either one file's key or the whole save.
+async function profilePutBack(what, named, button, actions, error) {
   error.textContent = "";
-  const body = { key: entry.key, stamp: entry.stamp, based_on: profileData.versions };
+  const body = { ...what, based_on: profileData.versions };
   const done = (data) => {
     profileData = data;
-    toast(`Put back ${entry.path}. The version it replaced is in History.`);
+    toast(`Put back ${named}. What ${what.whole ? "they" : "it"} replaced is in History.`);
     renderProfile();
   };
   button.disabled = true;
@@ -258,7 +271,7 @@ function profileHistory() {
             box.closest("li").querySelectorAll(".files .btn").forEach((b) => b.setAttribute("aria-expanded", "false"));
             if (!open) {
               e.currentTarget.setAttribute("aria-expanded", "true");
-              profileShowKept(entry, box);
+              profileShowKept(entry, box, save);
             }
           } }, entry.path.split("/").pop())
           : h("span", { class: "muted", title: "Only the latest copies of each file are kept." }, `${entry.path.split("/").pop()} (not kept)`)))),
@@ -313,7 +326,7 @@ function profileRail(current) {
 // A section whose editor isn't built yet: what it holds now, and where to change it until then.
 function profileFallback(step) {
   const tab = PROFILE_TABS[step.fallback];
-  return h("div", { class: "stack" },
+  return h("div", { class: "stack profile-fallback" },
     h("p", {}, h("b", {}, "Now: "), step.summary),
     h("div", { class: "callout info" }, h("b", {}, "This section's editor isn't built yet."), h("p", {}, step.meanwhile)),
     tab ? h("div", {}, h("button", { class: "btn", type: "button", onclick: () => showTab(step.fallback) }, `Open the ${tab} tab`)) : null);

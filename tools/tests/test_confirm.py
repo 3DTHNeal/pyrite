@@ -69,6 +69,16 @@ class Loosening(Workspace):
         self.assertEqual(confirm.loosening("terms", "Git GitHub\n", "Git GitHub, Rust\n"), ["approve “Rust” for every draft"])
         self.assertEqual(confirm.loosening("terms", "Git GitHub\n", "GitHub\nGit\n"), [])
 
+    def test_a_commented_term_approves_nothing_so_needs_no_code(self):
+        # The assay reads a line starting with # as a comment, so it approves nothing, however it's written.
+        terms = profile.read("terms")
+        for line in ("# Zigbee", "#Zigbee", "   # Zigbee, Thread"):
+            with self.subTest(line):
+                self.assertEqual(confirm.loosening("terms", terms, f"{terms}{line}\n"), [])
+        # Commenting a term out takes it away. Taking the # off again approves it, so that asks.
+        self.assertEqual(confirm.loosening("terms", "Zigbee\n", "# Zigbee\n"), [])
+        self.assertEqual(confirm.loosening("terms", "# Zigbee\n", "Zigbee\n"), ["approve “Zigbee” for every draft"])
+
     def test_taking_an_item_off_do_not_use_loosens_and_other_edits_dont(self):
         # A Windows checkout has CRLF line endings, so both kinds are checked whatever this one has.
         lf = profile.read("facts").replace("\r\n", "\n")
@@ -286,6 +296,52 @@ class OverHttp(Workspace):
         status, _ = self.call("/api/facts", {**body, "request_id": data["request_id"], "code": self.code()})
         self.assertEqual(status, 200)
         self.assertIn("Kubernetes", profile.read("terms"))
+
+    def test_a_commented_term_saves_on_the_facts_tab_without_a_code(self):
+        terms = next(f for f in self.call("/api/facts")[1]["files"] if f["key"] == "terms")
+        status, _ = self.call("/api/facts", {"file": "terms", "version": terms["version"], "text": terms["text"] + "# Zigbee\n"})
+        self.assertEqual((status, self.sent), (200, []))
+        self.assertIn("# Zigbee", profile.read("terms"))
+        # The Skills section reads it as a comment too, never as a term to show or take off.
+        shown = [entry["term"] for group in self.call("/api/profile")[1]["term_groups"] for entry in group["terms"]]
+        self.assertNotIn("Zigbee", shown)
+
+    def test_a_save_that_would_be_refused_never_costs_a_code(self):
+        view = self.call("/api/profile")[1]
+        loosens = profile.read("terms") + "Kubernetes\n"
+        for changes in ({"terms": loosens, "facts": "  \n"}, {"terms": loosens + "bell\x07\n"},
+                        {"terms": loosens, "config": "[candidate\n"}, {"terms": loosens, "resume": 5}):
+            with self.subTest(list(changes)):
+                self.assertEqual(self.call("/api/profile", {"changes": changes, "based_on": view["versions"]})[0], 400)
+        terms = next(f for f in self.call("/api/facts")[1]["files"] if f["key"] == "terms")
+        for text in (terms["text"] + "Kubernetes\x00\n", "Kubernetes " * 20_000, None):
+            with self.subTest(repr(text)[:20]):
+                self.assertEqual(self.call("/api/facts", {"file": "terms", "version": terms["version"], "text": text})[0], 400)
+        self.assertEqual(self.sent, [])
+        self.assertIsNone(confirm._pending)
+
+    def test_putting_back_a_whole_save_restores_every_file_it_changed(self):
+        view = self.call("/api/profile")[1]
+        terms, facts = profile.read("terms"), profile.read("facts")
+        without = re.sub(r"(?m)^FreeRTOS\r?\n", "", terms)
+        changes = {"terms": without, "facts": facts.replace("Hired 4 engineers", "Hired 5 engineers")}
+        self.assertNotEqual(changes["facts"], facts)
+        view = self.call("/api/profile", {"changes": changes, "based_on": view["versions"]})[1]
+        stamp = view["history"][0]["stamp"]
+        body = {"stamp": stamp, "whole": True, "based_on": view["versions"]}
+        status, data = self.call("/api/profile/put-back", body)
+        self.assertEqual((status, data["changes"]), (428, ["approve “FreeRTOS” for every draft"]))
+        status, data = self.call("/api/profile/put-back", {**body, "request_id": data["request_id"], "code": self.code()})
+        self.assertEqual(status, 200)
+        self.assertEqual((profile.read("terms"), profile.read("facts")), (terms, facts))
+        latest = [e for e in data["history"] if e["stamp"] == data["history"][0]["stamp"]]
+        self.assertEqual({e["key"] for e in latest}, {"terms", "facts"})
+        self.assertRegex(latest[0]["reason"], r"^Put back (approved-terms.txt and facts.md|facts.md and approved-terms.txt) as they were")
+        # A save whose copies have gone can't be put back whole, and says so rather than putting back part of it.
+        (self.root / "data" / "history" / "facts" / f"{stamp}.md").unlink()
+        status, data = self.call("/api/profile/put-back", {**body, "based_on": profile.versions()})
+        self.assertEqual(status, 400)
+        self.assertIn("no longer kept", data["error"])
 
     def test_allowed_hosts_and_unknown_files_are_refused(self):
         view = self.call("/api/profile")[1]

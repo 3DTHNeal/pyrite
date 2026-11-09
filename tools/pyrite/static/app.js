@@ -9,6 +9,8 @@ let hashBeforeJob = "";
 let refreshWatch = null;
 // Whatever had focus before the job panel opened, so closing it puts you back where you were.
 let drawerOpener = null;
+// The longest text each box takes, as server.py refuses longer: a note with an update, your notes and the next step.
+const LIMITS = { note: 2000, notes: 5000, nextStep: 300 };
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -60,6 +62,9 @@ function clip(text, limit) {
   if (!text || text.length <= limit) return text || "";
   return `${text.slice(0, limit).replace(/\s+\S*$/, "").replace(/[,;:]$/, "")}…`;
 }
+
+// A company or title as a table cell shows it: three lines at most, however long a board made it. The panel has all of it.
+const clamped = (text) => h("span", { class: "clamp" }, text);
 
 // Pay as a table can show it: "$255,850.00-361,200.00 USD" reads as $256k–$361k, and "$45 - $60 an hour" as $45–$60/hr.
 // Anything it can't read is shown as the posting wrote it.
@@ -398,7 +403,7 @@ function renderBoard() {
           : notReady("tailor") || "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
         onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
       h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id, jobs.map((j) => j.id)) },
-        h("span", { class: "co" }, job.company), h("span", { class: "ti" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
+        h("span", { class: "co clamp" }, job.company), h("span", { class: "ti clamp" }, job.title), h("span", { class: "meta" }, cardMeta(job))))));
   }));
 }
 
@@ -486,8 +491,8 @@ function renderRadar() {
     h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, class: j.seen ? "" : "unseen", onclick: () => openJob(j.id, ids) },
       h("td", { class: "num" }, j.rank),
       h("td", { class: "num muted" }, j.score),
-      h("td", {}, j.company),
-      h("td", {}, h("button", { class: "linkish", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title)),
+      h("td", {}, clamped(j.company)),
+      h("td", {}, h("button", { class: "linkish clamp", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title)),
       h("td", {}, h("span", { class: "place", title: j.location || "" }, shortPlace(j.location))),
       h("td", {}, j.track),
       payCell(j.comp),
@@ -518,8 +523,8 @@ function renderArchive() {
   fill($("archive"),
     h("thead", {}, h("tr", {}, ["Outcome", "Company", "Title", "Applied", "Why"].map((c) => h("th", {}, c)))),
     h("tbody", {}, rows.length ? rows.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
-      h("td", {}, label[j.status]), h("td", {}, j.company),
-      h("td", {}, h("button", { class: "linkish", type: "button" }, j.title)),
+      h("td", {}, label[j.status]), h("td", {}, clamped(j.company)),
+      h("td", {}, h("button", { class: "linkish clamp", type: "button" }, j.title)),
       h("td", {}, j.applied_at ? shortDate(j.applied_at) : "No"), h("td", { title: (j.fit_reason || "").length > TABLE_REASON ? j.fit_reason : null }, clip(j.fit_reason, TABLE_REASON))))
       : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "Nothing closed yet."))));
 }
@@ -952,7 +957,7 @@ function factsPanel(file) {
   const pieces = factsPieces(file);
   const hint = file.key === "facts"
     ? "The source of truth for every draft. Numbers and terms a resume uses have to appear here."
-    : "One per line: specialist terms that are true of you but aren't named in the fact bank.";
+    : "One per line: specialist terms that are true of you but aren't named in the fact bank. A line starting with # is a comment, which approves nothing.";
   const panel = h("div", { class: "panel facts-file" }, h("h2", {}, file.title), h("p", { class: "muted hint" }, `${file.path}. ${hint}`));
   pieces.forEach((piece, index) => { if (piece.trim() || pieces.length === 1) panel.append(factsSection(file, pieces, index)); });
   if (file.key === "facts" && facts.editable) {
@@ -968,7 +973,7 @@ function renderFacts() {
   factsOpen = false;
   fill($("facts-view"),
     h("p", { class: "muted" }, facts.editable
-      ? "What a resume may claim. The assay reads these files as they stand each time it checks a draft, and every save keeps the version before it beside the file."
+      ? "What a resume may claim. The assay reads these files as they stand each time it checks a draft, and History on the Profile tab keeps the version before each save, so it can be put back."
       : "What a resume may claim. This is the demo's fictional candidate, so it can't be changed here."),
     facts.files.map(factsPanel));
 }
@@ -1537,9 +1542,9 @@ function outreachBlock(job) {
   const today = localToday();
   const day = h("input", { type: "date", max: today, "aria-label": "Day you reached out" });
   keepDraft(job.id, "outreachDay", day, today);
-  const to = h("input", { placeholder: "Who, such as the hiring manager (optional)", "aria-label": "Who you reached out to" });
+  const to = h("input", { placeholder: "Who, such as the hiring manager (optional)", "aria-label": "Who you reached out to", maxlength: "120" });
   keepDraft(job.id, "outreachTo", to, "");
-  const note = h("input", { placeholder: "What you sent or asked (optional)", "aria-label": "Note about reaching out" });
+  const note = h("input", { placeholder: "What you sent or asked (optional)", "aria-label": "Note about reaching out", maxlength: String(LIMITS.note) });
   keepDraft(job.id, "outreachNote", note, "");
   const said = job.reached_out
     ? "Logged in the timeline. Log each note you send, such as a follow-up."
@@ -1562,24 +1567,26 @@ async function openJob(id, list) {
   }
   if (list) nav = list;
   else if (!nav.includes(id)) nav = [];
-  if (job.status === "new" && !job.seen && !state.demo) markSeen(id);
+  // What had focus is noted before marking the job seen, which redraws the list it was opened from.
   const wasOpen = !$("drawer").hidden;
   if (!wasOpen) {
     drawerOpener = document.activeElement;
     hashBeforeJob = tabAddress();
   }
+  if (job.status === "new" && !job.seen && !state.demo) markSeen(id);
   openJobId = id;
   // The address names the job while its panel is open, so it can be bookmarked or linked from a note.
   if (location.hash !== `#job-${id}`) history.replaceState(null, "", `#job-${id}`);
   clearTimeout(refreshWatch);
   if (working(job)) refreshWatch = setTimeout(() => watchRefresh(id), 5000);
-  const noteEl = h("input", { placeholder: "Add a note to this update (optional)", "aria-label": "Note for this update", style: "width:100%" });
+  const noteEl = h("input", { placeholder: "Add a note to this update (optional)", "aria-label": "Note for this update", style: "width:100%",
+    maxlength: String(LIMITS.note) });
   keepDraft(id, "update", noteEl, "");
   const notesStatus = h("span", { class: "muted part-status", role: "status" });
-  const notesEl = h("textarea", { rows: 3, "aria-label": "Your notes" });
+  const notesEl = h("textarea", { rows: 3, "aria-label": "Your notes", maxlength: String(LIMITS.notes) });
   keepDraft(id, "notes", notesEl, job.notes || "", notesStatus);
   const nextStatus = h("span", { class: "muted part-status", role: "status" });
-  const nextText = h("input", { placeholder: "e.g. Phone screen with the hiring manager", "aria-label": "Next step" });
+  const nextText = h("input", { placeholder: "e.g. Phone screen with the hiring manager", "aria-label": "Next step", maxlength: String(LIMITS.nextStep) });
   keepDraft(id, "nextText", nextText, job.next_action || "");
   const nextDate = h("input", { type: "date", "aria-label": "Next step date" });
   keepDraft(id, "nextDate", nextDate, job.next_action_date || "");
@@ -1646,6 +1653,8 @@ async function openJob(id, list) {
   );
   $("drawer").hidden = false;
   $("scrim").hidden = false;
+  // The panel is a dialog: the page behind it can't be clicked or tabbed to until it closes.
+  pageBehind().forEach((el) => { el.inert = true; });
   $("drawer").scrollTop = 0;
   // Focus goes into the panel so the keyboard shortcuts and Tab start there, not on the page behind it.
   if (!wasOpen || !$("drawer").contains(document.activeElement)) $("drawer").focus();
@@ -1681,15 +1690,25 @@ function drawerKeys(e) {
   triage(job, key === "p" ? "pass" : "tailor_next", true);
 }
 
+// What the job panel covers while it's open.
+function pageBehind() {
+  return [document.querySelector("header.masthead"), document.querySelector("main")].filter(Boolean);
+}
+
 function closeDrawer() {
+  const closed = openJobId;
   openJobId = null;
   $("drawer").hidden = true;
   $("scrim").hidden = true;
+  pageBehind().forEach((el) => { el.inert = false; });
   // Back to the tab's own address, as it was before the panel opened.
   if (/^#job-\d+$/.test(location.hash)) history.replaceState(null, "", hashBeforeJob || location.pathname + location.search);
   hashBeforeJob = "";
-  // A pass or a refresh may have redrawn the list it came from, and then there's nothing left to return to.
+  // A pass or a refresh may have redrawn the list it came from. Then the job's row in the redrawn list takes focus, if
+  // it's still there, such as a prospect marked seen when it opened.
+  const row = closed === null ? null : document.querySelector(`tr[data-id="${closed}"] .linkish`);
   if (drawerOpener && drawerOpener.isConnected) drawerOpener.focus();
+  else if (row && drawerOpener && drawerOpener.closest("tr[data-id]")) row.focus();
   drawerOpener = null;
 }
 

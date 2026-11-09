@@ -304,7 +304,10 @@ def save(body: dict) -> dict:
         without = lambda config: {k: v for k, v in config.items() if k != "promote"}
         if parsed.get("promote") != promote or without(parsed) != without(current):
             raise ValueError("Saving would have changed something else in search.toml, so nothing was saved.")
-        with open(store.CONFIG_PATH.with_name("search.previous.toml"), "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
+        if updated != text:
+            # The file as it was goes into History on the Profile tab, where it can be put back. Imported here, since
+            # profile imports this module.
+            from . import profile
+            profile.keep({"config": text}, "Changed on the Settings tab")
         _write(store.CONFIG_PATH, updated)
     return view()

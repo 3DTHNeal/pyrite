@@ -3,12 +3,12 @@
 These two files are what a resume may claim, so being able to change them from a page with no
 login is a real trade: it was asked for, and it's fenced in. Only these two files can be written,
 never a path the page supplies. A save is refused if the file changed since the page read it, and
-the file from before each save is kept beside it. The patterns that block a term by name, under
-[guard] in search.toml, still can't be changed from the browser.
+the file from before each save is kept in History on the Profile tab, where it can be put back. The
+patterns that block a term by name, under [guard] in search.toml, still can't be changed from the browser.
 """
 import hashlib
 
-from . import settings, store
+from . import profile, settings, store
 
 # What the page may ask for, by key. The file names are fixed here and never come from a request.
 FILES = {
@@ -46,10 +46,9 @@ def view() -> dict:
     return {"files": files, "editable": not store.IS_EXAMPLE}
 
 
-def save(body: dict) -> dict:
-    if store.IS_EXAMPLE:
-        raise ValueError("This is the demo, so the fictional candidate's facts can't be changed. Point PYRITE_HOME at your own workspace to edit yours.")
-    key, text = body.get("file"), body.get("text")
+def _clean(key, text) -> tuple[str, str]:
+    """Refuse what a save would refuse about the text itself, or give back the key and text. The dashboard checks this
+    before it asks for a code."""
     if key not in FILES:
         raise ValueError("That isn't a file the Facts tab can change.")
     if not isinstance(text, str):
@@ -60,16 +59,22 @@ def save(body: dict) -> dict:
         raise ValueError(f"That's over {MAX_BYTES // 1000} KB, which is too long for this file, so it wasn't saved.")
     if key == "facts" and not text.strip():
         raise ValueError("The fact bank can't be empty: every draft would fail without it.")
+    return key, text
+
+
+def save(body: dict) -> dict:
+    if store.IS_EXAMPLE:
+        raise ValueError("This is the demo, so the fictional candidate's facts can't be changed. Point PYRITE_HOME at your own workspace to edit yours.")
+    key, text = _clean(body.get("file"), body.get("text"))
     with settings._lock:
         current = _read(key)
         if body.get("version") != _version(current):
             raise settings.Conflict("This file changed after you opened it, so nothing was saved. Reload the Facts tab to see the latest.")
         eol = "\r\n" if "\r\n" in current else "\n"
-        text = text.replace("\r\n", "\n").rstrip("\n") + "\n"
+        text = (text.replace("\r\n", "\n").rstrip("\n") + "\n").replace("\n", eol)
         path = _path(key)
-        if path.exists():
-            previous = path.with_name(f"{path.stem}.previous{path.suffix}")
-            with open(previous, "w", encoding="utf-8", newline="") as handle:
-                handle.write(current)
-        settings._write(path, text.replace("\n", eol))
+        # The file as it was goes into History on the Profile tab, as every save's does, where it can be put back.
+        if path.exists() and text != current:
+            profile.keep({key: current}, "Changed on the Facts tab")
+        settings._write(path, text)
     return view()

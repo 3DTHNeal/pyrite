@@ -282,7 +282,7 @@ The tab has a panel for the points, one for cities and a card for each industry,
 
 In the Cities panel, start typing and the name box suggests places your own postings name, with how many postings each has. Beside each city it shows how many prospects the name matches right now, and how the job boards write the place, which is how you spot a city that shares its name with one in another state.
 
-The tab edits only `[promote]` in `search.toml`, which you can also edit by hand. A save rewrites that section and its comments, leaves the rest of the file alone, and keeps the earlier file as `search.previous.toml` beside it. Filters, the patterns under `[guard]` and allowed hosts can't be changed from the dashboard, because it has no login. The demo can't save settings.
+The tab edits only `[promote]` in `search.toml`, which you can also edit by hand. A save rewrites that section and its comments, leaves the rest of the file alone, and keeps the earlier file in the Profile tab's History, where **Put back** restores it. Filters, the patterns under `[guard]` and allowed hosts can't be changed from the dashboard, because it has no login. The demo can't save settings.
 
 - **Cities** match the posting's location, as a whole word. Add `match` if the name alone isn't enough, as when another state has a city with the same name.
 - **Industries** have no field on a job board, so they're judged from the posting. It counts if the employer is under `companies`, a term is in the employer's name or the title, or the terms appear at least `mentions_needed` times in the description. One passing mention doesn't count, and terms need to be specific, since "medical" alone would catch most postings' benefits text.
@@ -318,7 +318,7 @@ The **Profile** tab brings together everything Pyrite knows about you and your s
 
 - **Needs you** lists what setup still needs, the same findings as `pyrite doctor`, each with a button to the section that fixes it.
 - Each section shows what it holds now and when the Profile tab last changed it. **Where this goes** names the files and settings it writes.
-- **History** lists every save made on the Profile tab, newest first. Pick a file to see what putting back its earlier copy would change, then **Put back**. Putting back is a save like any other: the file as it is now is kept too, and a copy that would let drafts say more asks for a code. The latest 50 copies of each file are kept in `data/history/`.
+- **History** lists every save made on the Profile, Facts and Settings tabs, newest first. Pick a file to see what putting back its earlier copy would change, then **Put back**. A save that changed several files, such as your name in `search.toml` and the master resume, offers **Put back this whole save** too, so the files don't end up disagreeing. Putting back is a save like any other: the files as they are now are kept too, and a copy that would let drafts say more asks for a code. The latest 50 copies of each file are kept in `data/history/`.
 - A section with edits you haven't saved shows how many, with **Discard** and **Save changes**. Leaving it asks first. If a file changed on disk after the tab loaded it, the save is refused and nothing is written.
 - The address names the section, as `#profile/achievements`, so a bookmark or reload comes back to it.
 - In a section with an editor, every change is worked out by the code a save uses, before you save. **What changes in your files** shows each file's lines as they'd change, **Before you save** says anything worth knowing first, and a change that needs a code says so and why.
@@ -339,11 +339,12 @@ Lists in `search.toml` are changed an item at a time, so the other items, their 
 The **Facts** tab shows `profile/facts.md` and `profile/approved-terms.txt`, the two files that say what a resume may claim. The fact bank is shown a section at a time. Click **Edit** on a section, change it and **Save**, or use **Add a section**. Sections named "Do not use" and "Unsupported" are marked **Approves nothing**, because the assay never treats them as a source.
 
 - A save takes effect the next time a draft is checked. Drafts that already passed aren't checked again by themselves.
-- The file from before each save is kept beside it, as `facts.previous.md` or `approved-terms.previous.txt`.
+- The file from before each save is kept in the Profile tab's History, where **Put back** restores it.
+- In `approved-terms.txt`, a line starting with `#` is a comment. It approves nothing, so adding one needs no code.
 - If the file changed on disk after the tab loaded it, the save is refused and nothing is written.
 - To block a term by name, it also has to be listed under `[guard]` in `search.toml`. That can't be done from the dashboard.
 
-The dashboard has no login, so anyone who can open it can change these two files. It only listens on this machine unless you add names under `allowed_hosts`. The demo's facts can't be changed.
+The dashboard has no login, so anyone who can open it can change these two files. It only listens on this machine unless you add names under `allowed_hosts`, written as a list such as `['workstation']`. Anything else there is ignored, and `pyrite doctor` says so. The demo's facts can't be changed.
 
 ### Confirming with a code
 

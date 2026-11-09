@@ -12,7 +12,7 @@ from pathlib import Path
 
 from support import CFG
 
-from pyrite import checks, facts, score, server, settings, store
+from pyrite import checks, facts, profile, score, server, settings, store
 
 SETTINGS_TOML = """# Top of the file
 [run]
@@ -55,10 +55,15 @@ class SettingsBase(unittest.TestCase):
         self.path = Path(self.tmp.name) / "search.toml"
         self.path.write_text(SETTINGS_TOML, encoding="utf-8", newline="\n")
         (Path(self.tmp.name) / "facts.md").write_text(SETTINGS_FACTS, encoding="utf-8")
-        patcher = mock.patch.object(store, "CONFIG_PATH", self.path)
-        patcher.start()
         self.addCleanup(self.tmp.cleanup)
-        self.addCleanup(patcher.stop)
+        # The workspace too, so the copies a save keeps in History go in this test's own folder.
+        for patcher in (mock.patch.object(store, "CONFIG_PATH", self.path), mock.patch.object(store, "ROOT", Path(self.tmp.name))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def kept(self, key: str) -> list[tuple[str, str]]:
+        """What History holds for a file, newest first: each save's reason and the text the file had before it."""
+        return [(entry["reason"], profile.kept(key, entry["stamp"])) for entry in profile.history() if entry["key"] == key]
 
     def form(self, **changes):
         return {"city_points": 10, "industry_points": 10, "mentions_needed": 3,
@@ -97,9 +102,16 @@ class Settings(SettingsBase):
         settings.save(self.body())
         self.assertEqual(self.text(), first)
 
-    def test_the_earlier_file_is_kept(self):
+    def test_every_earlier_file_is_kept_in_history(self):
         settings.save(self.body(city_points=7))
-        self.assertEqual(self.path.with_name("search.previous.toml").read_bytes().decode("utf-8"), SETTINGS_TOML)
+        settings.save(self.body(city_points=8))
+        settings.save(self.body(city_points=8))  # Nothing changed, so nothing to keep.
+        kept = self.kept("config")
+        self.assertEqual([reason for reason, _ in kept], ["Changed on the Settings tab"] * 2)
+        # Two saves keep two copies, so the file from before the first can still be put back.
+        self.assertEqual(kept[-1][1], SETTINGS_TOML)
+        self.assertIn("city_points = 7", kept[0][1])
+        self.assertFalse(self.path.with_name("search.previous.toml").exists())
 
     def test_windows_line_endings_are_kept(self):
         self.path.write_bytes(SETTINGS_TOML.replace("\n", "\r\n").encode("utf-8"))
@@ -201,13 +213,18 @@ class FactsTab(SettingsBase):
         self.assertEqual((self.file("terms")["text"], self.file("terms")["path"]), ("", "profile/approved-terms.txt"))
         self.assertTrue(shown["editable"])
 
-    def test_a_save_writes_the_file_and_keeps_the_one_before(self):
+    def test_a_save_writes_the_file_and_keeps_every_one_before_in_history(self):
         changed = SETTINGS_FACTS.replace("Wrote firmware", "Wrote firmware for 12 robots")
         shown = self.save(changed)
         self.assertEqual(self.facts_path().read_text(encoding="utf-8"), changed)
-        self.assertEqual(self.path.with_name("facts.previous.md").read_text(encoding="utf-8"), SETTINGS_FACTS)
         self.assertEqual(shown["files"][0]["text"], changed)
         self.assertEqual(self.text(), SETTINGS_TOML)
+        self.save(changed + "- One more\n")
+        self.save(changed + "- One more\n")  # Nothing changed, so nothing to keep.
+        kept = [(reason, text.replace("\r\n", "\n")) for reason, text in self.kept("facts")]
+        # Two saves keep two copies, so the file from before the first can still be put back.
+        self.assertEqual(kept, [("Changed on the Facts tab", changed), ("Changed on the Facts tab", SETTINGS_FACTS)])
+        self.assertFalse(self.path.with_name("facts.previous.md").exists())
 
     def test_the_checker_uses_what_was_saved(self):
         self.save(SETTINGS_FACTS.replace("## Do not use", "- Shipped to 4,321 sites\n## Do not use"))
@@ -238,7 +255,8 @@ class FactsTab(SettingsBase):
         self.assertEqual(terms.read_text(encoding="utf-8"), "RTOS\nFreeRTOS\n")
         self.save("", key="terms")
         self.assertEqual(terms.read_text(encoding="utf-8"), "\n")
-        self.assertEqual(self.path.with_name("approved-terms.previous.txt").read_text(encoding="utf-8"), "RTOS\nFreeRTOS\n")
+        # The first save made the file, so there was nothing before it to keep.
+        self.assertEqual(self.kept("terms"), [("Changed on the Facts tab", "RTOS\nFreeRTOS\n")])
 
     def test_windows_line_endings_are_kept(self):
         self.facts_path().write_bytes(SETTINGS_FACTS.replace("\n", "\r\n").encode())

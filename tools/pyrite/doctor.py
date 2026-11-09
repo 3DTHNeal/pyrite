@@ -202,7 +202,14 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
             todos.append({"what": f"approved_sources under [guard] in profile/search.toml names {rel}, which isn't in your workspace.",
                           "fix": "Point it at a file you have, such as your master resume or letter, or remove it.",
                           "step": "masters"})
-    hosts = set(cfg.get("dashboard", {}).get("allowed_hosts", []))
+    named = cfg.get("dashboard", {}).get("allowed_hosts", []) if isinstance(cfg.get("dashboard", {}), dict) else []
+    if not isinstance(named, list) or not all(isinstance(name, str) for name in named):
+        # A single string would match any piece of it, so the dashboard answers to none of these until it's a list.
+        todos.append({"what": "allowed_hosts under [dashboard] in profile/search.toml isn't a list of names, so the dashboard "
+                              "ignores it and answers only on this computer.",
+                      "fix": "Write it as a list, such as allowed_hosts = ['workstation'], or remove it."})
+        named = []
+    hosts = set(named)
     leftover = sorted(hosts & set(example.get("dashboard", {}).get("allowed_hosts", [])))
     if leftover:
         todos.append({"what": f"allowed_hosts under [dashboard] still lists the example's {', '.join(leftover)}.",
