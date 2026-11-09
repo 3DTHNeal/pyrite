@@ -85,9 +85,12 @@ class Outreach(Base):
     def applied(self, days_ago: int, **kw) -> int:
         job = self.add(**kw)
         store.set_status(self.conn, job, "applied", follow_up_days=7)
-        when = (datetime.now(UTC) - timedelta(days=days_ago, hours=1)).isoformat(timespec="seconds")
+        applied = datetime.now(UTC) - timedelta(days=days_ago, hours=1)
+        # The follow-up is a week after the day the application went in, as the code works it out. Counted from today
+        # instead, the hour taken off moved it a day in the first hour after midnight, and the outreach tests failed.
+        follow_up = applied.astimezone().date() + timedelta(days=7)
         self.conn.execute("UPDATE jobs SET applied_at = ?, next_action_date = ? WHERE id = ?",
-                          (when, (date.today() - timedelta(days=days_ago) + timedelta(days=7)).isoformat(), job))
+                          (applied.isoformat(timespec="seconds"), follow_up.isoformat(), job))
         return job
 
     def reach_out_orders(self):
