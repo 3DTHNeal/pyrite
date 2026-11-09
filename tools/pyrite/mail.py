@@ -12,6 +12,7 @@ is thrown away once judged, so message text never stays on disk or in the databa
 """
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr, parsedate_to_datetime
@@ -51,6 +52,13 @@ MAX_TEXT = 4000
 WRITTEN_OUT_CALL = re.compile(r"<\s*(invoke|parameter|function_calls)\b", re.I)
 RETRY_NOTE = ("\n\nYour last attempt wrote a tool call out as text instead of making it, so no mail was read. "
               "Call the tools themselves; never write them out as text.\n")
+# Claude Code connects the claude.ai connectors as it starts, and by default doesn't wait for them, so a run could begin
+# before Gmail was there. It then had no tools at all, not even ToolSearch, which only appears when there's a connector
+# tool to find, and read no mail. That happened to about one start in three. Turning that off has Claude Code wait for
+# its connectors first. It isn't a documented setting, so a start without Gmail is still caught, and tried once more
+# after a pause, since a connector that was slow a moment ago is usually there on the next start.
+CONNECT_ENV = {"MCP_CONNECTION_NONBLOCKING": "false"}
+CONNECT_WAIT_SECONDS = 30
 MAX_LINKS = 50
 # A run reads back this far past the last good one, so a late-arriving message is still seen.
 OVERLAP_DAYS = 2
@@ -402,7 +410,9 @@ def command(claude: str, model: str = DEFAULT_MODEL) -> list[str]:
     settings can't either.
     """
     return [
-        claude, "-p", "--output-format", "json", "--no-session-persistence", "--model", model,
+        # stream-json, since only it says which tools the run started with, so a run whose Gmail connector wasn't
+        # connected can be told from one that found no mail.
+        claude, "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--model", model,
         "--setting-sources", "project", "--permission-mode", "dontAsk", "--max-turns", "60",
         "--tools", "ToolSearch",
         "--allowedTools", ",".join(GMAIL_TOOLS),
@@ -443,6 +453,34 @@ def prompt(companies: dict[str, set[str]], since: datetime) -> str:
     )
 
 
+def missing_gmail(answer: str) -> tuple[str, bool]:
+    """Why a run started without the Gmail reading tools, and whether starting again could help. ("", False) when it
+    had them, or when Claude Code didn't say what it started with. No connector, one that needs signing in again, and
+    one whose tools go by other names all need you, not another start."""
+    init = getattr(answer, "init", None)
+    tools = init.get("tools") if isinstance(init, dict) else None
+    if not isinstance(tools, list):
+        return "", False
+    missing = [tool for tool in GMAIL_TOOLS if tool not in tools]
+    if not missing:
+        return "", False
+    listed = init.get("mcp_servers") if isinstance(init, dict) else None
+    servers = [server for server in listed if isinstance(server, dict)] if isinstance(listed, list) else []
+    if not servers:
+        return "Claude Code hadn't loaded its connectors when the check started, so no mail was read.", True
+    status = next((str(server.get("status") or "unknown") for server in servers
+                   if "gmail" in str(server.get("name") or "").lower()), None)
+    where = "Connectors in the Claude desktop app or at claude.ai"
+    if status is None:
+        return f"Claude Code has no Gmail connector, so no mail was read. Connect Gmail under {where}.", False
+    if status == "needs-auth":
+        return f"Claude Code's Gmail connector needs signing in again, so no mail was read. Reconnect it under {where}.", False
+    if status == "connected":
+        return (f"Claude Code's Gmail connector is connected but doesn't offer {', '.join(missing)}, so no mail was read. "
+                "Its tools may have been renamed."), False
+    return f"Claude Code's Gmail connector wasn't connected when the check started (it was {status}), so no mail was read.", True
+
+
 def _fail(conn, message: str) -> dict:
     inbox._record_status(conn, error=message, source_key=SOURCE_KEY, company="Email replies (Gmail)")
     conn.commit()
@@ -478,7 +516,7 @@ def ingest_file(conn, cfg: dict, path: Path) -> dict:
     return ingest(conn, cfg, items)
 
 
-def run(conn, cfg: dict, claude: str | None = None, ask=claude_code.ask) -> dict:
+def run(conn, cfg: dict, claude: str | None = None, ask=claude_code.ask, pause=time.sleep) -> dict:
     """One scan through Claude Code. Never raises for mail trouble: that's reported beside the job boards instead."""
     claude = claude or find_claude()
     if not claude:
@@ -489,9 +527,18 @@ def run(conn, cfg: dict, claude: str | None = None, ask=claude_code.ask) -> dict
     model = str(cfg.get("inbox", {}).get("model") or DEFAULT_MODEL)
     for attempt in (1, 2):
         try:
-            answer = ask(conn, None, KIND, command(claude, model), text, ROOT, TIME_LIMIT_MINUTES * 60, TIME_LIMIT_MINUTES)
+            answer = ask(conn, None, KIND, command(claude, model), text, ROOT, TIME_LIMIT_MINUTES * 60, TIME_LIMIT_MINUTES,
+                         env=CONNECT_ENV)
         except ClaudeFailed as err:
             return _fail(conn, str(err))
+        why, passing = missing_gmail(answer)
+        if why:
+            # Whatever it said, a run without the Gmail tools read no mail, so it isn't counted as a good one.
+            claude_code.mark_failed(conn, answer)
+            if attempt == 1 and passing:
+                pause(CONNECT_WAIT_SECONDS)
+                continue
+            return _fail(conn, why + (" It was tried twice." if attempt == 2 else ""))
         try:
             items = parse_export(answer)
         except ValueError as err:

@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import sys
 import unittest
 import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
@@ -473,7 +474,7 @@ class MailBase(Base):
         return self.add(company=company, **fields)
 
     def scan(self, *entries, claude_error=None, answer=None):
-        def fake_ask(conn, job_id, kind, cmd, text, cwd, seconds, limit):
+        def fake_ask(conn, job_id, kind, cmd, text, cwd, seconds, limit, **kw):
             self.prompts.append((cmd, text))
             if claude_error:
                 raise claude_code.ClaudeFailed(claude_error)
@@ -814,6 +815,95 @@ class MailScan(MailBase):
         self.assertEqual(result["state"], "error")
         self.assertIn("tried twice", result["message"])
         self.assertEqual(runs[-2:], [0, 0])
+
+    GMAIL_UP = (["ToolSearch", *mailcheck.GMAIL_TOOLS], "connected")
+
+    @staticmethod
+    def stream(answer: str, tools: list[str], gmail: str | None) -> str:
+        """stream-json as Claude Code prints it: what the run started with, then the result. A Gmail status of "" lists
+        no connectors at all, as a start that hadn't loaded them yet does."""
+        servers = [{"name": "claude.ai Claude Docs", "status": "connected"}] if gmail != "" else []
+        if gmail:
+            servers.append({"name": "claude.ai Gmail", "status": gmail})
+        return "\n".join(json.dumps(event) for event in (
+            {"type": "system", "subtype": "init", "tools": tools, "mcp_servers": servers},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": answer}]}},
+            {"type": "result", "subtype": "success", "result": answer, "num_turns": 1, "total_cost_usd": 0.02},
+        ))
+
+    def run_with_starts(self, *starts):
+        """Claude Code finishing cleanly each time, starting with these (answer, tools, Gmail status) in turn."""
+        outputs = iter(self.stream(*start) for start in starts)
+        pause = mock.Mock()
+        with mock.patch.object(claude_code, "signed_in", return_value=True), \
+                mock.patch.object(claude_code, "run_process",
+                                  side_effect=lambda *a, **kw: mock.Mock(stdout=next(outputs), stderr="", returncode=0)) as run:
+            result = mailcheck.run(self.conn, GMAIL_CFG, claude="claude", pause=pause)
+        runs = [row["ok"] for row in self.conn.execute("SELECT ok FROM claude_runs WHERE kind = 'mail' ORDER BY id")]
+        return result, run, runs, pause
+
+    def test_the_run_streams_so_its_tools_can_be_checked_and_its_list_is_read_from_the_stream(self):
+        job = self.applied()
+        result, run, runs, pause = self.run_with_starts((json.dumps([exported()]), *self.GMAIL_UP))
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[cmd.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", cmd)
+        # Claude Code is told to wait for its connectors before the first turn.
+        self.assertEqual(run.call_args.kwargs["env"], {"MCP_CONNECTION_NONBLOCKING": "false"})
+        self.assertEqual([hit["job_id"] for hit in result["found"]], [job])
+        self.assertEqual(runs, [1])
+        pause.assert_not_called()
+
+    def test_a_gmail_connector_not_connected_in_time_gets_one_more_start(self):
+        job = self.applied()
+        written = '<invoke name="ToolSearch"> <parameter name="query">select:x</parameter></invoke>'
+        result, run, runs, pause = self.run_with_starts((written, [], "pending"), (json.dumps([exported()]), *self.GMAIL_UP))
+        self.assertEqual(result["state"], "ok")
+        self.assertEqual([hit["job_id"] for hit in result["found"]], [job])
+        self.assertEqual(runs, [0, 1])
+        pause.assert_called_once_with(mailcheck.CONNECT_WAIT_SECONDS)
+        # The second start isn't told it wrote a call out: it had nothing to call.
+        self.assertNotIn("wrote a tool call out", run.call_args_list[1].kwargs["input"])
+        # A start that hadn't loaded any connector yet is tried again the same way.
+        result, run, runs, pause = self.run_with_starts(("[]", ["ToolSearch"], ""), (json.dumps([exported(id="m9")]), *self.GMAIL_UP))
+        self.assertEqual(result["state"], "ok")
+        self.assertEqual(runs[-2:], [0, 1])
+        pause.assert_called_once_with(mailcheck.CONNECT_WAIT_SECONDS)
+
+    def test_a_gmail_connector_that_stays_away_is_named_on_the_sources_tab(self):
+        result, run, runs, pause = self.run_with_starts(("I have no tools.", [], "failed"), ("I have no tools.", [], "pending"))
+        self.assertEqual(result["state"], "error")
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(runs, [0, 0])
+        row = self.conn.execute("SELECT last_ok, last_error FROM source_status WHERE source_key = 'inbox:gmail'").fetchone()
+        self.assertIsNone(row["last_ok"])
+        self.assertIn("Gmail connector wasn't connected when the check started (it was pending)", row["last_error"])
+        self.assertIn("tried twice", row["last_error"])
+
+    def test_a_gmail_connector_that_needs_you_is_not_started_again(self):
+        for gmail, said in (("needs-auth", "needs signing in again"), (None, "has no Gmail connector"),
+                            ("connected", "doesn't offer mcp__claude_ai_Gmail__get_message")):
+            tools = ["ToolSearch", mailcheck.GMAIL_TOOLS[0]] if gmail == "connected" else []
+            result, run, runs, pause = self.run_with_starts(("[]", tools, gmail))
+            self.assertEqual(result["state"], "error")
+            self.assertIn(said, result["message"])
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(runs[-1], 0)  # Even an empty list read nothing without the tools.
+            pause.assert_not_called()
+
+    def test_a_run_gets_its_extra_settings_on_top_of_the_environment(self):
+        script = "import os; print(os.environ.get('PYRITE_TEST_FLAG'), 'PATH' in os.environ)"
+        out = claude_code.run_process([sys.executable, "-c", script], input="", cwd=Path(self.tmp.name), timeout=60,
+                                      env={"PYRITE_TEST_FLAG": "on"})
+        self.assertEqual(out.stdout.split(), ["on", "True"])
+
+    def test_a_stream_that_stopped_before_its_result_reports_what_claude_code_said(self):
+        start = json.dumps({"type": "system", "subtype": "init", "tools": [], "mcp_servers": []})
+        with mock.patch.object(claude_code, "signed_in", return_value=True), \
+                mock.patch.object(claude_code, "run_process",
+                                  return_value=mock.Mock(stdout=start, stderr="API Error: overloaded", returncode=1)):
+            result = mailcheck.run(self.conn, GMAIL_CFG, claude="claude", pause=mock.Mock())
+        self.assertEqual(result["message"], "Claude stopped with an error: API Error: overloaded")
 
     def test_other_unusable_answers_are_not_retried(self):
         result, run, runs = self.run_with_answers("I couldn't reach Gmail.")
