@@ -37,15 +37,13 @@ decide_days = 5      # a deadline this close puts "tailor it or pass" on the to-
 # A posting whose own firm deadline has passed is passed on by the next pan, and a new one isn't stored at all.
 # "Accepted at least until" is a floor, not a deadline: past it, the job shows as closing any day instead.
 
-# What you'd take, as a year's pay in `currency`. Hourly, weekly and monthly ranges are turned into a year's.
-# A range whose top is under `floor` is too low to bother with: the pan drops it. One starting at `target` or above
-# ranks higher. Either can be left out. Every range is also compared with what similar roles you've seen pay, and one
-# far above or below that is marked, since it often means the job is a level away from its title.
+# Each posting's pay range, as a year's pay, is compared with what postings for the same kind of role pay: the same
+# track at the same level, once Pyrite has seen five. Even the top of the range under 75% of the typical middle is
+# too low to bother with, and the daily run doesn't judge it unless you pick it. Far above is marked too, since it
+# often means the job is a level above its title. A range in another currency isn't compared.
 [pay]
-# floor = 120000
-# target = 170000
 currency = "USD"
-points = 5           # priority for meeting the target, or lost for paying under the going rate
+points = 5           # priority lost for paying under the going rate, and three times that for too low to bother
 
 # How long the skills a posting asks years of have existed, so "8+ years of AI agents" reads as an ask nobody could
 # meet, not as your gap. Pyrite knows the common ones. With research on, the daily run has Claude look up the rest
@@ -242,6 +240,9 @@ autofill = false
 allowed_hosts = ['workstation', 'workstation.example-tailnet.ts.net']
 # Extra reminders shown on a draft that's ready to send.
 before_send = ["Check that anything you cite from a past employer is yours to share."]
+# A to-do item reminding you to write to the hiring manager a day to three after applying: one item, however many
+# applications are due one. False leaves it off; Reached out still logs a note you sent.
+reach_out = true
 
 [inbox]
 # How far back `pyrite inbox` reads mail. Only mail since you applied can match.

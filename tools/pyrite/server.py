@@ -323,9 +323,25 @@ def _gone_text(job: dict, ghost_days: int) -> str:
             "unless you log a reply or set a next step.")
 
 
-def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Sequence[dict] = (), ghost_days: int = 0) -> list[dict]:
-    """Today's to-do list, most urgent first."""
+def _reach_out_order(waiting: list[dict]) -> dict:
+    """One to-do item for every application due a note to the hiring manager, so a busy week of applying doesn't fill
+    the list with them. It names the one whose window closes first and counts the rest."""
+    waiting = sorted(waiting, key=lambda j: (-j["days_since_applied"], j["applied_at"] or ""))
+    first = waiting[0]
+    detail = (f"Applied {_days(first['days_since_applied'])} ago with no outreach logged. Send the hiring manager a short note, "
+              "then log it with Reached out.")
+    others = [job["company"] for job in waiting[1:]]
+    if others:
+        named = ", ".join(dict.fromkeys(others[:4])) + (f" and {len(others) - 4} more" if len(others) > 4 else "")
+        detail += f" {len(others)} more {'is' if len(others) == 1 else 'are'} due one too: {named}."
+    return {"rank": 3, "kind": "Reach out", "job_id": first["id"], "text": f"{first['company']}: {first['title']}", "detail": detail}
+
+
+def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Sequence[dict] = (), ghost_days: int = 0,
+            reach_out: bool = True) -> list[dict]:
+    """Today's to-do list, most urgent first. `reach_out` False leaves out the reminders to write to hiring managers."""
     orders = []
+    reach: list[dict] = []
     for alert in alerts:
         # The sender and subject were written by whoever sent the mail, so the page shows them as text only.
         orders.append({"rank": 0, "kind": "Possible scam", "job_id": alert["job_id"], "alert_id": alert["id"],
@@ -354,9 +370,7 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
             orders.append({"rank": 1, "kind": "Follow up", "job_id": job["id"], "text": name,
                            "detail": f"{when} {job['next_action']}".strip()})
         elif job["status"] == "applied" and not job.get("reached_out") and job["days_since_applied"] in REACH_OUT_DAYS:
-            orders.append({"rank": 2, "kind": "Reach out", "job_id": job["id"], "text": name,
-                           "detail": f"Applied {_days(job['days_since_applied'])} ago with no outreach logged. Send the hiring manager "
-                                     "a short note, then log it with Reached out."})
+            reach.append(job)
         elif job["status"] == "needs_fix":
             tries = job.get("fix_attempts", 0)
             detail = "The draft failed the assay. The next run retries it."
@@ -396,12 +410,15 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
         orders.append({"rank": 1 if soon(job) else 2, "kind": "Closing soon", "job_id": job["id"], "text": f"{job['company']}: {job['title']}",
                        "detail": joined(_deadline_text(job), _history_text(job), decide)})
         listed.add(job["id"])
-    fresh = sorted((j for j in jobs if j["status"] == "new" and j["is_new"] and j["id"] not in listed), key=lambda j: -j["rank"])
+    fresh = sorted((j for j in jobs if j["status"] == "new" and j["is_new"] and not j.get("pay_too_low") and j["id"] not in listed),
+                   key=lambda j: -j["rank"])
     for job in fresh[:3]:
         posted = {0: "today", 1: "yesterday"}.get(job["age_days"], f"{job['age_days']} days ago")
         orders.append({"rank": 3, "kind": "New listing", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}",
                        "detail": joined(f"Posted {posted}, never reposted. Score {job['score']}.", _deadline_text(job), _history_text(job))})
+    if reach and reach_out:
+        orders.append(_reach_out_order(reach))
     return sorted(orders, key=lambda o: o["rank"])
 
 
@@ -495,7 +512,8 @@ def build_state(conn, cfg) -> dict:
         "stats": stats,
         "funnel": funnel,
         "closed": closed,
-        "orders": _setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg)),
+        "orders": _setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg),
+                                               bool(cfg.get("dashboard", {}).get("reach_out", True))),
         "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),

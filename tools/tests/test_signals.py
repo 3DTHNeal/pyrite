@@ -77,20 +77,25 @@ class ExpiredJobs(Base):
         self.assertEqual(discover.settle_expired(self.conn), [])
         self.assertEqual(store.get_job(self.conn, job)["status"], "new")
 
-    def test_the_gate_drops_a_new_posting_past_its_deadline_or_under_the_floor(self):
-        cfg = {**CFG, "pay": {"floor": 150000}}
-        self.assertEqual(discover.gate(self.posting(-1), "", cfg), "expired")
-        self.assertEqual(discover.gate(self.posting(-1), "", cfg, dated=False), "")
-        self.assertEqual(discover.gate(self.posting(-1, floor=True), "", cfg), "")
-        self.assertEqual(discover.gate("", "$100,000 - $140,000", cfg), "pay")
-        self.assertEqual(discover.gate("", "$100,000 - $160,000", cfg), "")
-        self.assertEqual(discover.gate("", "$100,000 - $140,000", CFG), "")  # No floor set.
+    def test_the_gate_drops_a_new_posting_past_its_firm_deadline(self):
+        self.assertEqual(discover.gate(self.posting(-1)), "expired")
+        self.assertEqual(discover.gate(self.posting(-1, floor=True)), "")
+        self.assertEqual(discover.gate(self.posting(2)), "")
 
     def test_the_queue_judges_a_closing_job_first_and_skips_an_expired_one(self):
         best = self.add(source_id="1", score=90, description="Plenty of time.")
         closing = self.add(source_id="2", score=50, description=self.posting(3))
         self.add(source_id="3", score=95, description=self.posting(-1))
         self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_triage"]], [closing, best])
+
+    def test_the_queue_doesnt_judge_a_job_paying_too_little_for_the_role_unless_you_picked_it(self):
+        for n in range(6):
+            self.add(source_id=f"peer{n}", status="passed", track="AI systems", title="Staff AI Engineer", comp="$240,000 - $280,000")
+        fair = self.add(source_id="1", track="AI systems", title="Staff AI Engineer", comp="$230,000 - $270,000")
+        low = self.add(source_id="2", track="AI systems", title="Staff AI Engineer", comp="$120,000 - $150,000")
+        self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_triage"]], [fair])
+        self.conn.execute("UPDATE jobs SET priority = 1 WHERE id = ?", (low,))
+        self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_triage"]], [low, fair])
 
 
 class Pay(unittest.TestCase):
@@ -111,34 +116,33 @@ class Pay(unittest.TestCase):
         self.assertIsNone(pay.parse("Up to 15% bonus"))
         self.assertIsNone(pay.parse(""))
 
-    def test_floor_and_target(self):
-        cfg = {"pay": {"floor": 150000, "target": 200000}}
-        low = pay.judge("$100,000 - $140,000", "", cfg, {})
-        self.assertEqual([s["label"] for s in low["pay_signs"]], ["Under your floor"])
-        self.assertLess(low["pay_points"], 0)
-        high = pay.judge("$210,000 - $250,000", "", cfg, {})
-        self.assertEqual([s["label"] for s in high["pay_signs"]], ["Meets your target"])
-        self.assertGreater(high["pay_points"], 0)
-        self.assertTrue(pay.below_floor("$100,000 - $140,000", cfg))
-        self.assertFalse(pay.below_floor("CA$100K – CA$140K", cfg))  # Another currency isn't compared.
+    def labels(self, comp: str, known: dict, track: str = "AI systems", level: str = "top") -> list[str]:
+        return [s["label"] for s in pay.judge(comp, track, level, {}, known)["pay_signs"]]
 
-    def test_against_similar_roles_once_there_are_enough(self):
-        known = {"AI systems": (200000.0, 10), "*": (180000.0, 30)}
-        above = pay.judge("$300,000 - $340,000", "AI systems", {}, known)
-        self.assertIn("Pays well above similar roles", [s["label"] for s in above["pay_signs"]])
-        below = pay.judge("$120,000 - $140,000", "AI systems", {}, known)
-        self.assertIn("Pays under the going rate", [s["label"] for s in below["pay_signs"]])
-        # Too few in the track, so every track's median is used.
-        other = pay.judge("$120,000 - $140,000", "Rare track", {}, {"Rare track": (300000.0, 2), "*": (130000.0, 30)})
-        self.assertEqual(other["pay_signs"], [])
-        self.assertEqual(pay.judge("$120,000 - $140,000", "x", {}, {"*": (300000.0, 3)})["pay_signs"], [])
+    def test_judged_against_the_role_not_the_candidate(self):
+        known = {"AI systems|top": (200000.0, 10)}
+        self.assertEqual(self.labels("$190,000 - $230,000", known), [])
+        self.assertEqual(self.labels("$140,000 - $175,000", known), ["Pays under the going rate"])
+        self.assertEqual(self.labels("$300,000 - $340,000", known), ["Pays well above similar roles"])
+        low = pay.judge("$110,000 - $140,000", "AI systems", "top", {}, known)
+        self.assertEqual([s["label"] for s in low["pay_signs"]], ["Too low to bother"])
+        self.assertTrue(low["pay_too_low"])
+        self.assertLess(low["pay_points"], 0)
+        self.assertEqual(self.labels("CA$100K – CA$140K", known), ["Paid in CAD"])  # Another currency isn't compared.
+
+    def test_the_narrowest_group_with_enough_postings_is_the_yardstick(self):
+        known = {"AI systems|top": (300000.0, 2), "AI systems": (200000.0, 9), "*": (130000.0, 30)}
+        self.assertEqual(self.labels("$140,000 - $175,000", known), ["Pays under the going rate"])  # Against the track.
+        self.assertEqual(self.labels("$140,000 - $175,000", known, track="Rare track"), [])  # Against every track.
+        self.assertEqual(self.labels("$140,000 - $175,000", {"*": (300000.0, 3)}), [])  # Too few to say.
 
     def test_a_wide_range_says_so(self):
-        self.assertIn("Wide range", [s["label"] for s in pay.judge("$120,000 - $260,000", "", {}, {})["pay_signs"]])
+        self.assertIn("Wide range", self.labels("$120,000 - $260,000", {}))
 
-    def test_peers_take_the_median_middle(self):
-        rows = [{"comp": f"${n}0,000 - ${n + 2}0,000", "track": "T"} for n in (10, 12, 14)] + [{"comp": "", "track": "T"}]
-        self.assertEqual(pay.peers(rows), {"T": (130000.0, 3), "*": (130000.0, 3)})
+    def test_peers_take_the_median_middle_at_each_level(self):
+        rows = ([{"comp": f"${n}0,000 - ${n + 2}0,000", "track": "T", "level": "top"} for n in (10, 12, 14)]
+                + [{"comp": "$50,000 - $70,000", "track": "T", "level": "mid"}, {"comp": "", "track": "T", "level": "top"}])
+        self.assertEqual(pay.peers(rows), {"T|top": (130000.0, 3), "T|mid": (60000.0, 1), "T": (120000.0, 4), "*": (120000.0, 4)})
 
 
 class SkillAges(unittest.TestCase):
@@ -225,15 +229,18 @@ class Rarity(unittest.TestCase):
 class OnTheDashboard(Base):
     def test_the_job_carries_the_signals_and_its_priority_counts_them(self):
         self.conn.execute("INSERT INTO runs (started_at) VALUES (?)", ((date.today() - timedelta(days=60)).isoformat(),))
-        cfg = {**CFG, "pay": {"target": 150000}}
-        job = self.add(track="AI systems", location_kind="local", comp="$160,000 - $200,000",
+        for n in range(5):  # Remote, so they set the going rate without making the local one any less rare.
+            self.add(source_id=f"peer{n}", status="passed", track="AI systems", title="Staff AI Engineer",
+                     location_kind="remote", comp="$240,000 - $280,000")
+        job = self.add(track="AI systems", title="Staff AI Engineer", location_kind="local", comp="$160,000 - $200,000",
                        description="8+ years of experience building AI agents.")
-        found = server._enrich(store.get_job(self.conn, job), cfg, date.today().isoformat(),
-                               context=signals.context(self.conn, cfg, date.today()))
+        found = server._enrich(store.get_job(self.conn, job), CFG, date.today().isoformat(),
+                               context=signals.context(self.conn, CFG, date.today()))
         self.assertEqual(found["impossible_asks"], ["AI agents"])
         self.assertTrue(found["rare"])
-        self.assertIn("Meets your target", [s["label"] for s in found["pay_signs"]])
+        self.assertIn("Pays under the going rate", [s["label"] for s in found["pay_signs"]])
         self.assertTrue(any(reason.startswith("Rare near you") for reason in found["freshness_reasons"]))
+        self.assertTrue(any(reason.startswith("Pay ") for reason in found["freshness_reasons"]))
 
     def test_a_decision_within_the_window_is_on_the_to_do_list(self):
         soon = date.today() + timedelta(days=4)
@@ -249,10 +256,10 @@ class InThePrompts(unittest.TestCase):
     def test_triage_hears_about_the_deadline_pay_rarity_and_skill_ages(self):
         marks = {"deadline": "2026-11-12", "days_to_deadline": 4, "deadline_firm": True, "rare": True,
                  "rare_reason": "no other AI systems roles near you in 90 days",
-                 "pay_signs": [{"label": "Under your floor", "tone": "bad", "detail": "It pays at most $140k."}],
+                 "pay_signs": [{"label": "Too low to bother", "tone": "bad", "detail": "Even the top is under 75% of the norm."}],
                  **skillage.signals("8+ years of AI agents.", TODAY)}
         text = daily.markings(marks)
-        for said in ("Deadline: Nov 12, in 4 days", "Pay: Under your floor", "Rare near the candidate", "How old the skills"):
+        for said in ("Deadline: Nov 12, in 4 days", "Pay: Too low to bother", "Rare near the candidate", "How old the skills"):
             self.assertIn(said, text)
 
     def test_tailoring_hears_about_skill_ages(self):

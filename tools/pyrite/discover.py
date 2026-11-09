@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, cast
 
-from . import deadline, pay, quality, sources
+from . import deadline, quality, sources
 from . import score as scoring
 from .store import (
     ACTIVE,
@@ -222,7 +222,7 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
 
     deadline = time.monotonic() + max_minutes * 60
     stats = {"partial": bool(only), "sources": len(items), "failed": 0, "postings": 0, "new": 0,
-             "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0, "expired": 0, "pay": 0},
+             "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0, "expired": 0},
              "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
     if rescored:
         stats["rescored"] = rescored
@@ -310,13 +310,11 @@ def settle_expired(conn, today: date | None = None) -> list[int]:
     return passed
 
 
-def gate(description: str, comp: str, cfg: dict, today: date | None = None, dated: bool = True) -> str:
+def gate(description: str, today: date | None = None) -> str:
     """Why a posting that passed the filters still isn't worth storing: "expired" when its own firm deadline has gone by,
-    "pay" when its whole range is under your [pay] floor, or nothing. `dated` False leaves the deadline out, for a rescore,
-    which mustn't drop a job for a date: the sweep passes on those instead, so their record stays."""
-    if dated and deadline.expired(deadline.for_job(description, None, today or date.today())):
-        return "expired"
-    return "pay" if pay.below_floor(comp, cfg) else ""
+    or nothing. Only a new posting is held to this. A rescore mustn't drop a job for a date: the sweep passes on those
+    instead, so their record stays."""
+    return "expired" if deadline.expired(deadline.for_job(description, None, today or date.today())) else ""
 
 
 def _ghosted_by_sweep(conn, job_id: int) -> bool:
@@ -616,8 +614,7 @@ def rescore(conn, cfg=None) -> dict:
     ).fetchall()
     for row in rows:
         verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"])
-        reason = (quality.rejection(row["title"], row["description"] or "")
-                  or gate(row["description"] or "", row["comp"] or "", cfg, dated=False)) if verdict.keep else verdict.reason
+        reason = quality.rejection(row["title"], row["description"] or "") if verdict.keep else verdict.reason
         if not reason:
             conn.execute(
                 "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",
@@ -675,9 +672,8 @@ def _ingest(conn, posting, cfg, stats, ts, key, started, baseline):
 
     verdict = scoring.evaluate(posting.title, posting.location, posting.workplace, posting.description, cfg, posting.company)
     # A posting can pass every filter and still be no opening: a talent pool, or a scam on a board you added. Or it can
-    # be one too late to apply for, or one paying under your floor.
-    reason = (quality.rejection(posting.title, posting.description)
-              or gate(posting.description, posting.comp, cfg)) if verdict.keep else verdict.reason
+    # be one too late to apply for.
+    reason = (quality.rejection(posting.title, posting.description) or gate(posting.description)) if verdict.keep else verdict.reason
     if reason:
         stats["rejected"][reason] = stats["rejected"].get(reason, 0) + 1
         conn.execute(

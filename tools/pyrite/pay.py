@@ -1,33 +1,35 @@
-"""What a posting pays, read from its pay text, and how that compares with what you'd take and what similar roles pay.
+"""What a posting pays, read from its pay text, and how that compares with what the same kind of role pays elsewhere.
 
 Boards write pay every way there is: "$130,700 to $205,200 USD", "$257K – $285K • Offers Equity", "CA$250K – CA$535K",
 "$45 - $60 an hour". This reads the first range, scales k and M, and turns an hourly, weekly or monthly figure into a
 year's (2,080 working hours, 52 weeks, 12 months), so every range compares as annual pay.
 
-Three judgements come of it, and none involves a model:
+The yardstick is the position, not you: the median middle of the ranges Pyrite has seen for postings like this one,
+in the same track and at the same level (level_top or level_mid in the title), widening to the whole track and then
+to every track while there are fewer than MIN_PEERS to compare with. Against that:
 
-- Against your [pay] floor: a range whose top is under it is too low to bother with. The sweep drops a new posting like
-  that, and a job already further along is marked. The top of the range, not the bottom, because that's what a strong
-  candidate can negotiate toward.
-- Against your [pay] target: a range that starts at or above it is worth seeing sooner.
-- Against similar roles: the middle of the range against the median of what Pyrite has seen for the same track. Far
-  above that usually means the job sits a level above its title, the range covers a high-cost city, or the number is
-  a typo, and any of those is worth knowing before you count on it. Far below means the employer pays under the going
-  rate. Neither is proof: it's only as good as the postings seen so far, so it waits until there are enough of them.
+- Too low to bother: even the top of the range is under TOO_LOW of what the role typically pays in the middle.
+  The employer has pitched the job well under the market, and the daily run doesn't spend Claude on judging it.
+- Under the going rate: the middle of the range is under LOW of the typical middle.
+- Well above similar roles: the middle is HIGH or more of it. That usually means a level above the title, a range
+  set for a high-cost city, or a typo, and any of those is worth knowing before you count on it.
+- A wide range: the top is WIDE or more times the bottom, which spans more than one level.
 
-A range wider than its bottom by more than WIDE spans more than one level. Ask early where you'd land in it.
+None of it is proof. It's only as good as the postings seen so far, which are the ones your filters kept from the
+boards you watch, so it waits until there are enough of them. A range in another currency isn't compared.
 """
 import re
 import statistics
 from dataclasses import dataclass
 
-# Fewer postings than this with pay in a track, and the comparison uses every track, then nothing.
 MIN_PEERS = 5
-HIGH = 1.4  # The middle of the range this many times the median counts as well above similar roles.
-LOW = 0.75
-WIDE = 1.8  # Top over bottom.
+TOO_LOW = 0.75  # The top of the range under this share of the typical middle.
+LOW = 0.8  # The middle under this share.
+HIGH = 1.4
+WIDE = 1.8
 DEFAULT_POINTS = 5
 PER_YEAR = {"hour": 2080, "week": 52, "month": 12, "year": 1}
+LEVELS = {"top": "senior-most", "mid": "senior", "": "unlevelled"}
 
 _AMOUNT = r"((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s?([kKmM](?![a-zA-Z]))?"
 # The first amount, then optionally a second after a dash, "to" or anything a bad decode made of a dash.
@@ -87,33 +89,27 @@ def parse(text: str) -> Range | None:
 
 
 def settings(cfg: dict) -> dict:
-    """[pay] from search.toml, with its defaults. Floor and target are a year's pay; 0 means not set."""
+    """[pay] from search.toml, with its defaults."""
     raw = cfg.get("pay") or {}
-    return {
-        "floor": float(raw.get("floor") or 0),
-        "target": float(raw.get("target") or 0),
-        "currency": str(raw.get("currency") or "USD").upper(),
-        "points": int(raw.get("points", DEFAULT_POINTS)),
-    }
+    return {"currency": str(raw.get("currency") or "USD").upper(), "points": int(raw.get("points", DEFAULT_POINTS))}
 
 
-def below_floor(comp: str, cfg: dict) -> bool:
-    """Whether the whole range is under your floor, which the sweep treats as too low to bother with."""
-    rules = settings(cfg)
-    found = parse(comp)
-    return bool(rules["floor"] and found and found.currency == rules["currency"] and found.high < rules["floor"])
+def _groups(track: str, level: str) -> list[str]:
+    """The comparison groups for a posting, narrowest first."""
+    return [f"{track}|{level}", track, "*"]
 
 
 def peers(rows, currency: str = "USD") -> dict[str, tuple[float, int]]:
-    """The median middle of the ranges seen, by track, and under "*" for every track: {track: (median, count)}."""
-    by_track: dict[str, list[float]] = {}
+    """The median middle of the ranges seen in each comparison group: {group: (median, count)}. Each row needs comp,
+    track and level, as `score.level` reads its title."""
+    by_group: dict[str, list[float]] = {}
     for row in rows:
         found = parse(row["comp"] or "")
         if not found or found.currency != currency:
             continue
-        by_track.setdefault(row["track"] or "", []).append(found.middle)
-        by_track.setdefault("*", []).append(found.middle)
-    return {track: (statistics.median(values), len(values)) for track, values in by_track.items()}
+        for group in _groups(row["track"] or "", row["level"] or ""):
+            by_group.setdefault(group, []).append(found.middle)
+    return {group: (statistics.median(values), len(values)) for group, values in by_group.items()}
 
 
 def money(amount: float, currency: str = "USD") -> str:
@@ -122,45 +118,49 @@ def money(amount: float, currency: str = "USD") -> str:
     return f"${figure}" if currency == "USD" else f"{currency} {figure}"
 
 
-def judge(comp: str, track: str, cfg: dict, known: dict[str, tuple[float, int]]) -> dict:
-    """What a posting's pay says. Returns pay_low and pay_high (a year's pay, or None), pay_signs (each a label, a tone
-    and a sentence for the dashboard), pay_points for its priority, and pay_reasons in the priority's words."""
+def _yardstick(track: str, level: str, known: dict[str, tuple[float, int]]) -> tuple[float, int, str]:
+    """The typical middle to compare with, how many postings it's from, and those postings in words."""
+    words = [f"{LEVELS.get(level, level)} {track} postings", f"{track} postings", "postings across your tracks"]
+    for group, said in zip(_groups(track, level), words, strict=True):
+        median, count = known.get(group, (0.0, 0))
+        if count >= MIN_PEERS and median:
+            return median, count, f"{count} {said}"
+    return 0.0, 0, ""
+
+
+def judge(comp: str, track: str, level: str, cfg: dict, known: dict[str, tuple[float, int]]) -> dict:
+    """What a posting's pay says about it. Returns pay_low and pay_high (a year's pay, or None), pay_too_low, pay_signs
+    (each a label, a tone and a sentence for the dashboard), pay_points for its priority, and pay_reasons."""
     rules = settings(cfg)
     found = parse(comp)
-    result: dict = {"pay_low": None, "pay_high": None, "pay_currency": None, "pay_signs": [], "pay_points": 0, "pay_reasons": []}
+    result: dict = {"pay_low": None, "pay_high": None, "pay_currency": None, "pay_too_low": False, "pay_signs": [],
+                    "pay_points": 0, "pay_reasons": []}
     if not found:
         return result
     result.update({"pay_low": round(found.low), "pay_high": round(found.high), "pay_currency": found.currency})
     signs, points = result["pay_signs"], 0
     if found.currency != rules["currency"]:
         signs.append({"label": f"Paid in {found.currency}", "tone": "muted",
-                      "detail": f"The range is in {found.currency}, so it isn't compared with your {rules['currency']} figures."})
+                      "detail": f"The range is in {found.currency}, so it isn't compared with the {rules['currency']} ranges Pyrite has seen."})
         return result
     span = f"{money(found.low)}–{money(found.high)}" if found.high > found.low else money(found.low)
-    if rules["floor"] and found.high < rules["floor"]:
-        signs.append({"label": "Under your floor", "tone": "bad",
-                      "detail": f"It pays at most {money(found.high)}, under the {money(rules['floor'])} floor you set under [pay]."})
-        points -= rules["points"] * 2
-    elif rules["target"] and found.low >= rules["target"]:
-        signs.append({"label": "Meets your target", "tone": "good",
-                      "detail": f"Even the bottom of its range, {money(found.low)}, reaches your {money(rules['target'])} target."})
-        points += rules["points"]
-    median, count = known.get(track or "", (0.0, 0))
-    scope = f"{count} {track} postings"
-    if count < MIN_PEERS:
-        median, count = known.get("*", (0.0, 0))
-        scope = f"{count} postings across your tracks"
-    if count >= MIN_PEERS and median:
-        ratio = found.middle / median
-        if ratio >= HIGH:
+    median, _, scope = _yardstick(track or "", level or "", known)
+    if median:
+        if found.high < median * TOO_LOW:
+            result["pay_too_low"] = True
+            signs.append({"label": "Too low to bother", "tone": "bad",
+                          "detail": f"Even the top of {span} is under {TOO_LOW:.0%} of the {money(median)} typical of the {scope} "
+                                    "Pyrite has seen. The daily run doesn't judge it unless you pick it."})
+            points -= rules["points"] * 3
+        elif found.middle < median * LOW:
+            signs.append({"label": "Pays under the going rate", "tone": "warn",
+                          "detail": f"The middle of {span} is {found.middle / median:.0%} of the {money(median)} typical of the {scope} Pyrite has seen."})
+            points -= rules["points"]
+        elif found.middle >= median * HIGH:
             signs.append({"label": "Pays well above similar roles", "tone": "info",
-                          "detail": f"The middle of {span} is {ratio:.1f}× the {money(median)} typical of the {scope} Pyrite has seen. "
+                          "detail": f"The middle of {span} is {found.middle / median:.1f}× the {money(median)} typical of the {scope} Pyrite has seen. "
                                     "That usually means a level above the title, a range set for a high-cost city, or a typo. "
                                     "Check the level before you count on it."})
-        elif ratio <= LOW:
-            signs.append({"label": "Pays under the going rate", "tone": "warn",
-                          "detail": f"The middle of {span} is {ratio:.0%} of the {money(median)} typical of the {scope} Pyrite has seen."})
-            points -= rules["points"]
     if found.low and found.high / found.low >= WIDE:
         signs.append({"label": "Wide range", "tone": "muted",
                       "detail": f"{span} spans more than one level. Ask early where you'd land in it."})

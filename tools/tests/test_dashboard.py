@@ -126,6 +126,19 @@ class Outreach(Base):
         self.assertNotIn(young, self.reach_out_orders())
         self.assertNotIn(late, self.reach_out_orders())
 
+    def test_one_item_for_all_of_them_led_by_the_one_closing_first(self):
+        newer = [self.applied(1, source_id=str(n), company=f"Co{n}") for n in range(5)]
+        oldest = self.applied(3, source_id="old", company="Oldco")
+        orders = [o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Reach out"]
+        self.assertEqual([o["job_id"] for o in orders], [oldest])
+        self.assertIn("5 more are due one too: Co0, Co1, Co2, Co3 and 1 more.", orders[0]["detail"])
+        self.assertTrue(newer)
+
+    def test_off_when_the_dashboard_says_so(self):
+        self.applied(2)
+        cfg = {**CFG, "dashboard": {**CFG.get("dashboard", {}), "reach_out": False}}
+        self.assertEqual([o for o in server.build_state(self.conn, cfg)["orders"] if o["kind"] == "Reach out"], [])
+
     def test_logged_in_the_timeline_and_follow_up_moves_to_a_week_after_it(self):
         job = self.applied(2)
         yesterday = date.today() - timedelta(days=1)
