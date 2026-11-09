@@ -308,14 +308,14 @@ def _type(box, value: str) -> bool:
 
     `fill` sets the whole value at once, which is right for most boxes. A box with its own key handling, such as a date
     part that is a spin button, or a masked box, can drop a value set that way or keep it on screen without taking it.
-    So a spin button is typed into key by key from the start, and any other box that doesn't show the value after `fill`
-    is cleared and typed into key by key.
+    So a spin button is typed into key by key from the start (see `_type_spin`), and any other box that doesn't show the
+    value after `fill` is cleared and typed into key by key.
     """
-    keys = box.get_attribute("role") == "spinbutton"
-    if not keys:
-        box.fill(value)
-        if _holds(box, value):
-            return True
+    if box.get_attribute("role") == "spinbutton":
+        return _type_spin(box, value)
+    box.fill(value)
+    if _holds(box, value):
+        return True
     try:
         box.click(timeout=TICK_MS)
     except Exception:
@@ -327,12 +327,46 @@ def _type(box, value: str) -> bool:
     return _holds(box, value)
 
 
+def _spin_value(box) -> str:
+    """What a spin button holds. Workday's date parts keep it in aria-valuenow, and their own text is only the last keys
+    typed: a year typed as 2026 can read "26". A spin button with no aria-valuenow is read by its text."""
+    now = box.get_attribute("aria-valuenow")
+    return (now if now is not None else box.input_value() or "").strip()
+
+
+def _spin_holds(box, value: str) -> bool:
+    """Whether a spin button holds `value`, as a number when both are one, so a month typed "03" is held as 3."""
+    held = _spin_value(box)
+    if held.isdigit() and value.isdigit():
+        return int(held) == int(value)
+    return held == value
+
+
+def _type_spin(box, value: str) -> bool:
+    """Type `value` into a spin button, such as the month or year of a Workday date, and check that it took.
+
+    Workday draws each date part over an input it keeps outside the window, so the input is focused rather than clicked.
+    What's there is cleared one Backspace at a time, and only while there is something: Backspace in an empty part moves
+    to the part before it, so the next key lands there. Pressed in an empty year, it put the year's first "2" in the
+    month, making every month 02, and left the year "26".
+    """
+    if _spin_holds(box, value):
+        return True
+    box.focus()
+    for _ in range(8):
+        if not _spin_value(box):
+            break
+        box.press("Backspace")
+    box.press_sequentially(value, delay=50)
+    return _spin_holds(box, value)
+
+
 def _put(box, value: str, report: Report, what: str) -> bool:
     """`_type`, with a box that won't take the value reported for the candidate to check, along with what it shows."""
     if _type(box, value):
         return True
     try:
-        shown = box.input_value()
+        shown = _spin_value(box) if box.get_attribute("role") == "spinbutton" else box.input_value()
     except Exception:
         shown = "?"
     report.skipped.append(f"{what}: typed {value[:60]!r}, but the box shows {shown[:60]!r}, so check it")
