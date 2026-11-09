@@ -124,21 +124,30 @@ async function api(path, body) {
 
 // A change that loosens the fact check needs a code Pyrite sends to this computer's notifications. `send` sends the
 // change again with a request id and code (both null to ask for a fresh code), and `cancelled` puts the form back.
+let codePrompts = 0;
 function codePrompt(first, send, cancelled) {
   let current = first;
   const digits = (value) => value.replace(/\D/g, "");
   const list = h("ul", { class: "code-changes" });
-  const note = h("p", { class: "muted" });
-  const input = h("input", { class: "code-input", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "7",
-    placeholder: "000 000", "aria-label": "Code from the notification" });
+  const note = h("p", {});
+  const fallback = h("p", { class: "muted" });
+  const id = `code-input-${++codePrompts}`;
+  const input = h("input", { id, class: "code-input", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "7",
+    placeholder: "000 000" });
   const error = h("p", { class: "error", role: "alert" });
   const ok = h("button", { class: "btn primary", type: "button", disabled: true }, "Confirm");
+  // Windows labels the notification with the app that shows it, Windows PowerShell, so say so, and where it goes.
+  const where = /Windows/.test(navigator.userAgent)
+    ? " It pops up in the corner of the screen, from Windows PowerShell. If it's gone, Windows key + N shows it again."
+    : "";
   const show = (fresh) => {
     current = fresh;
     fill(list, current.changes.map((change) => h("li", {}, `It will ${change}.`)));
     note.textContent = current.sent
-      ? "Pyrite sent a 6-digit code to this computer's notifications. It works once, for this change only, for 2 minutes. No notification? Run `pyrite code` in a terminal on this computer."
-      : "The notification didn't go through. Run `pyrite code` in a terminal on this computer to see the code. It works once, for this change only, for 2 minutes.";
+      ? `Pyrite just sent a 6-digit code to this computer's notifications.${where} Type it in the box below and choose Confirm. It works once, for this change only, for 2 minutes.`
+      : "The notification didn't go through. Run `pyrite code` in a terminal on this computer to see the code, then type it in the box below and choose Confirm. It works once, for this change only, for 2 minutes.";
+    fallback.textContent = current.sent ? "No notification? Run `pyrite code` in a terminal on this computer to see the code." : "";
+    fallback.hidden = !current.sent;
     input.value = "";
     ok.disabled = true;
   };
@@ -192,8 +201,9 @@ function codePrompt(first, send, cancelled) {
   show(first);
   setTimeout(() => input.focus(), 0);
   return h("div", { class: "code-prompt", role: "group", "aria-label": "Confirm with a code" },
-    h("p", { class: "code-title" }, "This change loosens the fact check"), list, note,
-    h("div", { class: "part-actions" }, input, ok, resend, cancel), error);
+    h("p", { class: "code-title" }, "This change lets drafts say more, so it needs a code"), list, note,
+    h("label", { class: "code-label", for: id }, "Code from the notification"),
+    h("div", { class: "part-actions" }, input, ok, resend, cancel), fallback, error);
 }
 
 // ---- Top of page ----

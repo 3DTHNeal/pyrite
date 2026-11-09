@@ -754,6 +754,7 @@ def cmd_code(args):
     left = max(0, int(float(found["expires"]) - time.time()))
     print(f"{code[:3]} {code[3:]}")
     print(f"{confirm.sentence(list(found['summary']))} It expires in {left} seconds.")
+    print("Type it into the dashboard, in the box asking for a code, and choose Confirm.")
 
 
 def _console_code_page() -> int:

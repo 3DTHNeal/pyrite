@@ -361,7 +361,8 @@ textarea { width: 100%; resize: vertical; }
 .code-prompt { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--warn); border-radius: 6px; background: var(--surface-2); display: grid; gap: 6px; }
 .code-prompt .code-title { font-weight: 600; }
 .code-prompt .code-changes { margin: 0; padding-left: 18px; }
-.code-prompt .part-actions { margin-top: 4px; }
+.code-prompt .part-actions { margin-top: 0; }
+.code-prompt .code-label { font-weight: 600; margin-top: 4px; }
 .code-input { width: 9em; font: 600 16px/1.2 var(--mono); letter-spacing: .15em; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .part-status { font-size: 13px; }
 .city-seen { font-size: 12px; min-width: 160px; }

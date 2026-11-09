@@ -15,6 +15,10 @@ import sys
 TIMEOUT_SECONDS = 15
 # Windows only shows toasts from an app it knows. Windows PowerShell's own id is on every copy of Windows 10 and 11.
 WINDOWS_APP_ID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe"
+# The reminder scenario keeps the toast on screen until it's closed, so a code stays readable while it's typed, but
+# Windows only honours it when the toast has a button. The one button is Windows' own dismiss, labelled Close: a
+# button called Dismiss reads as turning something down, and closing a notice decides nothing.
+WINDOWS_CLOSE_LABEL = "Close"
 WINDOWS_SCRIPT = """
 $ErrorActionPreference = 'Stop'
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -23,7 +27,8 @@ $title = [Security.SecurityElement]::Escape($env:PYRITE_NOTIFY_TITLE)
 $body = [Security.SecurityElement]::Escape($env:PYRITE_NOTIFY_BODY)
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
 $text = "<visual><binding template='ToastGeneric'><text>$title</text><text>$body</text></binding></visual>"
-$actions = "<actions><action content='Dismiss' arguments='dismiss' activationType='system'/></actions>"
+$close = [Security.SecurityElement]::Escape($env:PYRITE_NOTIFY_CLOSE)
+$actions = "<actions><action content='$close' arguments='dismiss' activationType='system'/></actions>"
 $xml.LoadXml("<toast scenario='reminder'>$text$actions</toast>")
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:PYRITE_NOTIFY_APP).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
 """
@@ -37,7 +42,8 @@ def _command(title: str, body: str) -> tuple[list[str], dict[str, str]] | None:
         exe = shutil.which("powershell.exe")
         if not exe:
             return None
-        env.update(PYRITE_NOTIFY_TITLE=title, PYRITE_NOTIFY_BODY=body, PYRITE_NOTIFY_APP=WINDOWS_APP_ID)
+        env.update(PYRITE_NOTIFY_TITLE=title, PYRITE_NOTIFY_BODY=body, PYRITE_NOTIFY_APP=WINDOWS_APP_ID,
+                   PYRITE_NOTIFY_CLOSE=WINDOWS_CLOSE_LABEL)
         encoded = base64.b64encode(WINDOWS_SCRIPT.encode("utf-16-le")).decode()
         return [exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], env
     if sys.platform == "darwin":
