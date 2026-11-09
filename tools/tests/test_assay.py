@@ -597,6 +597,127 @@ class Evasion(unittest.TestCase):
         self.assertIn("Globex", checks.do_not_use(bank))
         self.assertNotIn("Kubernetes", checks.do_not_use(bank))
 
+    def letter_errors(self, sentence, sources=SOURCES):
+        return checks.check_text(LETTER.rstrip() + f"\n\n{sentence}\n", "letter", CFG, sources, *LETTER_ROLE)[0]
+
+    def test_a_forbidden_name_joined_by_anything_is_still_blocked(self):
+        # A letter only warns about a term it doesn't know, so nothing else stops these there.
+        for name in ("Blue‑bird", "Blue–bird", "Blue_bird", "Blue/bird", "Blue  bird", "Blue - bird", "B.L.U.E.B.I.R.D.",
+                     "Blue.bird", "Sky‑Lift"):
+            with self.subTest(name=name):
+                errors = self.letter_errors(f"I delivered the {name} controller.")
+                self.assertTrue(any("confidential term" in e for e in errors), errors)
+        # The full stop that ends a sentence joins nothing.
+        self.assertIsNone(re.search(checks._flexible("Bluebird"), "The sky was blue. Birds sang.", re.I))
+        # Plain words with a space between are joined the same way, and so is a pattern "Block it" wrote earlier.
+        for pattern in (checks._flexible("SkyLift 900"), checks._widen(checks.term_pattern("SkyLift 900"))):
+            for text in ("SkyLift 900", "skylift‑900", "SkyLift900", "SkyLift_900"):
+                with self.subTest(pattern=pattern, text=text):
+                    self.assertTrue(re.search(pattern, text, re.I))
+
+    def test_a_name_listed_under_do_not_use_is_blocked_however_it_is_joined(self):
+        facts = (store.ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
+        listed = facts.replace("## Do not use\n", "## Do not use\n- Codename Nightjar\n")
+        blocked = checks.blocked_patterns(CFG, lambda rel: listed if rel == "profile/facts.md" else (store.ROOT / rel).read_text(encoding="utf-8"))
+        for name in ("Night-jar", "night jar", "Night–jar"):
+            with self.subTest(name=name):
+                errors, _ = checks.check_text(LETTER.rstrip() + f"\n\nI shipped {name} on time.\n", "letter", CFG, SOURCES, *LETTER_ROLE,
+                                              blocked=blocked)
+                self.assertTrue(any("confidential term" in e for e in errors), errors)
+
+    def test_praise_shaped_like_a_denial_denies_nothing(self):
+        for line in ("- No stranger to ISO 26262.", "- Not new to ISO 26262 audits.", "- I have no shortage of ISO 26262 experience.",
+                     "- Never far from ISO 26262 work.", "- Without question the team's ISO 26262 lead.",
+                     "- Not a day went by without ISO 26262 work.",
+                     "- The posting asks for ISO 26262 certification, and I have never missed an audit leading it."):
+            with self.subTest(line):
+                self.assertBlocked(line, "unsupported claim")
+        for line in ("- No ISO 26262 experience yet.", "- I have not worked under ISO 26262.",
+                     "- The posting lists ISO 26262 as a plus, and I have not worked under that standard."):
+            with self.subTest(line):
+                self.assertEqual(resume_errors(RESUME + f"\n{line}\n"), [])
+        # A claim the posting makes, with a plain denial of your own after it, as the example letter words its gap.
+        self.assertEqual(self.letter_errors("Your posting lists safety certification as a plus, and I have not worked under ISO 26262."), [])
+
+    def test_a_multiple_or_fraction_in_any_word_form_is_a_measurement(self):
+        for line in ("- Doubling test throughput on the rig.", "- Made the bench twice as fast.", "- Cut review time in half.",
+                     "- Cut boot time by half.", "- Delivered a 3-fold gain in bench throughput.", "- Made merges 3 times faster.",
+                     "- Tripling bench capacity on the rig.", "- Cut settling time by a third.", "- Cut escaped defects by two-thirds.",
+                     "- Kept a third of the bench time for regression runs."):
+            with self.subTest(line):
+                self.assertBlocked(line, "claims a multiple")
+                self.assertTrue(any("claims a multiple" in e for e in self.letter_errors(line[2:])), line)
+        # Words that only look like one.
+        for line in ("- Led a third robot launch in the second half of 2023.", "- Used double-precision math in the C++ firmware.",
+                     "- Ran the bench 3 times on every merge.", "- Wrote the half-duplex CAN driver in C++.",
+                     "- Did both halves of that work, firmware and test."):
+            with self.subTest(line):
+                self.assertEqual(resume_errors(RESUME + f"\n{line}\n"), [])
+        # Each way of writing a multiple reads as the same one, so the fact bank's 3× approves "3 times faster" and no other.
+        self.assertEqual(checks._number_errors("Resume", "about 3 times faster, a 3-fold gain", "about 3× per machine-hour", "x"), [])
+        errors = checks._number_errors("Resume", "5,000× faster", "350,000× one core", "x")
+        self.assertTrue(any("5000x" in e for e in errors), errors)
+
+    def test_a_scale_is_a_scale_however_it_is_written(self):
+        for line in ("- Saved $3m across the robot launches.", "- Saved $3 Million across the robot launches.",
+                     "- Saved $3 MM across the robot launches.", "- Saved $3 mil across the robot launches.",
+                     "- Saved US$3mn across the robot launches.", "- Processed 3 bn sensor readings."):
+            with self.subTest(line):
+                self.assertBlocked(line, "numbers not in the fact bank")
+                self.assertTrue(any("numbers not in the fact bank" in e for e in self.letter_errors(line[2:])), line)
+        self.assertEqual(checks._numbers("$3m, $3 MM, $3 mil, 3 Million, 3M and 3 bn"), {"3000000", "3000000000"})
+        # Without a currency sign, a lowercase m or a letter after a space is as likely a unit.
+        self.assertEqual(checks._numbers("30m of cable, a 5 mil film and 300 K"), {"30", "5", "300"})
+        # A number's scale letter isn't a term of its own, so an honest 1.4K for 1,400 passes.
+        self.assertEqual(resume_errors(RESUME + "\n- Wrote firmware for a fleet of 1.4K warehouse robots.\n"), [])
+
+    def test_a_scale_word_beside_digits_approves_no_spelled_out_number(self):
+        richer = SOURCES + "\n- Program budget of $1.5 million\n- Migrated hundreds of pages\n"
+        for line in ("- Served five million users.", "- Processed several million sensor readings."):
+            with self.subTest(line):
+                errors, _ = checks.check_text(RESUME + f"\n{line}\n", "resume", CFG, richer, "Acme", "Principal Engineer")
+                self.assertTrue(any("spells out numbers" in e and "million" in e for e in errors), errors)
+        # A number word the fact bank writes on its own is still yours to use.
+        errors, _ = checks.check_text(RESUME + "\n- Migrated hundreds of pages.\n", "resume", CFG, richer, "Acme", "Principal Engineer")
+        self.assertEqual(errors, [])
+
+    def test_units_with_a_micro_or_ohm_sign_are_not_disguises(self):
+        self.assertEqual(checks._disguises("p95 3.8 µm, 0.17 µs, 4.7 μF and a 10 kΩ load", "Resume"), [])
+        richer = SOURCES + "\n- Position error p95 3.8 µm\n"
+        errors, _ = checks.check_text(RESUME + "\n- Held position error to p95 3.8 µm.\n", "resume", CFG, richer, "Acme", "Principal Engineer")
+        self.assertEqual(errors, [])
+        # The same sign inside a word is still a letter that doesn't belong there.
+        for disguised in ("Blµebird", "µBluebird"):
+            with self.subTest(disguised=disguised):
+                self.assertTrue(checks._disguises(f"Delivered the {disguised} controller.", "Resume"))
+
+    def test_the_parts_of_a_compound_the_sources_use_are_known_terms(self):
+        richer = SOURCES + "\n- GPU-batched kinetics, tuned over CI/CD\n"
+        for line in ("- Ran GPU kinetics on the bench.", "- Built the CI checks for it.", "- Ran Hardware-Loop reviews of the firmware."):
+            with self.subTest(line):
+                errors, _ = checks.check_text(RESUME + f"\n{line}\n", "resume", CFG, richer, "Acme", "Principal Engineer")
+                self.assertEqual(errors, [])
+        # A compound with one part no source uses is still named, whole.
+        self.assertBlocked("- Ran Kubernetes-Loop reviews of the firmware.", "approved sources: Kubernetes-Loop")
+        # A posting that names the compound doesn't make it borrowed.
+        errors, _ = checks.check_text(RESUME + "\n- Ran Hardware/Loop reviews of the firmware.\n", "resume", CFG, SOURCES, "Acme",
+                                      "Principal Engineer", posting="You will own Hardware/Loop testing.")
+        self.assertEqual(errors, [])
+
+    def test_a_date_alone_on_a_resume_line_is_a_claim(self):
+        self.assertBlocked("March 1, 2011", "numbers not in the fact bank")
+
+    def test_unsupported_lines_with_no_pattern_are_named(self):
+        self.assertEqual(checks.unenforced_claims(CFG), [])  # The example's rules cover each line of its own list.
+        facts = (store.ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
+        more = facts.rstrip() + "\n- Any Six Sigma belt\n- Percentages for fleet uptime\n"
+        read = lambda rel: more if rel == "profile/facts.md" else (store.ROOT / rel).read_text(encoding="utf-8")
+        self.assertEqual(checks.unenforced_claims(CFG, read), [("Any Six Sigma belt", "profile/facts.md")])
+        self.assertEqual(checks.unsupported_claims("## Skills\n- Python\n## Unsupported\n<!-- what you can't claim -->\n- Rust\n### More\n* Go\n"),
+                         ["Rust", "Go"])
+        # The line the example's rules missed until now, in the order the fact bank writes it.
+        self.assertBlocked("- Field failures reproduced in simulation.", "unsupported claim")
+
 
 class PassRecord(unittest.TestCase):
     def test_a_paste_box_text_or_a_new_document_after_a_pass_shows(self):

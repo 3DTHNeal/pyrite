@@ -450,6 +450,21 @@ class NewWorkspace(unittest.TestCase):
                         .replace("## Leadership\n", "## Leadership\n- Shipped Nightjar on time\n"), encoding="utf-8")
         self.assertFalse(any("Nightjar" in what for what in self.todos()))
 
+    def test_an_unsupported_line_that_no_pattern_matches_is_a_todo(self):
+        self.make_own("profile/facts.md")
+        self.assertFalse(any("Unsupported" in what for what in self.todos()))
+        path = self.root / "profile" / "facts.md"
+        path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n\n## Unsupported\n- Safety certification\n- Any Six Sigma belt\n",
+                        encoding="utf-8")
+        todo = next(todo for todo in WORKSPACE_TODOS(self.root, self.cfg()) if "Unsupported" in todo["what"])
+        self.assertIn("lists a claim under", todo["what"])
+        self.assertIn("“Any Six Sigma belt”", todo["what"])
+        self.assertEqual(todo["step"], "offlimits")
+        # A pattern that matches the line is all it takes.
+        cfg = self.cfg()
+        cfg["guard"]["unsupported"] = [*cfg["guard"]["unsupported"], "six sigma"]
+        self.assertFalse(any("Unsupported" in todo["what"] for todo in WORKSPACE_TODOS(self.root, cfg)))
+
     def test_explanations_instructions_and_your_own_name_arent_taken_for_secret_names(self):
         # Blocking any of these would do harm: your own name would fail every draft.
         facts = ("# Facts\n\n## Do not use\n"

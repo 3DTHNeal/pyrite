@@ -14,7 +14,7 @@ from contextlib import closing
 from pathlib import Path
 
 from . import discover, inbox, score
-from .checks import listed_terms, uncommented
+from .checks import listed_terms, uncommented, unenforced_claims
 from .claude_code import find_claude, signed_in
 from .store import DB_PATH, EXAMPLE_ROOT
 
@@ -238,8 +238,28 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
                                               "such as ( or + needs a backslash before it.", "severity": "bad"})
     todos += _master_todos(root, cfg)
     todos += _unguarded_todos(root, cfg)
+    todos += _unenforced_todos(root, cfg)
     todos += _seed_todos(root)
     return todos
+
+
+def _unenforced_todos(root: Path, cfg: dict) -> list[dict]:
+    """Lines under "Unsupported" that no pattern under [guard] unsupported matches. The assay blocks an unsupported
+    claim by pattern, so a draft can make these and pass."""
+    if "profile/facts.md" in still_example(root):
+        return []
+    loose = unenforced_claims(cfg, lambda rel: _text(root / rel) or "")
+    if not loose:
+        return []
+    lines = [line if len(line) <= 70 else line[:67].rstrip() + "..." for line, _rel in loose]
+    one = len(lines) == 1
+    more = f", and {len(lines) - 3} more" if len(lines) > 3 else ""
+    return [{"what": f"{loose[0][1]} lists {'a claim' if one else f'{len(lines)} claims'} under \"Unsupported\" that no pattern "
+                     f"under [guard] unsupported matches, so a draft can make {'it' if one else 'them'} and pass the assay: "
+                     f"{'; '.join(f'“{line}”' for line in lines[:3])}{more}.",
+             "fix": "For each, add a pattern to unsupported under [guard] in profile/search.toml that matches how a draft "
+                    "would word the claim, such as 'safety[- ]certifi\\w+' for a safety certification.",
+             "step": "offlimits"}]
 
 
 def master_problems(text: str, kind: str, name: str = "", contact: str | None = None) -> list[str]:

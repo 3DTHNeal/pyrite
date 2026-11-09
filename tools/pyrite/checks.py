@@ -28,24 +28,39 @@ DATE_LINE = re.compile(
     rf"(?m)^[ \t]*(?:{_MONTH}\s+{_DAY},?\s+\d{{4}}|{_DAY}\s+(?:of\s+)?{_MONTH},?\s+\d{{4}}|\d{{4}}-\d{{2}}-\d{{2}})[ \t]*$"
 )
 # A number keeps its scale: $3M isn't the 3 the fact bank measured, and 212K tests aren't 212. Each reads as its value,
-# so 1.5M and 1,500,000 are the same number. A lowercase m is left alone, since 30m is as often minutes as millions.
+# so 1.5M and 1,500,000 are the same number. A scale word counts in any case and after a space: 3 Million, 3 bn.
+# A lowercase m, or a letter after a space, is a scale only after a currency sign, as in $3m, $3 MM or $3 mil: on its own
+# 30m is as often minutes, 5 mil a film thickness and 300 K a temperature.
 # A number may start at its decimal point, as in .83 seconds.
 NUMBER = re.compile(
-    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?|\.\d+)(?:\s?(thousand|million|billion|trillion)\b|(K|k|M|MM|B|bn|BN)\b)?"
+    r"(?:(?P<money>[$€£])\s?|(?<![\w.]))(?P<digits>\d[\d,]*(?:\.\d+)?|\.\d+)"
+    r"(?:\s?(?P<word>(?i:thousand|million|billion|trillion|bn))\b|(?P<letter>K|k|M|MM|B)\b"
+    r"|(?(money)\s?(?P<cash>(?i:mm|mil|mn|k|m|b))\b|(?!)))?"
 )
-SCALE = {"thousand": 3, "k": 3, "million": 6, "m": 6, "mm": 6, "billion": 9, "b": 9, "bn": 9, "trillion": 12}
+SCALE = {"thousand": 3, "k": 3, "million": 6, "m": 6, "mm": 6, "mil": 6, "mn": 6, "billion": 9, "b": 9, "bn": 9, "trillion": 12}
 # A percentage spelled out is still a percentage, and so is a change in percentage points.
 PERCENT = re.compile(
     r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent(?:age)?(?:\s+points?)?\b|per\s?cent\b|pct\b|pp\b|p\.p\.)", re.I
 )
-# Multiples and orders of magnitude claimed in words are measurements too.
+# Multiples, fractions and orders of magnitude claimed in words are measurements too, in any form of the word: doubled,
+# doubling, twice as fast, cut in half, by a third. Words that only look like one are left alone: a third launch, the
+# second half of the year, both halves of a job, double-precision, half-duplex.
 MULTIPLE = re.compile(
-    r"\b(?:doubled|tripled|quadrupled|halved|(?:two|three|four|five|six|seven|eight|nine|ten|hundred|thousand)[- ]?fold|"
-    r"(?:double|triple)[- ]digits?|(?:five|six|seven|eight|nine|ten)[- ]figures?|order[s]? of magnitude)\b",
+    r"\b(?:(?:doubl|tripl|quadrupl)(?:ed|es|ing)|halv(?:ed|ing)|(?:double|triple|quadruple)\s+(?:the|its|their|our)"
+    r"|twice\s+(?:as|the)|thrice|(?:in|by)\s+half(?!-)|half\s+(?:the|as)"
+    r"|(?:a|one)\s+(?:third|quarter|fifth|tenth)\s+(?:of|less|more|fewer|faster|slower|lower|higher)"
+    r"|by\s+(?:a|one)\s+(?:third|quarter|fifth|tenth)|(?:two|three|four)[- ](?:thirds|fifths)|three-quarters"
+    r"|(?:two|three|four|five|six|seven|eight|nine|ten|hundred|thousand)[- ]?fold"
+    r"|(?:double|triple)[- ]digits?|(?:five|six|seven|eight|nine|ten)[- ]figures?|orders? of magnitude)\b",
     re.I,
 )
-# A multiple in digits, such as 8x or 2.5×. It's a measurement of its own, whatever counts the fact bank holds.
-NUMERIC_MULTIPLE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s?[x×](?!\w)", re.I)
+# A multiple in digits, however it's written: 8x, 2.5×, 3-fold, 3 times faster. It's a measurement of its own, whatever
+# counts the fact bank holds, and each form reads as the same multiple.
+NUMERIC_MULTIPLE = re.compile(
+    r"(?<![\w.,])((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s?[x×](?!\w)|[- ]?fold\b"
+    r"|\s+times\s+(?:as|the|faster|slower|more|less|fewer|higher|lower|better|greater|larger|smaller|quicker)\b)",
+    re.I,
+)
 # A web address or a path on a site, which is never a skill. File types a skill list names, such as Node.js/React,
 # aren't sites.
 FILE_TYPES = "js|jsx|ts|tsx|py|md|rb|go|rs|cs|cpp|hpp|java|kt|css|html|json|ya?ml|toml|sh|txt|csv|pdf|docx|xlsx|exe|dll"
@@ -76,13 +91,18 @@ ASIDE = re.compile(r"\([^)]*\)|\"[^\"]*\"|“[^”]*”")
 LISTED_SENTENCE = re.compile(r"(?:[^.!?;]|[.!?;](?=\S))+")
 EXCLUDED_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use|unsupported)\b", re.I)
 DO_NOT_USE_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use)\b", re.I)
+UNSUPPORTED_SECTION = re.compile(r"\W*unsupported\b", re.I)
 # Your contact details hold numbers, a phone number and a zip code, that are about how to reach you. They count as
 # nothing a draft can claim: a phone number of (555) 010-0142 doesn't make a team of 10 true.
 CONTACT_SECTION = re.compile(r"\W*contact\b", re.I)
 # A negative only disclaims what follows it in the same clause. "Not only" is no negative at all, and neither is one
 # that praises the record: "never failed an X audit", "not a single X finding", "without a single X nonconformance".
+# Nor is one that says the opposite of what it seems to: "no stranger to X", "not new to X", "no shortage of X",
+# "without question", or two that cancel, as in "not a day went by without X".
 NOT_A_NEGATIVE = re.compile(
-    r"(?:\b(?:not|no|never|without)|n['’]t)\s+(?:only|just|merely|less|fewer|a\s+single|fail\w*|miss\w*|lost|los[ei]\w*)\b",
+    r"(?:\b(?:not|no|never|without)|n['’]t)\s+(?:only|just|merely|less|fewer|a\s+single|fail\w*|miss\w*|lost|los[ei]\w*"
+    r"|stranger|new|shortage|lack|far|question|doubt|exception|equal|peer|rival|unfamiliar)\b"
+    r"|\b(?:not|no|never|hardly|rarely)\b[^;,:()]{0,60}?\bwithout\b",
     re.I,
 )
 # Punctuation and joining words start a new clause, so "With no added headcount, cut defects by 83%" denies nothing.
@@ -145,6 +165,13 @@ LOOKALIKES = str.maketrans(
 # Latin letters that don't decompose into a plain one plus an accent. They're real letters in names (Łukasz, Søren,
 # Işık), so they're never an error, but a check reads them as the plain letter so they can't split a word.
 PLAIN_LATIN = str.maketrans({"ı": "i", "ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ħ": "h", "Ħ": "H"})
+# A unit written with the micro or ohm sign, such as µm, µs or kΩ. It sets a Greek letter beside Latin ones by design,
+# and hides nothing.
+UNIT = re.compile(r"[µμ][A-Za-z]{1,3}|[kKMGmµμ]?[ΩΩ]")
+# What can sit between the letters of a name without making it another word: a space, a hyphen or dash of any kind, an
+# underscore, a slash or a middle dot, up to three in a row, and a full stop when a letter follows it. "B.l.u.e" is one
+# word; the full stop that ends a sentence joins nothing.
+JOIN = r"(?:[\s\-_/·‐-―−]|\.(?=\w)){0,3}"
 EM_DASH = "—"
 LETTER_WORDS_MAX = 350  # a letter longer than this is the one readers say they stop reading
 # Titles that open a line as a claim: "Head of firmware for the company." The first word of a sentence is otherwise
@@ -215,6 +242,35 @@ def without_contact(text: str) -> str:
 def do_not_use(text: str) -> str:
     """What a fact bank lists under "Do not use", subsections included, without its comments."""
     return _split_sections(uncommented(text), DO_NOT_USE_SECTION)[1]
+
+
+def unsupported_claims(text: str) -> list[str]:
+    """The lines a fact bank lists under "Unsupported", subsections included, without comments, headings or bullets."""
+    inside = _split_sections(uncommented(text), UNSUPPORTED_SECTION)[1]
+    lines = (row.strip().lstrip("-*").strip() for row in inside.splitlines() if not HEADING.match(row))
+    return [line for line in lines if line]
+
+
+def unenforced_claims(cfg: dict, read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
+    """Lines your approved sources list under "Unsupported" that no pattern under [guard] unsupported matches, each as
+    (line, the file that lists it).
+
+    The assay blocks an unsupported claim by pattern alone, so a line with no pattern is a rule nothing enforces: a
+    draft can make the claim and pass. A pattern about a percentage needs one to match, so each line is also tried
+    with a percentage on either side. `read` gives a source's text, for a draft of one that isn't saved yet."""
+    guard = cfg.get("guard", {})
+    patterns = []
+    for pattern in guard.get("unsupported", []):
+        try:
+            patterns.append(re.compile(pattern, re.I))
+        except re.error:
+            pass  # `doctor` names a pattern that won't compile. It matches nothing here.
+    loose: list[tuple[str, str]] = []
+    for rel in dict.fromkeys(guard.get("approved_sources", [])):
+        for line in unsupported_claims((read or _source_text)(rel)):
+            if not any(pattern.search(text) for pattern in patterns for text in (line, f"50% {line} 50%")):
+                loose.append((line, rel))
+    return loose
 
 
 def term_pattern(term: str) -> str:
@@ -311,15 +367,32 @@ def blocked_patterns(cfg: dict, read: Callable[[str], str] | None = None) -> lis
     """Every pattern a draft must not match, each with where it comes from: "" for forbidden under [guard], or the
     file whose "Do not use" section names it."""
     return ([(_flexible(pattern), "") for pattern in cfg.get("guard", {}).get("forbidden", [])]
-            + [(pattern, rel) for _term, pattern, rel in listed_terms(cfg, read)[0]])
+            + [(_flexible(term) if PLAIN_NAME.fullmatch(term) else _widen(pattern), rel)
+               for term, pattern, rel in listed_terms(cfg, read)[0]])
+
+
+PLAIN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{3,}")
+PLAIN_WORDS = re.compile(r"[A-Za-z0-9]+(?: [A-Za-z0-9]+)+")
+
+
+def _widen(pattern: str) -> str:
+    """A pattern whose "[\\s-]?", the optional space or hyphen that `term_pattern` writes between words, lets through
+    anything that can join a name. Patterns saved before this read the same way, with no change to search.toml."""
+    return pattern.replace(r"[\s-]?", JOIN)
 
 
 def _flexible(pattern: str) -> str:
-    """A forbidden pattern that's a plain name, such as Bluebird, also blocks it split by a space or a hyphen, as in
-    "blue bird" or "Sky-Lift", and as a plural. A pattern with any regular-expression syntax is taken as written."""
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{3,}", pattern):
-        return pattern
-    body = r"[\s-]?".join(re.escape(ch) for ch in pattern)
+    """A forbidden pattern that's a plain name, such as Bluebird, also blocks it split anywhere by something that joins
+    a name, as in "blue bird", "Sky-Lift" or "Blue_bird", and as a plural. Plain words with spaces between, such as
+    "SkyLift 900", block the same name joined another way. A pattern with any other regular-expression syntax is
+    taken as written."""
+    if PLAIN_NAME.fullmatch(pattern):
+        parts = list(pattern)
+    elif PLAIN_WORDS.fullmatch(pattern):
+        parts = pattern.split(" ")
+    else:
+        return _widen(pattern)
+    body = JOIN.join(re.escape(part) for part in parts)
     return rf"\b{body}{'s?' if pattern[-1].isalpha() and pattern[-1].lower() != 's' else ''}\b"
 
 
@@ -369,7 +442,8 @@ def _value(digits: str, scale: str = "") -> str:
 
 def _numbers(text: str) -> set[str]:
     """The numbers a text states, percentages aside: a number the fact bank has only as a percentage counts nothing."""
-    return {_value(m.group(1), m.group(2) or m.group(3) or "") for m in NUMBER.finditer(PERCENT.sub(" ", text))}
+    return {_value(m.group("digits"), m.group("word") or m.group("letter") or m.group("cash") or "")
+            for m in NUMBER.finditer(PERCENT.sub(" ", text))}
 
 
 def _percents(text: str) -> set[str]:
@@ -381,7 +455,7 @@ def _spelled(text: str) -> set[str]:
     return {match.group(0).lower() for match in NUMBER_WORD.finditer(NUMBER.sub(" ", text))}
 
 
-def _number_errors(label: str, body: str, known: str, vocab: set[str], where: str) -> list[str]:
+def _number_errors(label: str, body: str, known: str, where: str) -> list[str]:
     """Numbers, percentages, spelled-out numbers and multiples in body that the known text doesn't hold."""
     errors = []
     invented_pct = sorted(_percents(body) - _percents(known))
@@ -390,7 +464,9 @@ def _number_errors(label: str, body: str, known: str, vocab: set[str], where: st
     invented = sorted(_numbers(body) - _numbers(known))
     if invented:
         errors.append(f"{label} has numbers {where}: {', '.join(invented)}")
-    spelled = sorted(_spelled(body) - vocab)
+    # Both sides are read the same way. The "million" of "$1.5 million" is part of that number in the fact bank as it
+    # is in a draft, so it doesn't approve "five million" of anything.
+    spelled = sorted(_spelled(body) - _spelled(known))
     if spelled:
         errors.append(f"{label} spells out numbers {where}: {', '.join(spelled)}. Write numbers as digits, as measured.")
     multiples = sorted(({m.group(0).lower() for m in MULTIPLE.finditer(body)} - _phrases(MULTIPLE, known))
@@ -406,7 +482,11 @@ def _phrases(pattern: re.Pattern, text: str) -> set[str]:
 
 
 def _vocabulary(text: str) -> set[str]:
-    return {w.lower().strip("+") for w in WORD.findall(text)} | {w.lower() for w in WORD.findall(text)}
+    """The words a text uses, in lowercase. The parts of a compound are words it uses too: GPU-batched names GPU, and
+    CI/CD names CI."""
+    words = WORD.findall(text)
+    whole = {w.lower().strip("+") for w in words} | {w.lower() for w in words}
+    return whole | {part.lower().strip("+") for w in words for part in re.split(r"[-/]", w) if part}
 
 
 def _pages(pdf: Path) -> int | None:
@@ -450,8 +530,16 @@ def _is_acronym_or_camel(word: str) -> bool:
     return any(c.isupper() for c in word[1:])
 
 
+def _known_term(low: str, known: set[str]) -> bool:
+    """Whether a term, in lowercase, is one the sources use, or a compound of ones they use: Cross-Team names nothing
+    new when they write both words."""
+    parts = [part.strip("+") for part in re.split(r"[-/]", low) if part]
+    return low in known or (len(parts) > 1 and all(part in known for part in parts))
+
+
 def _novel_terms(text: str, vocab: set[str], allowed: set[str]) -> list[str]:
     """Capitalized terms that no approved source has ever used: likely invented skills."""
+    known = vocab | allowed | ORDINARY_CAPS
     novel = []
     for sentence in SENTENCE.split(text):
         words = WORD.findall(sentence)
@@ -459,8 +547,7 @@ def _novel_terms(text: str, vocab: set[str], allowed: set[str]) -> list[str]:
             # The first word of a sentence is capitalized anyway, so there only an acronym, CamelCase or a title stands out.
             if not (_is_acronym_or_camel(word) or (word[0].isupper() and (index or word.lower() in TITLE_WORDS))):
                 continue
-            low = word.lower().strip("+")
-            if low in vocab or low in allowed or low in ORDINARY_CAPS:
+            if _known_term(word.lower().strip("+"), known):
                 continue
             if word not in novel:
                 novel.append(word)
@@ -484,7 +571,8 @@ def _borrowed_terms(text: str, posting: str, vocab: set[str], allowed: set[str],
 
     Lowercase words are left alone: a posting's "Gives Back" program mustn't block "came back".
     """
-    wanted = _posting_terms(posting) - vocab - allowed - ORDINARY_CAPS - {word.lower().strip("+") for word in already}
+    known = vocab | allowed | ORDINARY_CAPS
+    wanted = {term for term in _posting_terms(posting) - {word.lower().strip("+") for word in already} if not _known_term(term, known)}
     borrowed = []
     for word in WORD.findall(text):
         if word[0].isupper() and word.lower().strip("+") in wanted and word not in borrowed:
@@ -514,7 +602,10 @@ def _disclaimed(before: str, after: str, disclaimers: list) -> bool:
         back = REFERS_BACK.match(after, denial.end())
         if back and not PRAISE.search(back.group(0)):
             return True
-    return bool(denials) and ATTRIBUTED.search(before) is not None
+    # A claim the sentence puts in the posting's mouth needs only a denial of your own after it, of anything, so long
+    # as it is one: "the posting asks for X, and I have never missed an audit leading it" is praise, and claims X.
+    plain = [denial for denial in denials if not PRAISE.search(" ".join(after[denial.end():].split()[:4]))]
+    return bool(plain) and ATTRIBUTED.search(before) is not None
 
 
 def _disguises(text: str, label: str) -> list[str]:
@@ -527,7 +618,8 @@ def _disguises(text: str, label: str) -> list[str]:
     mixed = []
     for word in re.findall(r"[^\W\d_]+", text):
         scripts = {unicodedata.name(ch, "?").split(" ")[0] for ch in word}
-        if "LATIN" in scripts and len(scripts) > 1 and word not in mixed and not _lookalike(unicodedata.normalize("NFKC", word)):
+        if ("LATIN" in scripts and len(scripts) > 1 and word not in mixed and not UNIT.fullmatch(word)
+                and not _lookalike(unicodedata.normalize("NFKC", word))):
             mixed.append(word)
     if lookalike:
         errors.append(f"{label} spells words in look-alike letters from another alphabet, which hides them from the checks "
@@ -648,7 +740,9 @@ def check_text(
     body = "\n".join(line for line in text.splitlines() if line.strip() != contact_line)
     # The company and role are the one thing that's meant to change.
     body = _set_aside(_set_aside(body, company), title)
-    body = DATE_LINE.sub(" ", body)
+    if kind == "letter":
+        # Only a letter is dated. A date alone on a line of a resume is a claim, and its numbers are checked.
+        body = DATE_LINE.sub(" ", body)
     # A confidential term or a disclaimed claim has been dealt with above, so its own words aren't judged again.
     for pattern, _where in blocked:
         body = re.sub(pattern, " ", body, flags=re.I)
@@ -667,14 +761,15 @@ def check_text(
 
     # Numbers stay as measured. Your phone number and zip code measure nothing.
     vocab = _vocabulary(sources)
-    errors += _number_errors(label, body, without_contact(sources), vocab, "not in the fact bank")
+    errors += _number_errors(label, body, without_contact(sources), "not in the fact bank")
 
     # Specialist terms need a source. A resume can't name a skill you've never claimed, and a title
     # from a job board is no source: on a resume only the exact title was set aside above. A letter
     # names the role in its own words, and its terms only ever warn.
     # A placeholder is reported above, so "[X]" isn't named again as a term. One line at a time, as above, so a
     # bracket left open on one line and closed on a later one can't hide the words between from this check.
-    plain = "\n".join(_clean_markup(PLACEHOLDER.sub(" ", row).strip()) for row in body.splitlines())
+    # A number is judged above with its scale, so the K of 1.4K isn't read again as a term of its own.
+    plain = "\n".join(_clean_markup(NUMBER.sub(" ", PLACEHOLDER.sub(" ", row)).strip()) for row in body.splitlines())
     allowed = _vocabulary(company if kind == "resume" else f"{company} {title}")
     allowed |= {w.lower() for w in guard.get("ordinary_words", [])}
     fix = ". Remove them, or add them to profile/approved-terms.txt if they're true."
@@ -744,7 +839,7 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
             errors.append(f"Brief has an unfilled placeholder: {placeholder.group(0)!r}")
 
     known = without_contact(sources) + "\n" + posting
-    errors += _number_errors("Brief", body, known, _vocabulary(known), "that aren't in the fact bank or the posting")
+    errors += _number_errors("Brief", body, known, "that aren't in the fact bank or the posting")
 
     # A term from the posting alone is a requirement, not something you can claim.
     plain = "\n".join(_clean_markup(line) for line in body.splitlines())

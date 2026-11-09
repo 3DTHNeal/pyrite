@@ -199,6 +199,7 @@ forbidden = ['Bluebird', 'Falconer', '\bhives?\b', 'SkyLift']
 unsupported = [
   'ISO 26262', 'safety[- ]certifi\w+',
   '(replay|reproduc)\w*[^.]{0,40}field failures',
+  'field failures[^.]{0,40}(replay|reproduc)',
   '\d+(\.\d+)?\s*%[^.]{0,60}(uptime|field defect)',
   '(uptime|field defect)[^.]{0,60}\d+(\.\d+)?\s*%',
 ]
