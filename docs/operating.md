@@ -72,6 +72,8 @@ It lists every profile file that's still the example's, the example's settings l
 
 With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder`, `finish` and `serve`, then refuse to run, so nothing real ends up inside this repository. `pyrite demo` is the way to look around without a workspace.
 
+Where you'll work and which roles you want can be written in plain words, with no regular expressions: `places = ["Springfield, IL", "Oak Park"]` under `[location]`, and `titles = ["data engineer", "platform engineer"]` under each `[[track]]`. Each is matched as whole words in any case, with any spacing, commas or hyphens between them, so `Springfield, IL` matches "springfield il" but not "Springfield, MO", and `data engineer` matches "Senior Data Engineer" but not "Data Engineering Manager". They work beside the `local` and `title` patterns, so add a pattern only for what plain words can't say, such as a whole state. A blank workspace starts with `places` and shows `titles` in its example track.
+
 If you're not in the US, two settings in `search.toml` matter early: `remote_home` and `remote_elsewhere` under `[location]`, which replace the built-in idea of which remote roles are open to you, and `paper = "a4"` under `[documents]`.
 
 ### Protecting a public fork

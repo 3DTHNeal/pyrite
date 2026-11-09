@@ -171,11 +171,34 @@ def _any(patterns, text, flags=re.I):
     return any(re.search(p, text, flags) for p in patterns)
 
 
+def plain_pattern(phrase: str) -> str:
+    """A pattern for words written plainly, such as "Springfield, IL" or "data engineer": each word whole, in any case,
+    with any spaces, commas or hyphens between them. So "springfield il" and "Springfield,IL" match the first, and
+    "Big Data Engineer" the second, but "Springfielder" and "data engineering" don't."""
+    words = re.findall(r"[^\s,\-–]+", str(phrase))
+    return r"(?<!\w)" + r"[\s,\-–]+".join(re.escape(word) for word in words) + r"(?!\w)" if words else r"(?!)"
+
+
+def _plain(value) -> list[str]:
+    """A list of plain phrases from search.toml, tolerating one phrase written without the brackets."""
+    return [value] if isinstance(value, str) else [str(item) for item in value or []]
+
+
+def local_patterns(loc_cfg: dict) -> list[str]:
+    """[location]'s patterns under `local`, and its plain place names under `places`, as patterns."""
+    return list(loc_cfg.get("local", [])) + [plain_pattern(place) for place in _plain(loc_cfg.get("places"))]
+
+
+def title_patterns(track: dict) -> list[str]:
+    """A [[track]]'s patterns under `title`, and its plain job-title words under `titles`, as patterns."""
+    return list(track.get("title", [])) + [plain_pattern(words) for words in _plain(track.get("titles"))]
+
+
 def classify_location(location: str, workplace: str, cfg: dict) -> str:
     """Return local, remote, unknown or out."""
     loc_cfg = cfg["location"]
     text = location or ""
-    if _any(loc_cfg["local"], text) or _any(loc_cfg.get("local_exact", []), text, flags=0):
+    if _any(local_patterns(loc_cfg), text) or _any(loc_cfg.get("local_exact", []), text, flags=0):
         return "local"
 
     is_remote = workplace.lower() == "remote" or bool(REMOTE.search(text))
@@ -216,7 +239,7 @@ def match_track(title: str, cfg: dict, job: dict | None = None) -> tuple[str, in
     mid = _any([rf"\b{p}\b\.?" for p in scoring["level_mid"]], title)
     level_points = 10 if top else 5 if mid else 0
     for track in cfg.get("track", []):  # A blank search.toml has none yet.
-        if _any(track["title"], title):
+        if _any(title_patterns(track), title):
             if track.get("needs_level") and not (top or mid):
                 continue
             if track.get("industries") and not (job and _in_any_industry(track["industries"], {**job, "title": title}, cfg)):
