@@ -26,6 +26,10 @@ from urllib.parse import urlparse
 from .sources import strip_invisible
 from .store import ACTIVE, REPLY_DETECTED, log_event, now
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 CREDENTIALS_PATH = Path.home() / ".config" / "pyrite" / "imap.env"
 SOURCE_KEY = "inbox:imap"
 DEFAULT_HOST = "imap.gmail.com"
@@ -126,7 +130,8 @@ def _privacy_fix(path: Path, info: os.stat_result) -> str:
     # Windows has no meaningful mode bits, so read the access list. Anyone unrecognized counts as other users.
     fix = f'icacls "{path}" /inheritance:r /grant:r "{getpass.getuser()}:F"'
     try:
-        listing = subprocess.run(["icacls", str(path)], capture_output=True, text=True, errors="replace", check=True).stdout
+        listing = subprocess.run(["icacls", str(path)], capture_output=True, text=True, errors="replace", check=True,
+                                 creationflags=NO_WINDOW).stdout
     except (OSError, subprocess.CalledProcessError):
         return fix
     allowed = {"nt authority\\system", "builtin\\administrators", "owner rights", getpass.getuser().lower()}

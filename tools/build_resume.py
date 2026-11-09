@@ -57,6 +57,10 @@ from docx.shared import Inches, Pt, RGBColor
 
 from pyrite.checks import DRAFTER_VERSION, _pages
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 FONT = "Arial"  # LibreOffice renders this with the metric-compatible Liberation Sans
 NAVY = RGBColor(0x1F, 0x3A, 0x5F)
 BLACK = RGBColor(0, 0, 0)
@@ -284,7 +288,8 @@ def pdf_text(pdf: Path) -> str | None:
     """The PDF's text as a parser would read it, or None when poppler's pdftotext isn't installed."""
     if not shutil.which("pdftotext"):
         return None
-    return subprocess.run(["pdftotext", "-enc", "UTF-8", str(pdf), "-"], capture_output=True, check=True, timeout=60).stdout.decode("utf-8")
+    return subprocess.run(["pdftotext", "-enc", "UTF-8", str(pdf), "-"], capture_output=True, check=True, timeout=60,
+                          creationflags=NO_WINDOW).stdout.decode("utf-8")
 
 
 def _squash(text: str) -> str:
@@ -352,6 +357,7 @@ def export_pdfs(docxs: list[Path]):
                 check=True,
                 stdout=subprocess.DEVNULL,
                 timeout=timeout,
+                creationflags=NO_WINDOW,
             )
         return
     # 17 is Word's PDF format, and 0 closes without saving. Paths arrive in an environment variable, one per line,
@@ -371,7 +377,7 @@ def export_pdfs(docxs: list[Path]):
     """
     env = {**os.environ, "WR_DOCX": "\n".join(str(docx) for docx in docxs)}
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True, env=env, stdout=subprocess.DEVNULL,
-                   timeout=timeout)
+                   timeout=timeout, creationflags=NO_WINDOW)
 
 
 def main():

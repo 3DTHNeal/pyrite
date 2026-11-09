@@ -15,6 +15,10 @@ from pathlib import Path
 
 from .store import ROOT, SENT_FOLDER, sent_copies
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # A date alone on its line is a letter's date, which may be any day. A date inside a sentence is a claim like any other.
 # Written any common way: November 15, 2026, Nov. 15th, 2026, 15 November 2026 or 2026-11-15.
 _MONTH = (r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?"
@@ -407,7 +411,7 @@ def _vocabulary(text: str) -> set[str]:
 
 def _pages(pdf: Path) -> int | None:
     try:
-        out = subprocess.run(["pdfinfo", str(pdf)], capture_output=True, text=True, check=True).stdout
+        out = subprocess.run(["pdfinfo", str(pdf)], capture_output=True, text=True, check=True, creationflags=NO_WINDOW).stdout
     except (OSError, subprocess.CalledProcessError):
         # Without poppler, count page objects. A PDF that hides them in compressed streams reads as unknown, not as zero pages.
         try:

@@ -24,6 +24,10 @@ from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_c
 # The tests and anything else that read these from here still find them.
 from .workspace import INIT_EXAMPLE, INIT_EXAMPLE_HOSTS, INIT_EXAMPLE_NAME, INIT_SKIP  # noqa: F401
 
+# The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
+# of its own unless told not to.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 BUILD = CODE_ROOT / "tools" / "build_resume.py"
 BUILD_TIMEOUT_SECONDS = 300
 # With no workspace set, these would write into the fictional example inside this repository.
@@ -318,7 +322,8 @@ def _build(source: Path, name: str, author: str, paper: str = "letter", letter: 
     if letter:
         cmd += ["--letter-source", str(letter[0]), "--letter-name", letter[1]]
     # A stuck PDF export, such as Word waiting on a dialog nobody can see, must not hang a run for good.
-    return subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=ROOT, timeout=BUILD_TIMEOUT_SECONDS).stdout.strip()
+    return subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=ROOT, timeout=BUILD_TIMEOUT_SECONDS,
+                          creationflags=NO_WINDOW).stdout.strip()
 
 
 def _collect_files(folder: Path) -> list[str]:

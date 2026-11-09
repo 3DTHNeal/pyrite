@@ -339,6 +339,8 @@ class Builder(unittest.TestCase):
             self.build.export_pdfs([self.folder / "R.docx", self.folder / "L.docx"])
         run.assert_called_once()
         self.assertEqual(run.call_args.args[0][0], "powershell")
+        # Started from the dashboard, which has no console, PowerShell would otherwise open a window for as long as Word takes.
+        self.assertEqual(run.call_args.kwargs["creationflags"], self.build.NO_WINDOW)
         self.assertEqual(run.call_args.kwargs["env"]["WR_DOCX"].split("\n"),
                          [str((self.folder / "R.docx").resolve()), str((self.folder / "L.docx").resolve())])
 
