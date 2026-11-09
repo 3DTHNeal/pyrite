@@ -12,8 +12,8 @@ import sys
 import textwrap
 import tomllib
 import unicodedata
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -514,6 +514,95 @@ def _run_task(kind: str) -> None:
         print(tasks.result(conn, task_id))
     if not ok:
         sys.exit(1)
+
+
+def _gaps_words(found: dict, shown: list[dict], least: int, every: bool) -> None:
+    from . import gaps
+
+    open_ = gaps.questions(found, 1)
+    if not shown:
+        print(f"Nothing comes up as a gap in {least} or more applications' notes yet." if found["applications"]
+              else "No application has notes yet, so there are no gaps to count.")
+    else:
+        what = "gaps" if every else f"requirement{'s keep' if len(shown) > 1 else ' keeps'} coming up as gaps"
+        print(f"{len(shown)} {what}, from {_plural(found['applications'], 'application')}' notes:")
+    for group in shown:
+        silent = group["kinds"].get("silent", 0)
+        answer = group["answer"] or {}
+        state = {"answered": f"answered {str(answer.get('at', ''))[:10]}: {answer.get('answer')}",
+                 "unsupported": "already under Unsupported", "known": "already settled in your record"}.get(group["state"], "")
+        more = [_plural(group["count"], "application")] + ([f"the record is silent in {silent}"] if silent else []) + ([state] if state else [])
+        print(f"\n  {group['id']}  {group['label']}  ({', '.join(more)})")
+        titles = list(dict.fromkeys(m["title"] for m in group["members"]))
+        print(f"      {'; '.join(titles[:3])}{f'; and {len(titles) - 3} more' if len(titles) > 3 else ''}")
+        if group.get("hint"):
+            print(f"      Your facts may already cover it: {group['hint']}")
+        if group.get("raised_again"):
+            print("      Raised again by notes written after your answer.")
+    if not every and len(open_) > len(shown):
+        print(f"\n{_plural(len(open_) - len(shown), 'more gap')} came up in fewer applications: `pyrite gaps --min 1` lists them.")
+    if shown:
+        print('\nAnswer one: pyrite gaps answer <name> --yes "what you did" --section "Section", or --no, or --dismiss.')
+
+
+@contextmanager
+def _no_db() -> Iterator[None]:
+    yield None
+
+
+def cmd_gaps(args):
+    """The gaps that keep coming up in the notes, and answering them. Only an answer changes the fact bank."""
+    from . import confirm, gaps, profile
+
+    if args.action is None and args.id:
+        sys.exit('To answer a gap: pyrite gaps answer <name> --yes "what you did" --section "Section", or --no, or --dismiss.')
+    if args.action is None:
+        # Reading needs no database: the jobs in one only say which applications were sent.
+        with closing(_open_db()) if store.DB_PATH.exists() else _no_db() as conn:
+            found = gaps.view(conn)
+        least = 1 if args.all else args.min
+        shown = found["groups"] if args.all else gaps.questions(found, least)
+        if _as_json(args):
+            _print_json({**found, "groups": shown})
+        else:
+            _gaps_words(found, shown, least, args.all)
+        return
+    if store.IS_EXAMPLE:
+        sys.exit("This is the fictional example, so its gaps can't be answered. Point PYRITE_HOME at your own workspace.")
+    if not args.id:
+        sys.exit("Name the gap: `pyrite gaps` lists them with their names.")
+    with closing(_open_db()) as conn:
+        found = gaps.view(conn)
+        try:
+            match = gaps.find(found, args.id)
+            if args.action == "forget":
+                print(f"“{match['label']}” will be asked again. Lines an answer added to facts.md stay until you change them."
+                      if gaps.forget(args.id) else f"“{match['label']}” wasn't answered, so it's asked already.")
+                return
+            if args.dismiss:
+                gaps.dismiss(found, args.id)
+                print(f"Stopped asking about “{match['label']}”. `pyrite gaps forget {args.id}` asks it again.")
+                return
+            answer = "yes" if args.yes is not None else "no" if args.no is not None else None
+            if answer is None:
+                sys.exit('Answer with --yes "what you did" --section "Section", with --no, or with --dismiss.')
+            text = args.yes if answer == "yes" else (args.no or match["label"])
+            before = profile.read("facts")
+            after = gaps.apply(before, answer, text, args.section or "")
+        except ValueError as err:
+            sys.exit(str(err))
+        if confirm.loosening("facts", before, after):
+            sys.exit("That change would take something off a list of what drafts may not say, which needs a code: "
+                     "make it on the dashboard's Profile tab.")
+        profile.write({"facts": after}, profile.versions(), f"Gaps to answer: {match['label']}", "gaps")
+        kept = gaps.record(conn, found, [{"id": args.id, "answer": answer, "text": text}], before, profile.read("facts"))
+        where = "under Unsupported" if answer == "no" else f"under {args.section}"
+        print(f"Added “{gaps._one_line(text, 'The answer')}” {where} in facts.md. The file as it was is in the Profile tab's History.")
+        flagged = kept[0].get("flagged", []) if kept else []
+        if flagged:
+            one = len(flagged) == 1
+            print(f"{_plural(len(flagged), 'draft')} you haven't sent {'lists' if one else 'list'} this gap, so the dashboard "
+                  f"flags {'it' if one else 'them'} for rework.")
 
 
 def cmd_sweep(args):
@@ -1060,6 +1149,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("phrases", nargs="*", help="skills to look up, as postings write them")
     p.add_argument("--research", action="store_true", help="look up the unknown skills in the postings waiting to be judged")
     p.set_defaults(func=cmd_skills)
+
+    p = sub.add_parser("gaps", help="list the gaps that keep coming up in your applications' notes, or answer one",
+                       formatter_class=argparse.RawDescriptionHelpFormatter, epilog=textwrap.dedent("""\
+                           examples:
+                             pyrite gaps
+                             pyrite gaps answer vendor-management --yes "Chose and ran 3 test-lab vendors" --section Leadership
+                             pyrite gaps answer kubernetes --no
+                             pyrite gaps answer travel --dismiss
+                             pyrite gaps forget kubernetes"""))
+    p.add_argument("action", nargs="?", choices=("answer", "forget"), help="answer a gap, or ask about one again")
+    p.add_argument("id", nargs="?", help="the gap's name, as `pyrite gaps` lists it")
+    p.add_argument("--min", type=_whole_number(1), default=2, help="list gaps raised by at least this many applications (2)")
+    p.add_argument("--all", action="store_true", help="list every gap, answered ones and ones raised once included")
+    said = p.add_mutually_exclusive_group()
+    said.add_argument("--yes", metavar="FACT", help="you've done it: the fact to add, in words a draft could use")
+    said.add_argument("--no", nargs="?", const="", metavar="TEXT", help="you haven't: added under Unsupported, in these words or the gap's")
+    said.add_argument("--dismiss", action="store_true", help="it isn't a fact to settle, such as whether you'd travel")
+    p.add_argument("--section", help="with --yes: the section of facts.md it goes in, made if it isn't there")
+    _json_flag(p)
+    p.set_defaults(func=cmd_gaps)
 
     p = sub.add_parser("usage", help="show what the Claude runs started from here have used")
     _json_flag(p)

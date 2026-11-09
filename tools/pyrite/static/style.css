@@ -135,7 +135,7 @@ main > * { min-width: 0; }
 .order-list li { display: flex; align-items: flex-start; gap: 8px; }
 .order-list .order { flex: 1; }
 .order-list .dismiss { flex: none; font-size: 12px; padding: 4px 8px; margin-top: 6px; }
-.kind-follow-up, .kind-gone-quiet, .kind-possible-reply, .kind-posting-down { --tone: var(--warn); }
+.kind-follow-up, .kind-gone-quiet, .kind-possible-reply, .kind-posting-down, .kind-rework { --tone: var(--warn); }
 .funnel-note { font-size: 12px; }
 .kind-send { --tone: var(--good); }
 .kind-check-again, .kind-closing-soon { --tone: var(--bad); }
@@ -143,7 +143,7 @@ main > * { min-width: 0; }
 .stale-report { color: var(--ink-3); }
 .stale-report summary { cursor: pointer; font-size: 13px; }
 .stale-report p { margin-top: 6px; color: var(--ink-2); }
-.kind-new-listing, .kind-reach-out { --tone: var(--info); }
+.kind-new-listing, .kind-reach-out, .kind-gaps-to-answer { --tone: var(--info); }
 .empty { color: var(--ink-3); padding: 8px 2px; }
 /* An empty list or table shows the icon of what would be there, faded, over a line saying why it's empty. */
 .empty-state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px 12px; color: var(--ink-3); text-align: center; font-size: 13px; }
@@ -467,6 +467,13 @@ textarea { width: 100%; resize: vertical; }
 .profile-choice { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
 .profile-choice:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .profile-sub { font-size: 14px; font-weight: 650; margin: 4px 0 0; }
+/* Gaps to answer: one card per requirement that keeps coming up, with what each application's notes said. */
+.gap-card .row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.gap-choices { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.gap-choice { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; cursor: pointer; }
+.gap-notes summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.gap-notes ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.gap-notes p { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
 .paper-head { display: grid; gap: 2px; background: #fffffe; color: #111; border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; font-size: 12px; overflow-wrap: anywhere; }
 .paper-head b { font-size: 18px; }
 .paper-lines { display: grid; gap: 2px; background: #fffffe; color: #111; border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; font-size: 12px; overflow-wrap: anywhere; }

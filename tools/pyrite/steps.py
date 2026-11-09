@@ -10,12 +10,14 @@ right: a draft based on a file that has changed since is refused, as a save woul
 """
 import difflib
 import re
+import sqlite3
 import tomllib
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, factsdoc, profile, store, tomledit
+from . import checks, confirm, factsdoc, gaps, profile, store, tomledit
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -258,7 +260,17 @@ def view() -> dict:
         "master_blocks": {"resume": master_blocks(texts["resume"], "resume"),
                           "letter": master_blocks(texts["letter"], "letter")},
         "wording": _wording(texts["run_notes"]),
+        "gaps": _gaps_view(),
     }
+
+
+def _gaps_view() -> dict:
+    """The gaps that keep coming up, with which job each application is, so the section can say which are sent."""
+    try:
+        with closing(store.connect()) as conn:
+            return gaps.view(conn)
+    except sqlite3.Error:  # Unusable, a read-only database, is one too.
+        return gaps.view()
 
 
 # ---------- drafting ----------
@@ -1075,6 +1087,21 @@ def _fact_text(raw) -> str:
     return re.sub(r"^[-*]\s+", "", text).strip()
 
 
+def _fact_notes(texts: dict, cfg: dict, facts: list[str]) -> list[str]:
+    """New facts that name something on Never mention or Haven't done, judged against the fact bank as it was read,
+    so it's pointed out before they're added."""
+    notes = []
+    guard = checks.with_listed(cfg.get("guard", {}), cfg, _reader(texts))
+    for fact in facts:
+        for hit in checks.explain(fact, guard)["hits"]:
+            words = checks._matchable(fact)[hit["start"]:hit["end"]]
+            if hit["kind"] == "never":
+                notes.append(f"“{fact}” names “{words}”, which is on Never mention, so any draft that uses it will be blocked.")
+            elif hit["kind"] == "claim":
+                notes.append(f"“{fact}” claims “{words}”, which is on Haven't done. Take it off that list first if it's now true.")
+    return notes
+
+
 def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -1168,15 +1195,7 @@ def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
         out["run_notes"] = _add_wording(texts["run_notes"], rules)
         count += len(rules)
 
-    # As the fact bank was read, so a fact that names something on Do not use is pointed out before it's added.
-    guard = checks.with_listed(cfg.get("guard", {}), cfg, _reader(texts))
-    for fact in touched:
-        for hit in checks.explain(fact, guard)["hits"]:
-            words = checks._matchable(fact)[hit["start"]:hit["end"]]
-            if hit["kind"] == "never":
-                notes.append(f"“{fact}” names “{words}”, which is on Never mention, so any draft that uses it will be blocked.")
-            elif hit["kind"] == "claim":
-                notes.append(f"“{fact}” claims “{words}”, which is on Haven't done. Take it off that list first if it's now true.")
+    notes += _fact_notes(texts, cfg, touched)
     builder = edits.get("builder")
     return Draft(out, count, notes, {
         "builder": compose(builder) if isinstance(builder, dict) else None,
@@ -1288,5 +1307,41 @@ def _masters(texts: dict, cfg: dict, edits: dict) -> Draft:
     return Draft(out, count, [], preview)
 
 
+# ---------- Gaps to answer ----------
+
+def _gap_answers(texts: dict, cfg: dict, edits: dict) -> Draft:
+    """Answers to the gaps that keep coming up, as lines in facts.md: a yes as a fact under the section you chose, and
+    a no as a line under Unsupported. Leaving a question for later, or saying it doesn't apply, changes no file."""
+    found = gaps.view()
+    facts = texts["facts"]
+    added: list[str] = []
+    count = 0
+    seen: set[str] = set()
+    for raw in _list(edits.get("answers"), "Answers"):
+        if not isinstance(raw, dict):
+            raise ValueError("An answer should name its gap and say what you'd answer.")
+        match = gaps.find(found, str(raw.get("id") or ""))
+        answer = raw.get("answer")
+        if answer not in ("yes", "no"):
+            raise ValueError(f"Answer “{match['label']}” with yes or no.")
+        if match["id"] in seen:
+            raise ValueError(f"“{match['label']}” has two answers. Keep one.")
+        seen.add(match["id"])
+        text = gaps._one_line(raw.get("text"), "The answer")
+        if answer == "no" and not text:
+            text = match["label"]
+        if answer == "yes" and not text:
+            continue  # Still being written: nothing to add yet.
+        facts = gaps.apply(facts, answer, text, _one_line(raw.get("section"), "The section"))
+        if answer == "yes":
+            added.append(text)
+        count += 1
+    notes = _fact_notes(texts, cfg, added)
+    if count:
+        notes.append("The drafts you haven't sent that list these gaps will be flagged on the to-do list, since they "
+                     "were written without your answer.")
+    return Draft({**texts, "facts": facts}, count, notes, {})
+
+
 DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
-            "achievements": _achievements, "masters": _masters}
+            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers}

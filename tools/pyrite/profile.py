@@ -13,7 +13,7 @@ import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import doctor, factsdoc, score, settings, store
+from . import doctor, factsdoc, gaps, score, settings, store
 
 # What may be written, by key. The paths are fixed here and never come from a request.
 FILES = {
@@ -64,6 +64,12 @@ STEPS: tuple[dict, ...] = (
      "meanwhile": "Until it's built: approved-terms.txt on the Facts tab.",
      "why": "Specialist words a draft may use. Pyrite blocks unfamiliar ones until you say they're true of you.",
      "writes": ("approved-terms.txt",)},
+    {"id": "gaps", "group": "About you", "label": "Gaps to answer", "required": False, "fallback": None,
+     "files": ("facts",),
+     "meanwhile": "Until it's built: run `pyrite gaps` in a terminal.",
+     "why": "Requirements your drafts keep calling gaps. You may have done some of them: a yes adds a fact, and a no "
+            "goes under Unsupported, so drafts stop guessing either way.",
+     "writes": ("facts.md › a section of facts, or Unsupported", "data/gap-answers.json › which questions you've answered")},
     {"id": "masters", "group": "About you", "label": "Master resume", "required": True, "fallback": None,
      "files": ("resume", "letter"),
      "meanwhile": "Until it's built: edit your master resume and letter in any text editor.",
@@ -206,7 +212,15 @@ def _watched(cfg: dict) -> int:
     return sum(len(board) for board in cfg.get("watch", {}).values() if isinstance(board, dict))
 
 
-def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict]) -> dict[str, tuple[bool, str]]:
+def _questions(found: dict) -> str:
+    asked = gaps.questions(found)
+    if asked:
+        return f"{_plural(len(asked), 'question')} from {_plural(found['applications'], 'application')}"
+    return "Nothing keeps coming up" if found["applications"] else "No applications yet"
+
+
+def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict],
+               found: dict | None = None) -> dict[str, tuple[bool, str]]:
     """Each section's one-line summary, and whether it's set at all."""
     name = str(cfg.get("candidate", {}).get("name", "")).strip()
     contact = factsdoc.Doc(texts["facts"]).contact()
@@ -239,6 +253,7 @@ def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict]
         "achievements": (facts > 0, f"{_plural(facts, 'fact')} in {_plural(themes, 'section')}" if facts else "No facts yet"),
         "offlimits": (bool(never or not_done), f"{never} never mentioned, {not_done} not done"),
         "skills": (terms > 0, f"{_plural(terms, 'approved term')}" if terms else "No approved terms"),
+        "gaps": (True, _questions(found or gaps.view())),
         "masters": (has_master, master if has_master else "No master resume yet"),
         "roles": (bool(tracks), f"{_plural(len(tracks), 'role type')}: {', '.join(tracks[:3])}{'…' if len(tracks) > 3 else ''}"
                   if tracks else "No role types yet"),
@@ -252,7 +267,7 @@ def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict]
     }
 
 
-def needs(cfg: dict | None, unread: list[int]) -> list[dict]:
+def needs(cfg: dict | None, unread: list[int], asked: int = 0) -> list[dict]:
     """What the Profile tab asks you to look at, most important first: what setup still needs and anything the tab
     couldn't read. Each names the section that fixes it, when one does."""
     found: list[dict] = []
@@ -265,14 +280,18 @@ def needs(cfg: dict | None, unread: list[int]) -> list[dict]:
                                                    f"{'reads' if len(unread) == 1 else 'read'} as neither an employer nor a labeled line.",
                       "detail": "Drafts can still use them. Work history shows them as plain text until they're in that form.",
                       "step": "history"})
+    if asked:
+        found.append({"severity": "info", "title": f"{_plural(asked, 'requirement')} {'keeps' if asked == 1 else 'keep'} coming up as gaps in your drafts.",
+                      "detail": "You may have done some of them. Answer them so drafts stop guessing.", "step": "gaps"})
     rank = {"bad": 0, "warn": 1, "info": 2}
     return sorted(found, key=lambda item: rank.get(item["severity"], 1))
 
 
 def hub(texts: dict[str, str], cfg: dict | None, employers, sections: list[dict], unread: list[int]) -> dict:
     """Each section with its state and summary, and the list of what needs you."""
-    waiting = needs(cfg, unread)
-    summaries = _summaries(texts, cfg or {}, employers, sections)
+    found = gaps.view()
+    waiting = needs(cfg, unread, len(gaps.questions(found)))
+    summaries = _summaries(texts, cfg or {}, employers, sections, found)
     changed: dict[str, str] = {}
     for entry in history(limit=10_000):
         changed.setdefault(str(entry.get("step") or ""), entry["at"])

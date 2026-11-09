@@ -17,7 +17,7 @@ How to set Pyrite up and use it day to day. The [project README](../README.md) s
 | [Finding and ranking postings](prospects.md) | Watching companies, going through prospects, new listings and ghost jobs, pay and rarity, preferred cities and industries, and the Industries tab |
 | [The assay](assay.md) | What the fact check blocks and warns about, what it can miss, and refreshing a resume |
 | [Applying and after](applying.md) | Deadlines, filling a Workday form, what **I applied** does, reaching out, postings that come down, and interview prep |
-| [Your profile and facts](profile.md) | The Profile and Facts tabs, History and **Put back**, and the code a loosening change asks for |
+| [Your profile and facts](profile.md) | The Profile and Facts tabs, History and **Put back**, the gaps your drafts keep raising, and the code a loosening change asks for |
 
 ## Running by itself
 
@@ -25,6 +25,6 @@ How to set Pyrite up and use it day to day. The [project README](../README.md) s
 |---|---|
 | [Scheduling and Claude runs](schedule.md) | The morning pan and the daily run, how the daily run is locked down, and what Claude usage counts |
 | [Reply detection](mail.md) | Reading Gmail through the connector or IMAP, what counts as a reply, and scam warnings |
-| [Common commands](commands.md) | `sweep`, `run`, `discover`, `sources`, `rescore` and `queue`, and their JSON output |
+| [Common commands](commands.md) | `sweep`, `run`, `discover`, `sources`, `rescore`, `queue` and `gaps`, and their JSON output |
 
 [The resume playbook](resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.

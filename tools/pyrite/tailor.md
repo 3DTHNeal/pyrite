@@ -60,6 +60,8 @@ Don't name a skill, tool or product that `profile/facts.md`, `profile/approved-t
 
 Follow the model notes: the posting link, the role in brief, a table mapping what the company wants to the evidence and its strength, every gap to prepare for, including any that rest only on the record being silent (mark those so the candidate can correct them), and claims to word carefully in an interview. Be candid: this file is for the candidate alone. Mention anything odd in the posting.
 
+Put the gaps in a numbered list under `## Gaps to prepare for`, one requirement per item. Open each with that requirement in bold, in a few words the way postings name it (`1. **Hands-on C++.**`), so the same gap reads the same way across applications: Pyrite counts how often each one comes up and asks the candidate about the ones that recur. Write *Record silent* in a gap that rests only on the record saying nothing.
+
 The dashboard reads two kinds of line from the notes and shows them on the job: a `- **Deadline:**` line with the date written out in full (November 8, 2026) when the posting gives one, and one `- **Check before applying:**` line for each thing that could rule the application out or needs a decision first, such as residency, relocation, a clearance or a core requirement the record doesn't meet. Keep each of those to one sentence. An ask for more years of a skill than it has existed, which "How old the skills it asks for are" names when there is one, isn't a requirement the record doesn't meet: nobody does. Note it once under the gaps as an ask nobody could meet, with the candidate's own time on the skill against its age, and leave it off the **Check before applying:** lines.
 
 ## When you're done
