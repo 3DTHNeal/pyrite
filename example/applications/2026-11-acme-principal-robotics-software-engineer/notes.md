@@ -18,6 +18,7 @@
 
 1. **Safety certification.** The record has no ISO 26262 work. The letter says so plainly.
 2. **Team size.** Largest team managed is 7. The posting doesn't state a size, so ask.
+3. **Rust for embedded targets.** *Record silent:* the fact bank doesn't say whether you've written Rust. If you have, add it to `profile/facts.md` and the resume can say so.
 
 ## Claims to word carefully
 

@@ -16,6 +16,7 @@ import time
 import tomllib
 import traceback
 from collections.abc import Sequence
+from contextlib import closing
 from datetime import date, datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +31,7 @@ from . import (
     doctor,
     facts,
     fill,
+    gaps,
     launch,
     mail,
     market,
@@ -424,9 +426,26 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
         orders.append({"rank": 3, "kind": "New listing", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}",
                        "detail": joined(f"Posted {posted}, never reposted. Score {job['score']}.", _deadline_text(job), _history_text(job))})
+    for job in jobs:
+        if job.get("rework"):
+            orders.append({"rank": 2, "kind": "Rework", "job_id": job["id"], "action": "gap_seen",
+                           "text": f"{job['company']}: {job['title']}",
+                           "detail": f"{job['rework']} Refresh resume or Tailor this one first, or Got it to keep it as it is."})
     if reach and reach_out:
         orders.append(_reach_out_order(reach))
     return sorted(orders, key=lambda o: o["rank"])
+
+
+def _gaps_order(found: dict) -> list[dict]:
+    """One to-do item for the gaps that keep coming up, once one has come up in gaps.ORDER_FROM applications."""
+    asked = gaps.questions(found)
+    if not asked or asked[0]["count"] < gaps.ORDER_FROM:
+        return []
+    top = ", ".join(f"“{g['label']}” in {g['count']}" for g in asked[:2])
+    many = len(asked)
+    return [{"rank": 3, "kind": "Gaps to answer", "job_id": None, "tab": "profile/gaps",
+             "text": f"{many} requirement{'s keep' if many > 1 else ' keeps'} coming up as gaps in your drafts",
+             "detail": f"{top}. You may have done some of them: answer them so drafts stop guessing."}]
 
 
 def _days(count: int) -> str:
@@ -455,11 +474,13 @@ def build_state(conn, cfg) -> dict:
     limit = cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY)
     seen = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (SEEN,))}
     reached = store.outreach(conn)
+    rework = gaps.rework(conn, jobs, ROOT)
     for job in jobs:
         _attach_runs(job, replies, refreshes, preps, tries, scams)
         _attach_history(job, history, limit)
         job["seen"] = job["id"] in seen
         job["reached_out"] = job["id"] in reached
+        job["rework"] = rework.get(job["id"])
 
     applied =[j for j in jobs if j["applied_at"]]
     heard = [j for j in applied if j["response_at"]]
@@ -520,7 +541,8 @@ def build_state(conn, cfg) -> dict:
         "funnel": funnel,
         "closed": closed,
         "orders": _setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg),
-                                               bool(cfg.get("dashboard", {}).get("reach_out", True))),
+                                               bool(cfg.get("dashboard", {}).get("reach_out", True)))
+                  + _gaps_order(gaps.view(conn, ROOT)),
         "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),
@@ -654,6 +676,8 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         if before is None:
             raise ValueError("Only a job you passed on before sending it can be put back. Use Reopen instead.")
         set_status(conn, job_id, before, "Pass undone", follow_up)
+    elif action == "gap_seen":
+        log_event(conn, job_id, gaps.SEEN, "You kept this draft as it is after answering a gap it lists.")
     elif action == "seen":
         if not conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = ?", (job_id, SEEN)).fetchone():
             log_event(conn, job_id, SEEN)
@@ -953,7 +977,30 @@ def _save_facts(body: dict) -> dict:
 
 
 def _save_profile(body: dict) -> dict:
-    return _write_profile(body.get("changes"), body.get("based_on"), body, str(body.get("reason") or ""), body.get("step"))
+    if body.get("step") != "gaps":
+        return _write_profile(body.get("changes"), body.get("based_on"), body, str(body.get("reason") or ""), body.get("step"))
+    # Answers to gaps also keep which questions were answered and flag the drafts that raised them. What's kept follows
+    # what the save actually added to facts.md, so the page can't record an answer the files don't hold.
+    with closing(connect()) as conn:
+        found, before = gaps.view(conn), profile.read("facts")
+        _write_profile(body.get("changes"), body.get("based_on"), body, str(body.get("reason") or ""), "gaps")
+        gaps.record(conn, found, body.get("answers"), before, profile.read("facts"))
+    return _profile_page()
+
+
+def _gap_question(body: dict) -> dict:
+    """Stop asking about a gap that doesn't apply, or ask about one again. Neither changes a file the assay reads."""
+    if store.IS_EXAMPLE:
+        raise ValueError("This is the demo, so its questions can't be answered.")
+    gap_id = str(body.get("id") or "")
+    if body.get("action") == "dismiss":
+        gaps.dismiss(gaps.view(), gap_id)
+    elif body.get("action") == "forget":
+        if not gaps.forget(gap_id):
+            raise ValueError("That question wasn't answered, so there's nothing to ask again.")
+    else:
+        raise ValueError("Say whether to dismiss the question or ask it again.")
+    return _profile_page()
 
 
 def _put_back(body: dict) -> dict:
@@ -1011,6 +1058,7 @@ PROFILE_WRITES = {
     "/api/profile": _save_profile,
     "/api/profile/put-back": _put_back,
     "/api/profile/code": _profile_code,
+    "/api/gaps": _gap_question,
 }
 
 

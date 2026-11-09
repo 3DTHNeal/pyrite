@@ -271,6 +271,18 @@ async function recheckAll(ids) {
   await refresh();
 }
 
+// A draft flagged after you answered a gap it lists: keep it as it is.
+async function gapSeen(id, button) {
+  button.disabled = true;
+  try {
+    await api(`/api/job/${id}/action`, { action: "gap_seen" });
+    await refresh();
+  } catch (err) {
+    button.disabled = false;
+    toast(err.message);
+  }
+}
+
 function renderOrders() {
   renderBriefing();
   const kindClass = (kind) => `kind kind-${kind.toLowerCase().replace(/\s+/g, "-")}`;
@@ -281,12 +293,14 @@ function renderOrders() {
   // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
   const items = state.orders.map((o) => h("li", {},
     // A job opens its drawer, and a setup item opens the tab that fixes it, where there is one.
-    h("button", { class: "order", type: "button", title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.slice(1)} tab` : null,
+    h("button", { class: "order", type: "button", title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.split("/")[0].slice(1)} tab` : null,
       onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : o.tab ? showTab(o.tab, true) : null) },
       h("span", { class: kindClass(o.kind) }, o.kind),
       h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),
     o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
-    o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null));
+    o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null,
+    o.action === "gap_seen" && !state.demo ? h("button", { class: "btn dismiss", type: "button", title: "Keeps this draft as it is and takes it off the list.",
+      onclick: (e) => gapSeen(o.job_id, e.currentTarget) }, "Got it") : null));
   const all = recheck.length > 1 ? h("li", { class: "order-batch" }, checkButton(recheck, `Check all ${recheck.length} again`)) : null;
   fill($("orders"), items.length ? [all, ...items] : emptyState("mark", "Nothing needs you right now.", "li"));
 }

@@ -24,6 +24,19 @@ The sections under **About you** that have editors so far:
 
 Lists in `search.toml` are changed an item at a time, so the other items, their lines and any comments among them stay as they were.
 
+## Gaps to answer
+
+You may have done something you never thought to put in `facts.md`, and then every draft for a job that asks for it says you haven't. Each tailored draft's `notes.md` lists its gaps, numbered, under **Gaps to prepare for**. **Gaps to answer** on the Profile tab reads those lists in every application's folder, groups the ones that name the same requirement, and asks about the ones that keep coming up, most often raised first. No AI is involved: gaps are grouped by their words, so each question shows what every application's notes said and you can see a group is one question before you answer it.
+
+- **Yes, I've done this** asks for the fact in your own words and the section of `facts.md` it goes in, made if it isn't there. Write what you did, where, and a number if there is one, since a vague yes can't become a bullet. It's added as the Achievements section adds a fact, and a fact that names something on Off limits is pointed out first.
+- **No, I haven't** adds a line under "Unsupported" in `facts.md`, in the gap's words or yours, so drafts stop guessing and say so plainly. That only tightens the check, so it needs no code. To have the assay block it as a claim too, add it on Off limits.
+- **Doesn't apply** is for a gap that's a decision rather than a fact, such as travel, or one your facts already cover. It stops asking and changes no file. **Not now** leaves it.
+- A gap raised by one application is listed only when you ask. One that's already under "Unsupported", or that every application's notes call settled, isn't asked. One whose words match a line in your facts says so, since drafts written before that line was added didn't have it.
+- Answers go through the usual save, with the diff first and History after, and a save that takes anything off "Do not use" or "Unsupported" still asks for a code. Which questions you've answered is kept in `data/gap-answers.json`, and only an answer whose line the save really added counts. **Answered** lists them, with **Ask again**, which leaves `facts.md` as it is.
+- Each draft you haven't sent whose notes list a gap you answer gets a **Rework** item on the to-do list, since it was written without your answer: use **Refresh resume** or **Tailor this one first**, or **Got it** to keep it as it is. The item goes once its resume is rewritten after the answer. Sent applications are records and aren't flagged. Once a gap comes up in three applications or more, the to-do list has a **Gaps to answer** item that opens this section.
+
+`pyrite gaps` lists the same questions in a terminal and `pyrite gaps answer` answers one, as [Common commands](commands.md) shows.
+
 ## Your facts
 
 The **Facts** tab shows `profile/facts.md` and `profile/approved-terms.txt`, the two files that say what a resume may claim. The fact bank is shown a section at a time. Click **Edit** on a section, change it and **Save**, or use **Add a section**. Sections named "Do not use" and "Unsupported" are marked **Approves nothing**, because the assay never treats them as a source.

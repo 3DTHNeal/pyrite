@@ -53,8 +53,8 @@ The colours mean the same thing everywhere, on the to-do list's tags, on cards a
 |---|---|---|
 | Brass | Something to act on | The main button, the view you're on, the count of things to do, a key number that needs you |
 | Red | It stops you or is urgent | **Blocked**, **Failed assay**, **Possible ghost**, a deadline within two days |
-| Orange | Worth acting on soon | **Follow up**, **Possible reply**, **Reposted** once, a deadline within `decide_days` |
-| Teal | Information | **New listing**, **Reach out**, **Your pick**, a preferred city or industry, **Rare near you** |
+| Orange | Worth acting on soon | **Follow up**, **Possible reply**, **Rework**, **Reposted** once, a deadline within `decide_days` |
+| Teal | Information | **New listing**, **Reach out**, **Gaps to answer**, **Your pick**, a preferred city or industry, **Rare near you** |
 | Green | Good news | **Send**, **New**, a strong or good fit |
 | Grey | For reference | A deadline still weeks away, **May be a repost** |
 
