@@ -19,7 +19,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import checks, claude_code, confirm, deadline, doctor, facts, fill, mail, market, outlook, prep, profile, refresh, settings, steps, store, tasks, workday
+from . import (
+    checks,
+    claude_code,
+    confirm,
+    deadline,
+    doctor,
+    facts,
+    fill,
+    mail,
+    market,
+    outlook,
+    prep,
+    profile,
+    refresh,
+    settings,
+    signals,
+    steps,
+    store,
+    tasks,
+    workday,
+)
 from . import score as scoring
 from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
@@ -78,7 +98,8 @@ NOT_SENT = ("new", "shortlisted", "needs_fix", "ready")
 DEFAULT_MAX_PER_COMPANY = 3
 # How alike two titles at one company must be to count as the same job, such as a second requisition of it.
 SAME_TITLE = 0.9
-SOON = 2  # Days. A deadline this close puts a job near the top of the Sluice.
+# Days. A deadline this close is urgent: first on the to-do list. One within [run] decide_days is on it.
+SOON = 2
 # A to-do item shows the start of a long fit reason. The job panel has all of it.
 ORDER_REASON = 200
 # Days after applying when a short note to the hiring manager is due, until one is logged.
@@ -164,7 +185,10 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     return cursor.lastrowid
 
 
-def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept_at: str | None = None) -> dict:
+def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept_at: str | None = None,
+            context: signals.Context | None = None) -> dict:
+    """One job as the page shows it. `context` is what judging pay and rarity needs to know about the other jobs:
+    without it, those two are left out."""
     job = job_dict(row, include_description)
     run = cfg["run"]
     job["days_since_applied"] = quiet_days_since(job["applied_at"])
@@ -183,12 +207,11 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept
                          if job["frozen"] and job["app_folder"] else [])
     # The whole row, because priority reads the description even when the page isn't sent it.
     job.update(scoring.freshness(dict(row), cfg, date.fromisoformat(today), swept_at))
-    # A deadline in the notes wins: it was read from the whole posting, or set by you, where the posting's own words
-    # are matched by pattern. The posting's is the fallback for a job with no notes yet.
-    noted, blockers = deadline.read_notes(ROOT / job["app_folder"]) if job["app_folder"] else (None, [])
-    job["deadline"] = noted or deadline.from_posting(row["description"] or "")
-    job["days_to_deadline"] = (date.fromisoformat(job["deadline"]) - date.fromisoformat(today)).days if job["deadline"] else None
-    job["blockers"] = blockers if job["status"] in NOT_SENT else []
+    # The deadline, pay, skills' ages and rarity, with what pay and rarity add to the priority.
+    context = context or signals.alone(cfg, date.fromisoformat(today))
+    signals.apply(job, signals.read(dict(row), cfg, context, ROOT / job["app_folder"] if job["app_folder"] else None))
+    if job["status"] not in NOT_SENT:
+        job["blockers"], job["decide_soon"] = [], False
     return job
 
 
@@ -256,8 +279,9 @@ def _deadline_text(job: dict) -> str:
     days = job["days_to_deadline"]
     if days is None:
         return ""
-    when = date.fromisoformat(job["deadline"])
-    label = f"{when:%b} {when.day}"
+    label = deadline.label(job["deadline"])
+    if days < 0 and not job.get("deadline_firm", True):
+        return f"It took applications at least until {label}, so it may close any day."
     if days < 0:
         return f"Its stated deadline, {label}, has passed: check the posting is still open."
     if days == 0:
@@ -341,7 +365,9 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
                           "Open it to see why, then use Tailor this one first to try again.")
             orders.append({"rank": 2, "kind": "Blocked", "job_id": job["id"], "text": name, "detail": detail})
     def soon(job):
-        return job["days_to_deadline"] is not None and 0 <= job["days_to_deadline"] <= SOON
+        """Urgent: closing within SOON days, or a floor date already past."""
+        days = job["days_to_deadline"]
+        return bool(job.get("decide_soon")) and days is not None and days <= SOON
 
     def joined(*parts):
         return " ".join(part for part in parts if part)
@@ -362,11 +388,13 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
         orders.append({"rank": 1 if soon(job) else 2, "kind": "Send", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}", "detail": detail})
     listed = {o["job_id"] for o in orders}
-    closing = sorted((j for j in jobs if j["status"] in ("new", "shortlisted", "needs_fix") and soon(j) and j["id"] not in listed),
-                     key=lambda j: (j["days_to_deadline"], -j["rank"]))
-    for job in closing[:3]:
-        orders.append({"rank": 1, "kind": "Closing soon", "job_id": job["id"], "text": f"{job['company']}: {job['title']}",
-                       "detail": joined(_deadline_text(job), _history_text(job), "Tailor it now or pass.")})
+    # Within [run] decide_days, so there's time to tailor before it closes. A prospect not yet judged needs that first.
+    closing = sorted((j for j in jobs if j["status"] in ("new", "shortlisted", "needs_fix") and j.get("decide_soon") and j["id"] not in listed),
+                     key=lambda j: (j["days_to_deadline"] if j["days_to_deadline"] >= 0 else 0, -j["rank"]))
+    for job in closing[:5]:
+        decide = "Tailor it now or pass." if job["status"] != "new" else "Decide now: use Tailor this one first, or pass."
+        orders.append({"rank": 1 if soon(job) else 2, "kind": "Closing soon", "job_id": job["id"], "text": f"{job['company']}: {job['title']}",
+                       "detail": joined(_deadline_text(job), _history_text(job), decide)})
         listed.add(job["id"])
     fresh = sorted((j for j in jobs if j["status"] == "new" and j["is_new"] and j["id"] not in listed), key=lambda j: -j["rank"])
     for job in fresh[:3]:
@@ -394,7 +422,8 @@ def build_state(conn, cfg) -> dict:
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
     last_run = last_full_sweep(conn)
     swept_at = last_run["started_at"] if last_run else None
-    jobs = [_enrich(r, cfg, today, swept_at=swept_at) for r in rows]
+    context = signals.context(conn, cfg, date.fromisoformat(today))
+    jobs = [_enrich(r, cfg, today, swept_at=swept_at, context=context) for r in rows]
     replies, refreshes, preps, tries = possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn)
     alerts = mail.open_alerts(conn)
     scams = _scam_alerts(alerts)
@@ -484,7 +513,7 @@ def build_state(conn, cfg) -> dict:
 def job_detail(conn, job_id: int, cfg: dict) -> dict:
     last_run = last_full_sweep(conn)
     job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True,
-                  swept_at=last_run["started_at"] if last_run else None)
+                  swept_at=last_run["started_at"] if last_run else None, context=signals.context(conn, cfg, date.today()))
     _attach_runs(job, possible_replies(conn), refresh.states(conn), prep.states(conn), fix_attempts(conn),
                  _scam_alerts(mail.open_alerts(conn)))
     _attach_history(job, _applied_by_company(conn), cfg.get("dashboard", {}).get("max_per_company", DEFAULT_MAX_PER_COMPANY))

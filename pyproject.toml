@@ -47,7 +47,7 @@ package-dir = { "" = "tools" }
 packages = ["pyrite"]
 
 [tool.setuptools.package-data]
-pyrite = ["*.md", "imap.env.example", "static/*", "static/icons/*", "systemd/*", "blank/*"]
+pyrite = ["*.md", "*.toml", "imap.env.example", "static/*", "static/icons/*", "systemd/*", "blank/*"]
 
 [tool.ruff]
 target-version = "py311"

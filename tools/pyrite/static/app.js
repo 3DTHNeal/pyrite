@@ -325,6 +325,22 @@ function freshnessPills(job, hints = true) {
   if (job.ghost_risk) pills.push(pill("bad", "Possible ghost", `${capitalized(job.ghost_reason)}. A prompt to look closer, not proof.`));
   if (job.unconfirmed && !job.applied_at) pills.push(pill("warn", "Not rechecked", "The last pan didn't see this listing: its board failed, left your watch list or didn't answer. It may be down."));
   if (job.may_be_repost && hints) pills.push(pill("muted", "May be a repost", "This Workday link ends in -1 or similar, which often means the requisition has more than one posting. A hint only."));
+  return [...pills, ...judgedPills(job, hints)];
+}
+
+// Pay, rarity and asks nobody could meet: Pyrite's read of what the posting is worth, before you've sent it.
+// `hints` adds the quietest of them, a wide pay range, which only the Prospects table and the job panel have room for.
+function judgedPills(job, hints = true) {
+  if (job.applied_at) return [];
+  const pills = [];
+  for (const sign of job.pay_signs || []) {
+    if (sign.tone !== "muted" || hints) pills.push(pill(sign.tone, sign.label, sign.detail));
+  }
+  if (job.rare) pills.push(pill("info", "Rare near you", `${capitalized(job.rare_reason)}. There may not be another soon.`));
+  const impossible = (job.skill_asks || []).filter((ask) => ask.impossible);
+  if (impossible.length) {
+    pills.push(pill("info", "Asks the impossible", `${impossible.map((ask) => ask.said).join("\n")}\n\nNot your gap: nobody has that much. Whoever screens it is looking for the skill.`));
+  }
   return pills;
 }
 
@@ -340,9 +356,14 @@ function deadlinePill(job) {
   const days = job.days_to_deadline;
   if (days === null || days === undefined || !NOT_SENT.includes(job.status)) return null;
   const on = shortDate(job.deadline);
-  if (days < 0) return pill("muted", `Deadline ${on} passed`, "The posting's stated deadline has passed. \"At least until\" often runs longer, so check the posting is still up.");
+  if (days < 0 && job.deadline_firm === false) {
+    return pill(job.decide_soon ? "warn" : "muted", "May close any day", `It took applications at least until ${dayName(job.deadline)}. That's a floor, not a closing date, so it's still open, but not for long.`);
+  }
+  if (days < 0) return pill("muted", `Deadline ${on} passed`, "The posting's stated deadline has passed, so the next pan passes on it. Undo the pass if it's still up.");
   const label = days === 0 ? "Apply today" : days === 1 ? "Apply by tomorrow" : `Apply by ${on}`;
-  return pill(days <= 2 ? "bad" : days <= 7 ? "warn" : "muted", label, `The posting gives ${dayName(job.deadline)} as its deadline`);
+  // Red when it's urgent, amber while there's still time to tailor before it closes, which is when to decide.
+  return pill(days <= 2 ? "bad" : job.decide_soon ? "warn" : "muted", label,
+    `The posting gives ${dayName(job.deadline)} as its deadline${job.decide_soon ? ". Decide now: tailor it or pass." : ""}`);
 }
 
 // What you've already sent this employer, so a second listing of the same job or one application too many is caught before it goes out.
@@ -1349,9 +1370,10 @@ function beforeApplyBlock(job) {
   const days = job.days_to_deadline;
   if (days !== null && days !== undefined) {
     const on = dayName(job.deadline);
-    lines.push(days < 0 ? `The posting's stated deadline, ${on}, has passed. Check it's still up before you spend time on it.`
-      : days === 0 ? `Apply today. The posting gives ${on} as its deadline.`
-        : `Apply by ${on}${days === 1 ? ", tomorrow" : `, in ${days} days`}.`);
+    lines.push(days < 0 && job.deadline_firm === false ? `It took applications at least until ${on}, so it may close any day.`
+      : days < 0 ? `The posting's stated deadline, ${on}, has passed. Check it's still up before you spend time on it.`
+        : days === 0 ? `Apply today. The posting gives ${on} as its deadline.`
+          : `Apply by ${on}${days === 1 ? ", tomorrow" : `, in ${days} days`}.`);
   }
   const same = job.same_title_applied;
   if (same) lines.push(`You applied for ${same.title} here on ${shortDate(same.applied_at)}. This may be another listing of the same job.`);
@@ -1363,6 +1385,18 @@ function beforeApplyBlock(job) {
     h("strong", {}, "Before you apply"),
     h("ul", {}, lines.map((line) => h("li", {}, line)), blockers.map((line) => h("li", {}, line))),
     blockers.length ? h("p", { class: "muted" }, "From this job's notes. The full reasoning is under Fit and interview notes.") : null);
+}
+
+// The sentences behind the pay, rarity and skill-age pills, plus the ages of the young skills it asks for, so the
+// numbers can be checked. An ask the notes listed as something to settle first, which nobody could meet, is said here.
+function readBlock(job) {
+  const lines = [];
+  for (const sign of job.pay_signs || []) lines.push(`${sign.label}: ${sign.detail}`);
+  if (job.rare) lines.push(`Rare near you: ${job.rare_reason}.`);
+  for (const ask of job.skill_asks || []) lines.push(`${ask.said} The posting says: "${ask.words}"`);
+  for (const blocker of job.impossible_blockers || []) lines.push(`Left off Before you apply, since nobody could meet it: ${blocker}`);
+  if (!lines.length) return null;
+  return h("div", {}, h("h3", {}, "What Pyrite read into it"), h("ul", { class: "muted" }, lines.map((line) => h("li", {}, line))));
 }
 
 const fileLabel = (file) => file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " ");
@@ -1642,6 +1676,7 @@ async function openJob(id, list) {
     freshnessPills(job).length ? h("div", { class: "signals" }, freshnessPills(job)) : null,
     h("dl", { class: "facts" }, facts.flatMap(([key, value]) => [h("dt", {}, key), h("dd", {}, value)])),
     (job.flags.length ? h("div", { class: "callout" }, `Flagged: ${job.flags.join(", ")}`) : null),
+    readBlock(job),
     h("div", {}, h("h3", {}, "Next step"), h("div", { class: "stack" }, nextText,
       h("div", { class: "row" }, nextDate, h("button", { class: "btn", type: "button",
         onclick: () => tryAct(job.id, { action: "next_action", text: nextText.value, date: nextDate.value }, undefined, ["nextText", "nextDate"]) }, "Save"),

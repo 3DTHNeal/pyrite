@@ -1,0 +1,316 @@
+# When technologies became usable by anyone outside the people who made them, so a posting asking for more years of
+# one than it has existed can be told apart from a real gap. `since` is the earliest fair date: a public release,
+# an open-source launch, the paper that started it, or a law coming into force. Earliest on purpose, so a posting
+# is only called impossible when it plainly is. A year with no month counts from January.
+#
+# `match` is a pattern for how postings name it, matched whole-word and in any case. Keep it to names that mean
+# only this: "transformer" alone would catch power transformers, and "MCP" a certification.
+#
+# Your workspace's data/skill-ages.json adds to these. `pyrite skills --research` fills it from the web, and the
+# daily run does when [skills] research = true.
+
+[[skill]]
+name = "large language models"
+match = 'llms?|large language models?|gpt-3|gpt-4|foundation models?'
+since = "2019-02"
+basis = "OpenAI released the first GPT-2 model in February 2019, and GPT-3's API followed in June 2020"
+
+[[skill]]
+name = "prompt engineering"
+match = 'prompt engineering|prompt design'
+since = "2020-06"
+basis = "Prompting as a practice began with GPT-3's API in June 2020"
+
+[[skill]]
+name = "AI agents"
+match = 'agentic(?: ai| systems?| workflows?| frameworks?)?|ai agents?|llm[- ]based agents?|llm agents?|agent frameworks?|function calling|tool calling'
+since = "2021-12"
+basis = "WebGPT, a language model that used a web browser as a tool, was published in December 2021, and ReAct and LangChain followed in 2022"
+
+[[skill]]
+name = "retrieval-augmented generation"
+match = 'retrieval[- ]augmented generation|rag(?: pipelines?| systems?)?'
+since = "2020-05"
+basis = "The paper that named it came out in May 2020"
+
+[[skill]]
+name = "vector databases"
+match = 'vector (?:databases?|dbs?|stores?)'
+since = "2019-10"
+basis = "Milvus, an early open-source vector database, was released in October 2019"
+
+[[skill]]
+name = "Model Context Protocol"
+match = 'model context protocol|mcp (?:servers?|clients?|tools?)'
+since = "2024-11"
+basis = "Anthropic released the Model Context Protocol in November 2024"
+
+[[skill]]
+name = "AI coding assistants"
+match = 'github copilot|ai[- ]assisted (?:coding|development|software development)|ai coding (?:assistants?|tools?|agents?)|coding agents?|claude code|cursor'
+since = "2021-06"
+basis = "GitHub Copilot's technical preview opened in June 2021"
+
+[[skill]]
+name = "LangChain"
+match = 'langchain|langgraph'
+since = "2022-10"
+basis = "LangChain was first released in October 2022"
+
+[[skill]]
+name = "LlamaIndex"
+match = 'llamaindex|llama index|gpt index'
+since = "2022-11"
+basis = "First released as GPT Index in November 2022"
+
+[[skill]]
+name = "transformer models"
+match = 'transformer (?:models?|architectures?|networks?)'
+since = "2017-06"
+basis = "The paper that introduced the transformer came out in June 2017"
+
+[[skill]]
+name = "RLHF"
+match = 'rlhf|reinforcement learning from human feedback'
+since = "2017-06"
+basis = "The paper that introduced learning from human preferences came out in June 2017"
+
+[[skill]]
+name = "PyTorch"
+match = 'pytorch'
+since = "2016-09"
+basis = "PyTorch's first public release was in the autumn of 2016"
+
+[[skill]]
+name = "TensorFlow"
+match = 'tensorflow'
+since = "2015-11"
+basis = "Google open-sourced TensorFlow in November 2015"
+
+[[skill]]
+name = "JAX"
+match = 'jax'
+since = "2018-12"
+basis = "JAX was open-sourced in December 2018"
+
+[[skill]]
+name = "MLflow"
+match = 'mlflow'
+since = "2018-06"
+basis = "Databricks released MLflow in June 2018"
+
+[[skill]]
+name = "Kubeflow"
+match = 'kubeflow'
+since = "2017-12"
+basis = "Kubeflow was announced in December 2017"
+
+[[skill]]
+name = "Kubernetes"
+match = 'kubernetes|k8s'
+since = "2014-06"
+basis = "Google open-sourced Kubernetes in June 2014"
+
+[[skill]]
+name = "Docker"
+match = 'docker'
+since = "2013-03"
+basis = "Docker was first released in March 2013"
+
+[[skill]]
+name = "Terraform"
+match = 'terraform'
+since = "2014-07"
+basis = "HashiCorp released Terraform in July 2014"
+
+[[skill]]
+name = "Istio"
+match = 'istio'
+since = "2017-05"
+basis = "Istio was announced in May 2017"
+
+[[skill]]
+name = "serverless"
+match = 'aws lambda|serverless'
+since = "2014-11"
+basis = "AWS Lambda launched in November 2014"
+
+[[skill]]
+name = "Snowflake"
+match = 'snowflake'
+since = "2014-10"
+basis = "Snowflake came out of stealth in October 2014"
+
+[[skill]]
+name = "dbt"
+match = 'dbt'
+since = "2016-03"
+basis = "dbt's first release was in March 2016"
+
+[[skill]]
+name = "Apache Airflow"
+match = 'airflow'
+since = "2015-06"
+basis = "Airbnb open-sourced Airflow in June 2015"
+
+[[skill]]
+name = "Rust"
+match = 'rust'
+since = "2015-05"
+basis = "Rust 1.0 was released in May 2015"
+
+[[skill]]
+name = "Go"
+match = 'golang'
+since = "2009-11"
+basis = "Google announced Go in November 2009"
+
+[[skill]]
+name = "Swift"
+match = 'swift(?:ui)?'
+since = "2014-06"
+basis = "Apple introduced Swift in June 2014"
+
+[[skill]]
+name = "SwiftUI"
+match = 'swiftui'
+since = "2019-06"
+basis = "Apple introduced SwiftUI in June 2019"
+
+[[skill]]
+name = "Kotlin"
+match = 'kotlin'
+since = "2011-07"
+basis = "JetBrains announced Kotlin in July 2011"
+
+[[skill]]
+name = "Jetpack Compose"
+match = 'jetpack compose'
+since = "2019-05"
+basis = "Google announced Jetpack Compose in May 2019"
+
+[[skill]]
+name = "TypeScript"
+match = 'typescript'
+since = "2012-10"
+basis = "Microsoft released TypeScript in October 2012"
+
+[[skill]]
+name = "Flutter"
+match = 'flutter'
+since = "2017-05"
+basis = "Flutter's first alpha came out in May 2017"
+
+[[skill]]
+name = "Mojo"
+match = 'mojo'
+since = "2023-05"
+basis = "Modular announced Mojo in May 2023"
+
+[[skill]]
+name = "React"
+match = 'react(?:\.js|js)?'
+since = "2013-05"
+basis = "Facebook open-sourced React in May 2013"
+
+[[skill]]
+name = "React Native"
+match = 'react native'
+since = "2015-03"
+basis = "React Native was released in March 2015"
+
+[[skill]]
+name = "Vue"
+match = 'vue(?:\.js|js)?'
+since = "2014-02"
+basis = "Vue was released in February 2014"
+
+[[skill]]
+name = "Next.js"
+match = 'next\.js|nextjs'
+since = "2016-10"
+basis = "Next.js was released in October 2016"
+
+[[skill]]
+name = "Svelte"
+match = 'svelte(?:kit)?'
+since = "2016-11"
+basis = "Svelte was released in November 2016"
+
+[[skill]]
+name = "GraphQL"
+match = 'graphql'
+since = "2015-07"
+basis = "Facebook published GraphQL in July 2015"
+
+[[skill]]
+name = "Tailwind CSS"
+match = 'tailwind(?: css)?'
+since = "2017-11"
+basis = "Tailwind CSS was first released in November 2017"
+
+[[skill]]
+name = "ROS 2"
+match = 'ros ?2'
+since = "2017-12"
+basis = "ROS 2's first release, Ardent, came out in December 2017"
+
+[[skill]]
+name = "Zephyr RTOS"
+match = 'zephyr(?: rtos)?'
+since = "2016-02"
+basis = "The Linux Foundation launched the Zephyr Project in February 2016"
+
+[[skill]]
+name = "Matter"
+match = 'matter (?:protocol|standard|smart home)|matter-certified|csa matter'
+since = "2022-10"
+basis = "The Matter 1.0 specification was released in October 2022"
+
+[[skill]]
+name = "5G"
+match = '5g(?: nr| networks?)?'
+since = "2019-04"
+basis = "The first commercial 5G networks opened in April 2019"
+
+[[skill]]
+name = "Wi-Fi 6"
+match = 'wi-?fi 6e?|802\.11ax'
+since = "2019-09"
+basis = "Wi-Fi 6 certification began in September 2019"
+
+[[skill]]
+name = "USB-C"
+match = 'usb-?c|usb type-?c'
+since = "2014-08"
+basis = "The USB Type-C specification was published in August 2014"
+
+[[skill]]
+name = "ISO 26262"
+match = 'iso 26262'
+since = "2011-11"
+basis = "ISO 26262 was first published in November 2011"
+
+[[skill]]
+name = "ISO 21448 (SOTIF)"
+match = 'iso 21448|sotif'
+since = "2019-01"
+basis = "ISO/PAS 21448 was published in January 2019"
+
+[[skill]]
+name = "UN R155"
+match = 'un ?r ?155|unece r155|wp\.29 cybersecurity'
+since = "2021-01"
+basis = "UN Regulation 155 came into force in January 2021"
+
+[[skill]]
+name = "EU Cyber Resilience Act"
+match = 'cyber resilience act|\bcra\b compliance'
+since = "2024-12"
+basis = "The EU Cyber Resilience Act came into force in December 2024"
+
+[[skill]]
+name = "EU AI Act"
+match = 'eu ai act|ai act compliance'
+since = "2024-08"
+basis = "The EU AI Act came into force in August 2024"
