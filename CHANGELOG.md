@@ -81,6 +81,16 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- A Gmail mail check that couldn't read your mail, or handed back a list that was cut off, no longer counts as a good check that found nothing. It shows as failed on the Sources tab, and the next check reads those days again.
+- Moving a job on, for instance marking it applied, while Claude is polishing or refreshing its draft puts back the draft that passed the assay, so a sent folder never keeps text the assay didn't check. The same goes for losing the Claude Code sign-in during a polish.
+- A long tailoring job no longer looks stopped while it's still writing, which could let a second Claude run or tailoring batch start beside it. The dashboard now shows each step, such as "writing draft 2" or "checking draft 1". A Refresh resume still building its documents after its time limit no longer looks stopped either.
+- Claude is no longer started again with almost no time left. The run stops and says time ran out.
+- When a Claude run runs out of time on Windows, everything it started is stopped, not just the `claude.cmd` wrapper.
+- An industry outlook whose answer Claude wrote in the wrong shape finishes as failed with a reason, instead of saying "researching" until it went stale.
+- Judging a posting now gets Pyrite's own possible-ghost and scam-sign markings, which its instructions already referred to.
+- A Claude run whose answer was no use is counted as failed itself, never another job's run that finished just after it.
+- Mail scam warnings now judge senders whose domain uses letters from another alphabet, and addresses like o'brien@, instead of dropping them. They recognize free mail in any country (ymail.com, yahoo.co.uk, gmx.at and more) and look-alike domains such as acme-careers.com for "Acme Robotics". A recruiter mentioning a passport, a driver's licence, a date of birth or a travel refund is no longer flagged on that alone.
+- An IMAP password with a character IMAP can't send, such as an accented letter, is reported on the Sources tab without repeating it. Any other unexpected error in a pan's mail check is recorded there too.
 - A save that would be refused anyway, for text that can't be saved or a form that's out of date, is refused before a code is sent. It no longer uses up a code and a notification. This covers the Profile tab, the Facts tab and Put back.
 - Saves on the Facts and Settings tabs now go into History on the Profile tab, so every earlier version can be put back. Before, only one `.previous` copy was kept beside the file, so a second save lost the original.
 - Notes, next steps and update notes that are too long are refused with a message rather than cut short without saying so, and the boxes stop typing at the limit. An impossible date such as 30 February is refused.
@@ -134,6 +144,10 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Security
 
+- The Gmail mail check denies every Gmail tool that sends, drafts, labels, trashes or marks mail, so even a workspace `.claude/settings.json` can't allow one. It is told only the companies you've applied to and those under `[inbox.domains]`, fenced as data, not every company a job board listed.
+- Drafting runs can never edit or write `profile/`, `data/`, `.claude/` or `CLAUDE.md`, whatever the workspace's settings allow. If anything in `profile/` changes while a draft is written, the draft is put back and the run stops.
+- Runs that can read files can't read a Workday fill sheet, autofill log, `workday-paste.md` or `public-denylist.txt` anywhere in the workspace, or the workspace's `.claude/` settings.
+- An industry outlook keeps a source only if its whole address is a page Claude opened or one its searches listed, not a site's home page, a shortened address, or a link mentioned inside some other page.
 - `allowed_hosts` under `[dashboard]` must be a list of names, matched exactly and ignoring case. A single string, which used to match any piece of a host name, now allows nothing, and `pyrite doctor` says so. A request with no Host header is refused.
 - An unexpected server error no longer sends its details to the page. They go to the window the dashboard runs in.
 
