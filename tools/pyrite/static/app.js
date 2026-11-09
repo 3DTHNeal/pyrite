@@ -2331,28 +2331,67 @@ async function checkUpdate() {
   try {
     updateInfo = await api("/api/update");
   } catch (err) {
-    return;  // A check that failed shows nothing, and the next one tries again.
+    return false;  // A check that failed shows nothing, and the next one tries again.
   }
   const button = $("update-open");
   button.hidden = !updateInfo.available;
   if (updateInfo.available) button.title = `GitHub's main has ${commits(updateInfo.behind)} this copy of Pyrite doesn't.`;
+  return true;
 }
 
-function openUpdate() {
-  const info = updateInfo;
-  if (!info || !info.available) return;
-  $("update-summary").textContent = `GitHub's main has ${commits(info.behind)} this copy doesn't (${info.current} to ${info.latest}). What they say:`;
+let updateSwitches = false;  // Whether the update the dialog is offering switches the code folder to main first.
+let updateGoing = false;  // Whether an update has been asked for and the page is still following it.
+
+function showUpdate(info) {
+  const span = `${info.current} to ${info.latest}`;
   const shown = info.changes.slice(0, 20);
+  // Merges aren't listed, so a main that is ahead only by merging what this copy already has lists nothing.
+  $("update-summary").textContent = shown.length
+    ? `GitHub's main is ahead of this copy of Pyrite (${span}). What's new:`
+    : `GitHub's main is ahead of this copy of Pyrite (${span}), but only by merges of work this copy already has.`;
   fill($("update-changes"), shown.map((subject) => h("li", {}, subject)),
     info.changes.length > shown.length ? h("li", { class: "muted" }, "and more") : null);
-  $("update-note").textContent = info.why_not
-    || "Pyrite moves its code forward to match, installs its packages again if they changed, and restarts the dashboard. Your workspace isn't touched.";
+  $("update-changes").hidden = !shown.length;
+  const does = "moves its code forward to match, installs its packages again if they changed, and restarts the dashboard";
+  updateSwitches = Boolean(info.switch) && !info.why_not;
+  let note = info.why_not || `Pyrite ${does}. Your workspace isn't touched.`;
+  if (updateSwitches) {
+    note = `Pyrite's code folder ${info.branch ? `is on the branch ${info.branch}` : "isn't on a branch"}, and everything there is already in GitHub's main. `
+      + `Pyrite switches the folder to main, ${does}. ${info.branch ? `The branch ${info.branch} is kept, and your` : "Your"} workspace isn't touched.`;
+  }
+  $("update-note").textContent = note;
+  // What stops the update is the one thing to read, so it isn't greyed like the description of a working one.
+  $("update-note").classList.toggle("muted", !info.why_not);
   $("update-go").hidden = Boolean(info.why_not);
   $("update-go").disabled = false;
+  $("update-go").textContent = updateSwitches ? "Switch to main and update" : "Update and restart";
+  $("update-recheck").hidden = !info.why_not;
+  $("update-recheck").disabled = false;
   $("update-cancel").disabled = false;
   $("update-cancel").textContent = info.why_not ? "Close" : "Not now";
   $("update-error").textContent = "";
-  $("update-dialog").showModal();
+}
+
+// Opening the dialog, and Check again in it, read the code folder again, so neither shows a branch or an edit that has
+// since gone. That takes a moment, so the last answer shows at once, with nothing to press until the new one is in.
+async function openUpdate() {
+  const dialog = $("update-dialog");
+  if (!dialog.open && updateInfo && updateInfo.available) {
+    showUpdate(updateInfo);
+    dialog.showModal();
+  }
+  $("update-go").disabled = true;
+  $("update-recheck").disabled = true;
+  const answered = await checkUpdate();
+  const info = updateInfo;
+  if (info && info.available) {
+    showUpdate(info);
+    if (!dialog.open) dialog.showModal();
+    if (!answered) $("update-error").textContent = "The dashboard didn't answer, so this is what it said last.";
+    return;
+  }
+  if (dialog.open) dialog.close();
+  if (info) toast(info.error || "Pyrite is up to date.");
 }
 
 // After an update the server stops and a new one starts on the new code. The page reloads once the new one answers.
@@ -2374,31 +2413,48 @@ async function waitForRestart(old) {
 }
 
 $("update-open").addEventListener("click", openUpdate);
+$("update-recheck").addEventListener("click", openUpdate);
 $("update-cancel").addEventListener("click", () => $("update-dialog").close());
 // Escape doesn't close it while an update is going, since the page still has to follow the restart.
-$("update-dialog").addEventListener("cancel", (e) => { if ($("update-go").disabled) e.preventDefault(); });
+$("update-dialog").addEventListener("cancel", (e) => { if (updateGoing) e.preventDefault(); });
 $("update-go").addEventListener("click", async () => {
+  updateGoing = true;
   $("update-go").disabled = true;
   $("update-cancel").disabled = true;
   $("update-error").textContent = "";
   $("update-note").textContent = "Updating. This takes a minute or so if packages need installing.";
+  // Either way the update on offer is over, so the button for it goes and the dialog can be closed.
+  const over = (note, error, recheck) => {
+    updateGoing = false;
+    $("update-note").textContent = note;
+    $("update-error").textContent = error;
+    $("update-go").hidden = true;
+    $("update-recheck").hidden = !recheck;
+    $("update-recheck").disabled = false;
+    $("update-cancel").disabled = false;
+    $("update-cancel").textContent = "Close";
+  };
+  let done;
   try {
-    const done = await api("/api/update", {});
-    const said = `Pyrite was updated from ${done.from} to ${done.to}.${done.packages ? ` ${done.packages}` : ""}`;
-    if (!done.restarting) {
-      $("update-note").textContent = `${said} Restart the dashboard to run the new code.`;
-      $("update-cancel").disabled = false;
-      $("update-cancel").textContent = "Close";
-      return;
-    }
-    $("update-note").textContent = `${said} Restarting the dashboard…`;
-    try { sessionStorage.setItem(UPDATED, said); } catch (err) { /* The toast after the reload is a nicety. */ }
+    done = await api("/api/update", { switch: updateSwitches });
+  } catch (err) {
+    // What refused it may have changed what the update would do, so the way on is to check again, not to repeat it.
+    over("", err.message, true);
+    return;
+  }
+  const moved = done.switched ? "Pyrite's code folder was switched to main, and updated" : "Pyrite was updated";
+  const said = `${moved} from ${done.from} to ${done.to}.${done.packages ? ` ${done.packages}` : ""}`;
+  if (!done.restarting) {
+    over(`${said} Restart the dashboard to run the new code.`, "", false);
+    return;
+  }
+  $("update-note").textContent = `${said} Restarting the dashboard…`;
+  try { sessionStorage.setItem(UPDATED, said); } catch (err) { /* The toast after the reload is a nicety. */ }
+  try {
     await waitForRestart(done.server);
   } catch (err) {
-    $("update-error").textContent = err.message;
-    $("update-note").textContent = "";
-    $("update-go").disabled = false;
-    $("update-cancel").disabled = false;
+    // The code has moved and no dashboard is answering, so there is nothing here to check again or repeat.
+    over(said, err.message, false);
   }
 });
 

@@ -96,18 +96,122 @@ class Updating(unittest.TestCase):
         self.assertIn("failed: ERROR: No matching distribution", said)
         self.assertIn("pip install -r tools/requirements.txt", said)
 
-    def assert_refused(self, words):
-        head = self.git(self.copy, "rev-parse", "HEAD")
-        self.assertIn(words, self.check()["why_not"])
+    def assert_refused(self, *words):
+        """The check says why with all of `words`, and the update, even one told it may switch, changes nothing."""
+        head, branch = self.git(self.copy, "rev-parse", "HEAD"), self.git(self.copy, "rev-parse", "--abbrev-ref", "HEAD")
+        found = self.check()
+        self.assertFalse(found["switch"])
         with self.assertRaises(ValueError) as caught:
-            update.apply(self.copy)
-        self.assertIn(words, str(caught.exception))
+            update.apply(self.copy, switch=True)
+        for said in (found["why_not"], str(caught.exception)):
+            for each in words:
+                self.assertIn(each, said)
         self.assertEqual(self.git(self.copy, "rev-parse", "HEAD"), head)
+        self.assertEqual(self.git(self.copy, "rev-parse", "--abbrev-ref", "HEAD"), branch)
 
-    def test_a_copy_on_another_branch_is_left_alone(self):
+    def commit(self, name="mine.txt"):
+        (self.copy / name).write_text("Mine.\n", encoding="utf-8")
+        self.git(self.copy, "add", name)
+        self.git(self.copy, "commit", "-q", "-m", "Mine")
+
+    def assert_on_latest_main(self):
+        self.assertEqual(self.git(self.copy, "rev-parse", "--abbrev-ref", "HEAD"), "main")
+        self.assertEqual(self.git(self.copy, "rev-parse", "HEAD"), self.git(self.upstream, "rev-parse", "HEAD"))
+
+    def test_a_branch_with_nothing_of_its_own_is_switched_to_main(self):
         self.push("tools/a.py", "a = 1\n", "Add a")
         self.git(self.copy, "checkout", "-q", "-b", "my-change")
-        self.assert_refused("on the branch my-change, not main")
+        found = self.check()
+        self.assertEqual((found["branch"], found["switch"], found["why_not"]), ("my-change", True, None))
+        done = update.apply(self.copy, switch=True)
+        self.assert_on_latest_main()
+        self.assertEqual((done["switched"], done["branch"], done["behind"]), (True, "my-change", 1))
+        self.assertTrue((self.copy / "tools" / "a.py").exists())
+        # The branch is kept.
+        self.git(self.copy, "rev-parse", "--verify", "refs/heads/my-change")
+        self.assertFalse(self.check()["available"])
+
+    def test_a_branch_github_merged_is_switched_to_main_and_its_merge_isnt_listed(self):
+        # The branch a pull request came from, left checked out after GitHub merged it.
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        self.commit()
+        self.git(self.copy, "push", "-q", "origin", "my-change")
+        self.git(self.upstream, "fetch", "-q", "origin", "my-change")
+        self.git(self.upstream, "merge", "-q", "--no-ff", "-m", "Merge pull request #1", "origin/my-change")
+        self.git(self.upstream, "push", "-q", "origin", "main")
+        found = self.check()
+        self.assertEqual((found["behind"], found["changes"], found["switch"]), (1, [], True))
+        update.apply(self.copy, switch=True)
+        self.assert_on_latest_main()
+
+    def test_the_switch_waits_to_be_asked_for(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        with self.assertRaisesRegex(ValueError, "isn't on main any more"):
+            update.apply(self.copy)
+        self.assertEqual(self.git(self.copy, "rev-parse", "--abbrev-ref", "HEAD"), "my-change")
+
+    def test_a_copy_already_on_main_ignores_being_told_it_may_switch(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.assertFalse(self.check()["switch"])
+        done = update.apply(self.copy, switch=True)
+        self.assertEqual((done["switched"], done["branch"]), (False, "main"))
+        self.assert_on_latest_main()
+
+    def test_a_branch_with_commits_of_its_own_is_left_alone_and_told_what_to_run(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        self.commit()
+        self.assert_refused("on the branch my-change, which has 1 commit GitHub's main doesn't", str(self.copy),
+                            "`git switch main`", "`git merge origin/main`")
+
+    def test_a_copy_on_no_branch_is_switched_to_main(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "--detach")
+        found = self.check()
+        self.assertEqual((found["branch"], found["switch"]), (None, True))
+        done = update.apply(self.copy, switch=True)
+        self.assertEqual((done["switched"], done["branch"]), (True, None))
+        self.assert_on_latest_main()
+
+    def test_commits_on_no_branch_are_left_alone(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "--detach")
+        self.commit()
+        self.assert_refused("isn't on a branch, and has 1 commit GitHub's main doesn't", "`git branch <name>`")
+
+    def test_edits_on_another_branch_are_never_risked(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        (self.copy / "README.md").write_text("Mine.\n", encoding="utf-8")
+        self.assert_refused("is on the branch my-change, not main, and has edits of your own")
+        self.assertEqual((self.copy / "README.md").read_text(encoding="utf-8"), "Mine.\n")
+
+    def test_a_main_with_commits_of_its_own_isnt_switched_to(self):
+        self.commit()
+        self.git(self.copy, "checkout", "-q", "-b", "my-change", "origin/main")
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.assert_refused("This copy's main has 1 commit GitHub's doesn't", "`git switch main` and then `git pull`")
+
+    def test_a_copy_with_no_main_of_its_own_gets_one(self):
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        self.git(self.copy, "branch", "-q", "-D", "main")
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.assertTrue(self.check()["switch"])
+        update.apply(self.copy, switch=True)
+        self.assert_on_latest_main()
+        self.assertEqual(self.git(self.copy, "rev-parse", "--abbrev-ref", "main@{upstream}"), "origin/main")
+
+    def test_a_switch_git_refuses_leaves_the_code_as_it_was(self):
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        # An untracked file where main has a tracked one, which git won't overwrite.
+        (self.copy / "tools").mkdir()
+        (self.copy / "tools" / "a.py").write_text("mine = 1\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "the code is as it was"):
+            update.apply(self.copy, switch=True)
+        self.assertEqual(self.git(self.copy, "rev-parse", "--abbrev-ref", "HEAD"), "my-change")
+        self.assertEqual((self.copy / "tools" / "a.py").read_text(encoding="utf-8"), "mine = 1\n")
 
     def test_edits_to_tracked_files_are_never_risked(self):
         self.push("tools/a.py", "a = 1\n", "Add a")
@@ -123,10 +227,8 @@ class Updating(unittest.TestCase):
 
     def test_local_commits_github_lacks_are_left_for_git_pull(self):
         self.push("tools/a.py", "a = 1\n", "Add a")
-        (self.copy / "mine.txt").write_text("Mine.\n", encoding="utf-8")
-        self.git(self.copy, "add", "mine.txt")
-        self.git(self.copy, "commit", "-q", "-m", "Mine")
-        self.assert_refused("1 commit GitHub's doesn't")
+        self.commit()
+        self.assert_refused("This copy's main has 1 commit GitHub's doesn't", f"Run `git pull` in {self.copy}")
 
     def test_the_demo_says_how_to_update_itself(self):
         self.push("tools/a.py", "a = 1\n", "Add a")
@@ -136,13 +238,38 @@ class Updating(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already up to date"):
             update.apply(self.copy)
 
+    def fetches(self, git):
+        return [call.args[1:] for call in git.call_args_list if call.args[1] == "fetch"]
+
     def test_github_is_asked_once_an_hour_at_most(self):
-        with mock.patch.object(update, "_look", return_value={"available": False, "behind": 0}) as look:
+        with mock.patch.object(update, "_git", wraps=update._git) as git:
             update.check(self.copy)
             update.check(self.copy)
-            self.assertEqual(look.call_count, 1)
+            self.assertEqual(len(self.fetches(git)), 1)
             update.check(self.copy, fresh=True)
-            self.assertEqual(look.call_count, 2)
+            self.assertEqual(len(self.fetches(git)), 2)
+            with mock.patch.object(update.time, "monotonic", return_value=update.time.monotonic() + update.CHECK_EVERY):
+                update.check(self.copy)
+            self.assertEqual(len(self.fetches(git)), 3)
+
+    def test_this_copy_is_read_again_every_time_without_asking_github(self):
+        # Whoever is told to switch to main and check again shouldn't get the hour-old answer.
+        self.push("tools/a.py", "a = 1\n", "Add a")
+        self.git(self.copy, "checkout", "-q", "-b", "my-change")
+        self.commit()
+        self.assertIn("on the branch my-change", self.check()["why_not"])
+        self.git(self.copy, "checkout", "-q", "main")
+        with mock.patch.object(update, "_git", wraps=update._git) as git:
+            found = update.check(self.copy)
+        self.assertEqual((found["available"], found["branch"], found["why_not"]), (True, "main", None))
+        self.assertEqual(self.fetches(git), [])
+
+    def test_a_fetch_that_failed_isnt_tried_again_within_the_hour(self):
+        self.git(self.copy, "remote", "set-url", "origin", str(self.origin.parent / "gone.git"))
+        with mock.patch.object(update, "_git", wraps=update._git) as git:
+            self.assertIn("Couldn't check GitHub", update.check(self.copy)["error"])
+            self.assertIn("Couldn't check GitHub", update.check(self.copy)["error"])
+        self.assertEqual(len(self.fetches(git)), 1)
 
     def test_an_unreachable_github_is_an_error_not_a_crash(self):
         self.git(self.copy, "remote", "set-url", "origin", str(self.origin.parent / "gone.git"))
@@ -249,6 +376,13 @@ class Endpoints(unittest.TestCase):
         self.assertEqual((status, said["to"], said["restarting"], said["server"]), (200, "bbb", False, server.SERVER_ID))
         with mock.patch.object(update, "apply", side_effect=ValueError("Pyrite is already up to date.")):
             self.assertEqual(self.call("/api/update", {}), (400, {"error": "Pyrite is already up to date."}))
+
+    def test_the_update_switches_branch_only_when_the_page_says_it_offered_that(self):
+        done = {"from": "aaa", "to": "bbb", "behind": 2, "switched": True, "branch": "my-change", "packages": None}
+        for body, switch in (({}, False), ({"switch": True}, True), ({"switch": "yes"}, False)):
+            with self.subTest(body=body), mock.patch.object(update, "apply", return_value=done) as apply:
+                self.call("/api/update", body)
+                self.assertEqual(apply.call_args.kwargs["switch"], switch)
 
     def test_alive_names_this_server(self):
         self.assertEqual(self.call("/api/alive"), (200, {"server": server.SERVER_ID}))
