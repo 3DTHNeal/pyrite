@@ -127,6 +127,55 @@ class FillSheet(ClaudeRun):
         with self.assertRaisesRegex(FileNotFoundError, "resume.md"):
             fill.make_sheet(self.folder)
 
+    def test_a_text_block_left_open_ends_at_the_next_heading_and_is_said_at_the_top(self):
+        paste = self.root / fill.PASTE_SHEET
+        text = paste.read_text(encoding="utf-8")
+        closing = "Software lead on 3 robot launches.\n```"
+        self.assertIn(closing, text)
+        paste.write_text(text.replace(closing, "Software lead on 3 robot launches.", 1), encoding="utf-8")
+        report = fill.make_sheet(self.folder, "Acme", "Role")
+        self.assertEqual(len(report["tailored"]), 4, "every role is still there")
+        self.assertEqual(len(report["problems"]), 1)
+        self.assertIn("isn't closed before '### Work experience 3'", report["problems"][0])
+        self.assertIn(f"> **{fill.SHEET_PROBLEM}** The ``` block", self.sheet())
+        self.assertIn(fill.SHEET_PROBLEM, fill.summary(report))
+        data = json.loads((self.folder / fill.SHEET_JSON).read_text(encoding="utf-8"))
+        self.assertEqual([r["title"] for r in data["roles"]], ["Principal Firmware Engineer", "Firmware Engineering Manager",
+                                                               "Senior Firmware Engineer", "Embedded Software Engineer"])
+        self.assertNotIn("| Job title |", data["roles"][1]["description"], "the next role's table isn't in this one's text")
+        self.assertTrue(data["education"])
+        self.assertIn("Are you 18 or older", data["questions"])
+
+    def test_no_sheet_is_written_when_the_roles_dont_read_back(self):
+        fill.make_sheet(self.folder, "Acme", "Role")
+        self.assertTrue((self.folder / fill.SHEET_JSON).exists())
+        real = fill.structure
+
+        def one_short(*args, **kwargs):
+            data = real(*args, **kwargs)
+            return {**data, "roles": data["roles"][:-1]}
+
+        with mock.patch.object(fill, "structure", one_short), self.assertRaisesRegex(fill.SheetError, "4 work experience sections, but 3"):
+            fill.make_sheet(self.folder, "Acme", "Role")
+        self.assertFalse((self.folder / fill.SHEET_JSON).exists(), "autofill can't type from the sheet made before")
+        with mock.patch.object(fill, "structure", one_short), self.assertRaisesRegex(SystemExit, "no fill sheet was written"):
+            cli.main(["fill", str(self.folder)])
+
+    def test_a_company_or_name_with_letter_in_it_is_still_the_resume(self):
+        for name in ("Alex_Rivera_Resume_Letterbox_Labs.docx", "Alex_Rivera_Resume_Letterbox_Labs.pdf", "Alex_Rivera_Resume_Letterbox_Labs.txt",
+                     "Alex_Rivera_Cover_Letter_Letterbox_Labs.docx", "Alex_Rivera_Cover_Letter_Letterbox_Labs.txt"):
+            (self.folder / name).write_bytes(b"x")
+        fill.make_sheet(self.folder, "Letterbox Labs", "Role")
+        text = self.sheet()
+        self.assertIn("- **Attach as resume:** `Alex_Rivera_Resume_Letterbox_Labs.docx`", text)
+        self.assertIn("- **Attach as cover letter:** `Alex_Rivera_Cover_Letter_Letterbox_Labs.docx`", text)
+        files = json.loads((self.folder / fill.SHEET_JSON).read_text(encoding="utf-8"))["files"]
+        self.assertTrue(files["resume"].endswith("Alex_Rivera_Resume_Letterbox_Labs.docx"))
+        self.assertTrue(files["cover_letter"].endswith("Alex_Rivera_Cover_Letter_Letterbox_Labs.docx"))
+        self.assertTrue(files["resume_pdf"].endswith("Alex_Rivera_Resume_Letterbox_Labs.pdf"))
+        self.assertFalse(fill.is_letter("Sam_Letterman_Resume_Acme"))
+        self.assertTrue(fill.is_letter("cover-letter"))
+
 
 try:
     from playwright.sync_api import sync_playwright
@@ -180,6 +229,12 @@ class AutofillSwitch(ClaudeRun):
         popen.assert_not_called()
         run.assert_not_called()
         self.assertFalse((self.folder / workday.LOG).exists())
+        # Nor does running the module on a sheet get past the switch.
+        sheet = self.folder / fill.SHEET_JSON
+        sheet.write_text(json.dumps({"job": {"url": "https://acme.wd5.myworkdayjobs.com/External/job/Role_R1"}}), encoding="utf-8")
+        with mock.patch.object(workday, "run") as run, self.assertRaisesRegex(SystemExit, "experimental and off"):
+            workday.main([str(sheet)])
+        run.assert_not_called()
 
     def test_only_true_turns_it_on(self):
         for value, expected in (("true", True), ('"true"', False), ("1", False), ("false", False)):
@@ -277,6 +332,28 @@ class AutofillAssayGate(ClaudeRun):
         result.pop("checked")
         self.set_result(result)
         self.refused_everywhere("didn't record which files it covered")
+
+    def test_running_the_module_on_a_sheet_is_gated_the_same_way(self):
+        sheet = self.folder / fill.SHEET_JSON
+        sheet.write_text(json.dumps({"job": {"url": "https://acme.wd5.myworkdayjobs.com/External/job/Role_R1"}}), encoding="utf-8")
+        elsewhere = self.root / "elsewhere" / fill.SHEET_JSON
+        elsewhere.parent.mkdir()
+        shutil.copy(sheet, elsewhere)
+        with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), mock.patch.object(workday, "run") as run:
+            with self.assertRaisesRegex(SystemExit, re.escape("The assay hasn't checked this draft.")):
+                workday.main([str(sheet), "--no-pause"])
+            with self.assertRaisesRegex(SystemExit, "isn't in a job's application folder"):
+                workday.main([str(elsewhere), "--no-pause"])
+            run.assert_not_called()
+            self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+            self.conn.commit()
+            with contextlib.redirect_stdout(io.StringIO()):
+                workday.main([str(sheet), "--no-pause"])
+            run.assert_called_once()
+            store.set_status(self.conn, self.job, "applied")
+            self.conn.commit()
+            with self.assertRaisesRegex(SystemExit, "already marked applied"):
+                workday.main([str(sheet), "--no-pause"])
 
     def test_a_worker_whose_draft_changed_after_the_button_logs_why_it_stopped(self):
         self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
@@ -378,6 +455,62 @@ class Autofill(ClaudeRun):
                                                           "Company Event", "*Ask Alex*")],
                          ["linkedin", "linkedin", "company site", "", "", ""])
 
+    def test_a_question_that_only_shares_words_with_a_row_is_left_for_you(self):
+        questions = fill.structure(fill.merge((self.root / fill.PASTE_SHEET).read_text(encoding="utf-8"), self.draft)[0],
+                                   self.folder, "Acme", "Role", "")["questions"]
+        questions.update({"Will you now or in the future require sponsorship": "No", "Have you previously worked for this company": "No"})
+        for label in ("How many years of experience do you have with Kubernetes?", "Years of experience with Kubernetes",
+                      "How many years of people management experience do you have?", "Are you under the age of 18?",
+                      "Are you under 18?", "Is anyone in your household under 18 years old?",
+                      "Do you hold a valid passport or visa for international travel?",
+                      "Do you have a relative who previously worked for this company?",
+                      "Have you previously been terminated from this company?", "Would you be unwilling to relocate?",
+                      "Are you legally authorized to work in the United States without sponsorship?",
+                      "Are you not willing to relocate?"):
+            self.assertIsNone(workday.match_question(label, questions), label)
+        # The rows still answer the questions they are.
+        for label, row in (("How many years of relevant experience do you have?", "Years of relevant experience"),
+                           ("Years of relevant work experience", "Years of relevant experience"),
+                           ("Are you at least 18 years of age?*", "Are you 18 or older"),
+                           ("Have you ever worked for this company before?", "Have you previously worked for this company"),
+                           ("Do you require a work visa?", "Will you now or in the future require sponsorship"),
+                           ("Are you willing to relocate?", "Willing to relocate")):
+            self.assertEqual(workday.match_question(label, questions)[0], row, label)
+
+    def test_names_and_places_with_a_full_stop_stay_whole(self):
+        for value in ("Mary St. John", "J. Robert Smith", "St. Louis, MO", "Dr. Jane Doe", "U.S. citizen"):
+            self.assertEqual(fill.answer(value), value)
+        self.assertEqual(fill.answer("U.S. citizen. Born there"), "U.S. citizen")
+        self.assertEqual(fill.answer("Yes; since 2019"), "Yes")
+        self.assertEqual(fill.parse_address("12 Lake St City: St. Louis. State: Missouri. ZIP: 63101"),
+                         {"street": "12 Lake St", "city": "St. Louis", "state": "Missouri", "postal": "63101"})
+        self.assertEqual(fill.parse_address("City: Mt. Vernon. State: New York")["city"], "Mt. Vernon")
+
+        # The name boxes get the whole name, split at its first space only.
+        class Box:
+            def __init__(self, selector):
+                self.selector = selector
+                self.first = self
+
+            def count(self):
+                return 1 if self.selector.endswith(('--firstName"]', '--lastName"]')) else 0
+
+            def input_value(self):
+                return ""
+
+        class Page:
+            def locator(self, selector):
+                return Box(selector)
+
+            def get_by_text(self, pattern):
+                return Box("")
+
+        typed: dict[str, str] = {}
+        with mock.patch.object(workday, "_hear_about_field", return_value=(None, None)), \
+                mock.patch.object(workday, "_put", side_effect=lambda box, value, report, what: typed.update({box.selector: value}) or True):
+            workday.fill_information(Page(), {"Legal name": "Mary St. John"}, workday.Report())
+        self.assertEqual(typed, {'[id$="--firstName"]': "Mary", '[id$="--lastName"]': "St. John"})
+
     def test_the_browser_is_held_open_only_while_it_is_there(self):
         class Context:
             def __init__(self, pages):
@@ -404,7 +537,9 @@ class Autofill(ClaudeRun):
     def test_only_a_save_or_continue_button_may_be_pressed(self):
         for text in ("Save and Continue", "Continue", "Next"):
             self.assertTrue(workday.is_safe_button(text), text)
-        for text in ("Submit", "Submit Application", "Apply", "Review and Submit", "", "Save and Submit"):
+        # Agreeing to terms or sending is the candidate's too, even when the button also says it continues.
+        for text in ("Submit", "Submit Application", "Apply", "Review and Submit", "", "Save and Submit", "Agree and continue",
+                     "I accept and continue", "Send application, then continue", "Consent and Continue", "Acknowledge and Next"):
             self.assertFalse(workday.is_safe_button(text), text)
         source = (CODE_ROOT / "tools" / "pyrite" / "workday.py").read_text(encoding="utf-8")
         self.assertNotIn('name="Submit"', source)
@@ -1022,6 +1157,44 @@ class Gate(ClaudeRun):
         store.set_status(self.conn, self.job, "applied")
         with self.assertRaisesRegex(ValueError, "haven't sent"):
             server.apply_action(self.conn, self.job, {"action": "recheck"}, CFG)
+
+    def test_a_failed_build_says_the_end_of_what_went_wrong(self):
+        self.conn.execute("UPDATE jobs SET status = 'shortlisted' WHERE id = ?", (self.job,))
+        said = "Traceback (most recent call last):\n" + "  File \"build_resume.py\", line 1, in <module>\n" * 20 + \
+            "resume.md: A role line has at most three parts, role | place | dates, and this has 4"
+        self.build.side_effect = subprocess.CalledProcessError(1, "build", output="", stderr=said)
+        report = cli.finish_job(self.conn, CFG, self.job)
+        error = next(e for e in report["errors"] if e.startswith("Build failed"))
+        self.assertTrue(error.endswith("and this has 4"), error)
+        self.assertLess(len(error), 330)
+
+    def test_a_sent_copy_holds_only_the_documents_and_is_never_left_half_made(self):
+        for name in ("Alex_Rivera_Resume_Acme.docx", "Alex_Rivera_Resume_Acme.pdf", "Alex_Rivera_Cover_Letter_Acme.txt"):
+            (self.folder / name).write_bytes(name.encode())
+        (self.folder / "cover-letter.md").write_text("A letter.", encoding="utf-8")
+        (self.folder / workday.LOG).write_text("Sign in on the Workday page.\n", encoding="utf-8")
+        (self.folder / "posting.txt").write_text("The posting, saved.\n", encoding="utf-8")
+        self.conn.execute("UPDATE jobs SET applied_at = ? WHERE id = ?", (store.now(), self.job))
+        sent = self.folder / store.SENT_FOLDER
+        real = shutil.copyfile
+        calls = []
+
+        def locked(src, dst, *args, **kwargs):
+            calls.append(src)
+            if len(calls) == 3:
+                raise PermissionError(13, "The file is in use by another process", str(src))
+            return real(src, dst, *args, **kwargs)
+
+        with mock.patch.object(shutil, "copyfile", locked), self.assertRaises(PermissionError):
+            store.freeze_sent(self.conn, self.job)
+        self.assertFalse(sent.exists(), "a copy that failed part-way isn't left to pass for the record")
+        self.assertEqual([p.name for p in self.folder.iterdir() if p.name.startswith(".")], [])
+        kept = store.freeze_sent(self.conn, self.job)
+        self.assertEqual(sorted(kept), ["Alex_Rivera_Cover_Letter_Acme.txt", "Alex_Rivera_Resume_Acme.docx",
+                                        "Alex_Rivera_Resume_Acme.pdf", "cover-letter.md", "resume.md"])
+        self.assertEqual(sorted(p.name for p in sent.iterdir()), sorted(kept))
+        self.assertFalse(os.access(sent / "resume.md", os.W_OK))
+        self.assertEqual(store.freeze_sent(self.conn, self.job), kept, "the first copy is the record")
 
     def test_a_stuck_build_fails_the_draft_instead_of_hanging(self):
         self.conn.execute("UPDATE jobs SET status = 'shortlisted' WHERE id = ?", (self.job,))

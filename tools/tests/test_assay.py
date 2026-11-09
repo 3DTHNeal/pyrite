@@ -240,6 +240,30 @@ class Builder(unittest.TestCase):
         self.assertNotIn("alex.rivera@example.com", text)
         self.assertTrue(text.rstrip().endswith("Alex Rivera"))
 
+    def test_a_byte_order_mark_other_bullets_and_notes_build_as_plain_text(self):
+        source = self.folder / "resume.md"
+        source.write_text("﻿# Sam Doe\n@ sam@example.com\n<!-- a note to self\n## Not a heading -->\n## Experience\n### Acme\n"
+                          "#### Staff Engineer\n* Led the team. <!-- check this -->\n+ Shipped things.\n", encoding="utf-8")
+        self.build.build_txt(source, self.folder / "r.txt")
+        self.assertEqual((self.folder / "r.txt").read_text(encoding="utf-8"),
+                         "SAM DOE\nsam@example.com\n\nEXPERIENCE\n\nStaff Engineer\nAcme\n• Led the team.\n• Shipped things.\n")
+        self.build.build_docx(source, self.folder / "r.docx")
+        import docx
+        paragraphs = [p.text for p in docx.Document(str(self.folder / "r.docx")).paragraphs]
+        self.assertEqual(paragraphs[0], "Sam Doe", "the mark isn't part of the name, and the name is a name")
+        self.assertIn("•\tLed the team.", paragraphs)
+        self.assertFalse([p for p in paragraphs if "<!--" in p or "Not a heading" in p], paragraphs)
+
+    def test_a_role_line_with_a_fourth_part_is_refused_by_name(self):
+        source = self.folder / "resume.md"
+        source.write_text("# Sam Doe\n## Experience\n### Acme\n#### Staff Engineer | Remote | 2019 – 2024 | extra\n- Led.\n",
+                          encoding="utf-8")
+        argv = ["build_resume", str(source), "--name", "R", "--no-pdf"]
+        with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as caught:
+            self.build.main()
+        self.assertIn("at most three parts", str(caught.exception.code))
+        self.assertIn("resume.md", str(caught.exception.code))
+
     def test_docx_has_real_bullets_headings_and_fresh_metadata(self):
         import zipfile
         out = self.folder / "resume.docx"

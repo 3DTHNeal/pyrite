@@ -211,6 +211,185 @@ class Files(Tmp):
                                      "#### Staff Engineer | | Jan 2020 – Present\n- Led the platform team.\n\n"
                                      "## Education\n- B.S., 2010\n")
 
+    @unittest.skipUnless(HAVE_DOCX, "python-docx isn't installed: pip install -r tools/requirements.txt")
+    def test_text_in_content_controls_text_boxes_nested_tables_and_the_footer_is_read(self):
+        import docx
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsdecls, qn
+
+        document = docx.Document()
+        title = document.add_paragraph("Sam Doe", style="Title")
+        document.sections[0].footer.is_linked_to_previous = False
+        document.sections[0].footer.paragraphs[0].text = "sam@example.com | (555) 010-0111"
+        document.add_paragraph("Experience", style="Heading 1")
+        # Word's resume templates wrap whole sections in a content control.
+        wrapped = [document.add_paragraph(text, style=style)._p for text, style in (
+            ("Staff Engineer, Acme", None), ("Jan 2020 – Present", None), ("Led the platform team.", "List Bullet"))]
+        control = parse_xml(f'<w:sdt {nsdecls("w")}><w:sdtPr/><w:sdtContent/></w:sdt>')
+        wrapped[0].addprevious(control)
+        for p in wrapped:
+            control.find(qn("w:sdtContent")).append(p)
+        table = document.add_table(rows=1, cols=1)
+        table.cell(0, 0).text = "Ran the on-call rotation."
+        table.cell(0, 0).add_table(rows=1, cols=1).cell(0, 0).text = "Nested: wrote the runbooks."
+        # A sidebar in a text box, written twice as Word writes it: once for new readers and once as a fallback.
+        box = "<w:txbxContent><w:p><w:r><w:t>Skills</w:t></w:r></w:p><w:p><w:r><w:t>Python, Go</w:t></w:r></w:p></w:txbxContent>"
+        title._p.append(parse_xml(
+            f'<w:r {nsdecls("w")} xmlns:v="urn:schemas-microsoft-com:vml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+            f'<mc:AlternateContent><mc:Choice Requires="wps"><w:pict><v:shape><v:textbox>{box}</v:textbox></v:shape></w:pict></mc:Choice>'
+            f"<mc:Fallback><w:pict><v:shape><v:textbox>{box}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>"))
+        document.add_paragraph("Education", style="Heading 1")
+        document.add_paragraph("B.S., 2010")
+        document.save(str(self.dir / "r.docx"))
+        found = resumeimport.draft(self.dir / "r.docx")
+        self.assertTrue(found.text.startswith("# Sam Doe\n@ sam@example.com · (555) 010-0111\n"), found.text)
+        self.assertIn("### Acme\n#### Staff Engineer | | Jan 2020 – Present\n- Led the platform team.\n", found.text)
+        self.assertIn("Ran the on-call rotation.\nNested: wrote the runbooks.\n", found.text)
+        self.assertIn("## Skills\n- Python, Go\n", found.text)
+        self.assertEqual(found.text.count("Python, Go"), 1, "a text box's fallback copy isn't read twice")
+        self.assertTrue(any("2 line(s) from text boxes" in note for note in found.notes), found.notes)
+        self.assertFalse([note for note in found.notes if "doesn't read" in note], found.notes)
+
+    @unittest.skipUnless(HAVE_DOCX, "python-docx isn't installed: pip install -r tools/requirements.txt")
+    def test_text_somewhere_it_cant_read_is_named(self):
+        import docx
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsdecls
+
+        document = docx.Document()
+        document.add_paragraph("Sam Doe")
+        document.add_paragraph("sam@example.com")
+        # A block this doesn't know, holding a paragraph.
+        document.element.body.append(parse_xml(f'<w:unknownBlock {nsdecls("w")}><w:p><w:r><w:t>Hidden award</w:t></w:r></w:p></w:unknownBlock>'))
+        document.save(str(self.dir / "r.docx"))
+        found = resumeimport.draft(self.dir / "r.docx")
+        self.assertTrue(any("doesn't read" in note and "'Hidden award'" in note for note in found.notes), found.notes)
+
+    def test_a_text_file_with_a_byte_order_mark_or_in_utf16_is_read(self):
+        for encoding in ("utf-8-sig", "utf-16"):
+            with self.subTest(encoding):
+                path = self.dir / f"{encoding}.txt"
+                path.write_text(MESSY, encoding=encoding)
+                self.assertEqual(resumeimport.draft(path).text, MESSY_MARKDOWN)
+        path = self.dir / "no-mark.txt"
+        path.write_bytes(MESSY.encode("utf-16-le"))
+        with self.assertRaisesRegex(resumeimport.Refused, "NUL characters"):
+            resumeimport.draft(path)
+
+
+# A resume as pdftotext lays out the PDF the documents builder makes: each role's dates at the right margin, the
+# employer on the line under the title, a space after each paragraph that can split a wrapped bullet from its tail,
+# and a word broken at its hyphen.
+BUILT_LAYOUT = """Sam Doe
+
+Staff Engineer | Platforms
+
+Springfield, IL | (555) 010-0199 | sam.doe@example.com
+
+Summary
+
+Staff engineer with ten years of experience building payment systems and the AI -
+assisted tools around them.
+
+Skills
+
+• Languages: Go, Python, SQL
+• Cloud: AWS, Terraform
+
+Experience
+
+Staff Engineer                                                                    Jan 2021 – Present
+
+Initech | Springfield, IL
+
+• Led the move of the ledger service to Go, cutting p99 latency from 400 ms to
+
+90 ms.
+
+• Mentored 3 engineers.
+
+Software Engineer                                                                 Jun 2018 – Dec 2020
+Initech | Springfield, IL
+• Built the reconciliation job.
+
+Education
+• B.S. Computer Science, University of Illinois, 2015
+"""
+
+BUILT_MARKDOWN = """# Sam Doe
+= Staff Engineer | Platforms
+@ Springfield, IL · (555) 010-0199 · sam.doe@example.com
+
+## Summary
+Staff engineer with ten years of experience building payment systems and the AI-assisted tools around them.
+
+## Skills
+- **Languages:** Go, Python, SQL
+- **Cloud:** AWS, Terraform
+
+## Experience
+### Initech
+#### Staff Engineer | Springfield, IL | Jan 2021 – Present
+- Led the move of the ledger service to Go, cutting p99 latency from 400 ms to 90 ms.
+- Mentored 3 engineers.
+#### Software Engineer | Springfield, IL | Jun 2018 – Dec 2020
+- Built the reconciliation job.
+
+## Education
+- B.S. Computer Science, University of Illinois, 2015
+"""
+
+
+class Pdfs(Tmp):
+    """Pyrite's own PDFs read back as the masters they were built from."""
+
+    def test_a_built_pdf_laid_out_by_pdftotext_reads_back_as_its_master(self):
+        done = subprocess.CompletedProcess([], 0, BUILT_LAYOUT.encode("utf-8"), b"")
+        with mock.patch.object(shutil, "which", return_value="pdftotext"), \
+                mock.patch.object(subprocess, "run", return_value=done) as run:
+            found = resumeimport.draft(self.write("r.pdf", ""), "Sam Doe")
+        self.assertIn("-layout", run.call_args.args[0])
+        self.assertEqual(found.text, BUILT_MARKDOWN)
+        self.assertEqual((found.notes, found.problems), ([], []))
+
+    def test_a_two_column_page_is_read_a_column_at_a_time(self):
+        columns = "\n".join(f"Skill {n}          Led a team of {n} engineers on the platform" for n in range(8))
+        calls = []
+
+        def pdftotext(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, (columns if "-layout" in cmd else MESSY).encode("utf-8"), b"")
+
+        with mock.patch.object(shutil, "which", return_value="pdftotext"), mock.patch.object(subprocess, "run", side_effect=pdftotext):
+            found = resumeimport.draft(self.write("r.pdf", ""))
+        self.assertEqual(found.text, MESSY_MARKDOWN)
+        self.assertEqual(len(calls), 2)
+
+    def test_bullets_run_together_on_one_line_are_split(self):
+        lines = resumeimport._wrapped("Skills • Languages: Go, Python and SQL • Cloud: AWS and Terraform for everything\n"
+                                      "Certifications • Certified ScrumMaster\n"
+                                      "Springfield, IL • sam@example.com • (555) 010-0199\n")
+        self.assertEqual([(line.text, line.bullet) for line in lines],
+                         [("Skills", False), ("Languages: Go, Python and SQL", True), ("Cloud: AWS and Terraform for everything", True),
+                          ("Certifications", False), ("Certified ScrumMaster", True),
+                          ("Springfield, IL • sam@example.com • (555) 010-0199", False)])
+
+    @unittest.skipUnless(shutil.which("pdftotext"), "needs poppler's pdftotext")
+    def test_the_example_pdf_reads_back_as_its_master(self):
+        folder = CODE_ROOT / "example" / "applications" / "2026-11-acme-principal-robotics-software-engineer"
+        found = resumeimport.draft(folder / "Alex_Rivera_Resume_Acme_Robotics.pdf", "Alex Rivera")
+        self.assertEqual(headings(found.text), headings((folder / "resume.md").read_text(encoding="utf-8")))
+        self.assertEqual((found.notes, found.problems), ([], []))
+
+    @unittest.skipUnless(HAVE_DOCX and shutil.which("pdftotext") and shutil.which("soffice"),
+                         "needs python-docx, pdftotext and LibreOffice to build a PDF")
+    def test_a_pdf_built_now_reads_back_as_its_master(self):
+        build_resume.build_docx(EXAMPLE, self.dir / "r.docx")
+        build_resume.export_pdfs([self.dir / "r.docx"])
+        found = resumeimport.draft(self.dir / "r.pdf", "Alex Rivera")
+        self.assertEqual(headings(found.text), headings(EXAMPLE.read_text(encoding="utf-8")))
+        self.assertEqual(found.problems, [])
+
 
 class Command(Tmp):
     def run_cli(self, *argv):

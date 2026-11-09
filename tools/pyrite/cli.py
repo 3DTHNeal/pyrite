@@ -369,7 +369,9 @@ def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict
                 print(built, file=sys.stderr)
         except subprocess.CalledProcessError as err:
             report["ok"] = False
-            report["errors"].append(f"Build failed: {(err.stderr or err.stdout or '').strip()[:300]}")
+            # The end, where the builder says what went wrong: a traceback's first lines say only where it started.
+            said = (err.stderr or err.stdout or "").strip()
+            report["errors"].append(f"Build failed: {said if len(said) <= 300 else '...' + said[-300:]}")
         except subprocess.TimeoutExpired:
             report["ok"] = False
             report["errors"].append(f"Build failed: making the documents took over {BUILD_TIMEOUT_SECONDS // 60} minutes, so it was stopped.")
@@ -552,7 +554,7 @@ def cmd_fill(args):
 def _fill_sheet(folder: Path, company: str = "", title: str = "", url: str = "", source: str = "", *, unchecked: str) -> dict:
     try:
         return fill.make_sheet(folder, company, title, url, source=source, unchecked=unchecked)
-    except FileNotFoundError as err:
+    except (FileNotFoundError, fill.SheetError) as err:
         sys.exit(str(err))
 
 
@@ -578,7 +580,7 @@ def cmd_autofill(args, conn):
     try:
         fill.make_sheet(folder, job["company"], job["title"], job["url"], source=fill.posting_source(job["source_key"], job["url"]),
                         unchecked="")
-    except FileNotFoundError as err:
+    except (FileNotFoundError, fill.SheetError) as err:
         sys.exit(str(err))
     url = args.url or job["url"]
     if not url:

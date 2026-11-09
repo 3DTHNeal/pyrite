@@ -452,12 +452,37 @@ def shorten(text: str, limit: int) -> str:
 
 SENT_FOLDER = "sent"
 SENT_SUFFIXES = (".md", ".docx", ".pdf", ".txt")
+SENT_SOURCES = ("resume.md", "cover-letter.md")
+# The documents the build makes, `<Name>_Resume_<Company>` and `<Name>_Cover_Letter_<Company>`. Only these and the two
+# sources are what was sent: the autofill log, a posting saved as text or any other file in the folder isn't.
+SENT_BUILD = re.compile(r"_(?:Resume|Cover_Letter)(?:_|$)")
 
 
 def sent_copies(folder: Path) -> list[Path]:
     """The documents kept as the record of what was sent, if a copy was made."""
     sent = folder / SENT_FOLDER
     return sorted(p for p in sent.iterdir() if p.is_file()) if sent.is_dir() else []
+
+
+def is_sent_document(path: Path) -> bool:
+    """Whether a file in an application folder is one of the documents that go to the employer."""
+    if path.name in SENT_SOURCES:
+        return True
+    return path.suffix in SENT_SUFFIXES and path.suffix != ".md" and bool(SENT_BUILD.search(path.stem))
+
+
+def _remove_folder(folder: Path) -> None:
+    """Delete a folder of read-only copies, which a plain rmtree can't do on Windows."""
+    import shutil
+    import stat
+
+    for path in folder.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            os.chmod(path, stat.S_IWRITE)
+            path.unlink()
+    folder.rmdir()
 
 
 def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]:
@@ -467,6 +492,11 @@ def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]
     first time a job is marked applied. A copy that already exists is left alone: the first application
     is the one that was sent, and a second application is a new job. `source` names another folder to
     copy from, for applications made before this existed. The fictional example is never written to.
+
+    The copy is made in a folder of its own and put in place only once every file is in it, so a copy that
+    fails part-way, as one does when Word holds a lock on a document, leaves no `sent/` to pass for the record.
+    A `sent/` with no fingerprints on record is such a leftover, or a copy made by hand: its files are kept as they
+    are, and the documents it lacks are added.
     """
     import hashlib
     import shutil
@@ -477,22 +507,46 @@ def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]
         return {}
     folder = ROOT / job["app_folder"]
     sent = folder / SENT_FOLDER
-    if sent_copies(folder):
-        return json.loads(job["sent_files"] or "{}")
+    recorded = json.loads(job["sent_files"] or "{}")
+    if recorded and sent_copies(folder):
+        return recorded
     source = source or folder
     if not source.is_dir():
         return {}
-    wanted = [p for p in sorted(source.iterdir()) if p.is_file() and p.suffix in SENT_SUFFIXES
-              and (p.suffix != ".md" or p.name in ("resume.md", "cover-letter.md"))]
+    wanted = [p for p in sorted(source.iterdir()) if p.is_file() and is_sent_document(p)]
     if not wanted:
         return {}
-    sent.mkdir(exist_ok=True)
+    staging, aside = folder / f".{SENT_FOLDER}-copying", folder / f".{SENT_FOLDER}-replaced"
+    if staging.is_dir():
+        _remove_folder(staging)
+    if aside.is_dir():
+        # Set aside by a run that stopped before the new copy took its place, so it's still the only copy.
+        if sent.exists():
+            _remove_folder(aside)
+        else:
+            os.replace(aside, sent)
+    staging.mkdir()
     fingerprints = {}
-    for path in wanted:
-        copy = sent / path.name
-        shutil.copyfile(path, copy)
-        os.chmod(copy, stat.S_IREAD)
-        fingerprints[path.name] = hashlib.sha256(copy.read_bytes()).hexdigest()
+    try:
+        for path in wanted:
+            earlier = sent / path.name
+            copy = staging / path.name
+            # A copy made before is what was sent, even if the folder's file has changed since.
+            shutil.copyfile(earlier if earlier.is_file() else path, copy)
+            fingerprints[path.name] = hashlib.sha256(copy.read_bytes()).hexdigest()
+        for earlier in sent_copies(folder):
+            if earlier.name not in fingerprints:
+                shutil.copyfile(earlier, staging / earlier.name)  # Not one of the documents, but not this code's to delete.
+    except BaseException:
+        _remove_folder(staging)
+        raise
+    if sent.exists():
+        os.replace(sent, aside)
+    os.replace(staging, sent)
+    if aside.exists():
+        _remove_folder(aside)
+    for path in sent_copies(folder):
+        os.chmod(path, stat.S_IREAD)
     conn.execute("UPDATE jobs SET sent_files = ? WHERE id = ?", (json.dumps(fingerprints), job_id))
     log_event(conn, job_id, "sent_copy", f"Kept a read-only copy of {len(fingerprints)} sent files in {SENT_FOLDER}/")
     return fingerprints

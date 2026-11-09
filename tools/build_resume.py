@@ -13,7 +13,8 @@ Source syntax (one element per line):
     #### Role | place | dates      a block of two lines: bold role with the dates right-aligned, then "Company | place"
                                    (a role without dates takes the company's)
     ~ Label                        italic group label inside a role
-    - bullet text                  bullet; **bold** is supported
+    - bullet text                  bullet; **bold** is supported ("* " and "+ " work too)
+    <!-- note -->                   left out of the documents, on one line or several
     anything else                  plain paragraph
 
 The .txt is the same content as plain text, for the paste boxes on LinkedIn, Workday and the like.
@@ -113,6 +114,26 @@ def _split(line: str, prefix: str) -> list[str]:
     return [p.strip() for p in line[len(prefix):].split("|")]
 
 
+# A note to yourself in the source, which no document should print.
+COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+
+def source_lines(source: Path) -> list[str]:
+    """The source's lines, stripped, with notes left out and every bullet written "- ".
+
+    Read as utf-8-sig, since Notepad and some editors start a file with a byte-order mark, and the first line would
+    then be the mark followed by "# Name" rather than the name.
+    """
+    text = COMMENT.sub("", source.read_text(encoding="utf-8-sig"))
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(("* ", "+ ")):
+            line = "- " + line[2:]
+        lines.append(line)
+    return lines
+
+
 def _employer(line: str) -> tuple[str, str]:
     """The company and its overall dates from a `### Company | dates` line; the dates may be absent."""
     company, *dates = _split(line, "### ")
@@ -120,9 +141,15 @@ def _employer(line: str) -> tuple[str, str]:
 
 
 def _role(line: str, company_dates: str) -> tuple[str, str, str]:
-    """Role, place and dates from a `#### Role | place | dates` line; a role without dates takes the company's."""
-    role, place, *dates = _split(line, "#### ")
-    return role, place, dates[0] if dates else company_dates
+    """Role, place and dates from a `#### Role | place | dates` line; a role without dates takes the company's.
+
+    The place may be left out, as in `#### Role`. A fourth field is a mistake rather than something to drop quietly.
+    """
+    parts = _split(line, "#### ")
+    if len(parts) > 3:
+        raise ValueError(f"A role line has at most three parts, role | place | dates, and this has {len(parts)}: {line.strip()!r}")
+    role, place, dates = (parts + ["", ""])[:3]
+    return role, place, dates or company_dates
 
 
 def _employer_line(company: str, place: str) -> str:
@@ -147,8 +174,7 @@ def build_docx(source: Path, out: Path, letter: bool = False, author: str = "", 
         style.font.color.rgb = BLACK
 
     company, company_dates = "", ""
-    for raw in source.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
+    for line in source_lines(source):
         if not line:
             continue
         if line.startswith("### "):
@@ -221,8 +247,7 @@ def build_txt(source: Path, out: Path, letter: bool = False):
     """The same content as plain text, shaped for the text boxes that application sites and LinkedIn offer."""
     lines: list[str] = []
     company, company_dates = "", ""
-    for raw in source.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
+    for line in source_lines(source):
         if not line:
             continue
         text = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
@@ -278,8 +303,7 @@ def lint_pdf(source: Path, pdf: Path, letter: bool = False) -> list[str]:
     # The top lines must come out as separate lines: a parser that reads "Headline City, ST" as one line loses both.
     top = [_squash(row) for row in text.splitlines() if row.strip()][:4]
     company_dates = ""
-    for raw in source.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
+    for line in source_lines(source):
         if line.startswith("# "):
             wanted = [("name", line[2:])]
         elif line.startswith("= "):
@@ -370,8 +394,11 @@ def main():
     built = []
     for source, name, letter in jobs:
         out_docx = source.parent / f"{name}.docx"
-        build_docx(source, out_docx, letter=letter, author=args.author, paper=args.paper)
-        build_txt(source, out_docx.with_suffix(".txt"), letter=letter)
+        try:
+            build_docx(source, out_docx, letter=letter, author=args.author, paper=args.paper)
+            build_txt(source, out_docx.with_suffix(".txt"), letter=letter)
+        except ValueError as err:  # A line the builder can't read, said in a sentence rather than a traceback.
+            sys.exit(f"{source.name}: {err}")
         built.append((source, out_docx, letter))
     if args.no_pdf:
         for _, out_docx, _ in built:

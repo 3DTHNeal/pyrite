@@ -96,25 +96,99 @@ class Draft:
 
 def read_lines(path: Path) -> list[Line]:
     """The file's lines, with what its own formatting says about each one."""
+    return read(path)[0]
+
+
+def read(path: Path) -> tuple[list[Line], list[str]]:
+    """The file's lines, and notes on anything in it that couldn't be placed or read."""
     suffix = path.suffix.lower()
     if not path.is_file():
         raise Refused(f"There's no file at {path}.")
     if suffix == ".docx":
         return _docx_lines(path)
     if suffix == ".pdf":
-        return _wrapped(_pdf_text(path))
+        return _wrapped(_pdf_text(path)), []
     if suffix in (".txt", ".md", ".text"):
-        return _wrapped(path.read_text(encoding="utf-8", errors="replace"))
+        return _wrapped(_plain_text(path)), []
     if suffix == ".doc":
         raise Refused("That's an old Word .doc. Open it in Word or LibreOffice, save it as .docx, and import that.")
     raise Refused(f"Pyrite reads a .docx, a .pdf or a .txt resume, not {suffix or 'a file with no extension'}.")
 
 
-def _docx_lines(path: Path) -> list[Line]:
+def _plain_text(path: Path) -> str:
+    """A text file's words, in whichever encoding its byte-order mark names, and UTF-8 otherwise.
+
+    Notepad saves "Unicode" as UTF-16 with a mark, and can save UTF-8 with one too. Read as plain UTF-8, the first
+    would be NUL bytes between the letters, and the second would put the mark in front of the name.
+    """
+    raw = path.read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = raw.decode("utf-16", "replace")
+    else:
+        text = raw.decode("utf-8-sig", "replace")
+    if "\0" in text:
+        raise Refused(f"{path.name} isn't plain text: it holds NUL characters, as UTF-16 without its byte-order mark or a "
+                      "binary file does. Open it in a text editor, save it as UTF-8, and import that.")
+    return text
+
+
+# Word's own markup, by name: what holds text, and the places python-docx's paragraph text doesn't reach.
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+_PAGE_NUMBER = re.compile(r"^(?:page\s*)?\d+(?:\s*(?:of|/)\s*\d+)?$", re.I)
+
+
+def _run_text(element) -> str:
+    """The text of a paragraph's runs, wherever they're nested: in content controls, links, fields or tracked insertions.
+
+    Text boxes are left out, since they're read as blocks of their own, and so is a drawing's fallback copy, which
+    repeats a text box for older readers.
+    """
+    parts = []
+    for child in element:
+        tag = child.tag
+        if tag in (f"{_W}txbxContent", _FALLBACK, f"{_W}del", f"{_W}pPr", f"{_W}rPr"):
+            continue
+        if tag == f"{_W}t":
+            parts.append(child.text or "")
+        elif tag == f"{_W}tab":
+            parts.append("\t")
+        elif tag in (f"{_W}br", f"{_W}cr"):
+            parts.append("\n")
+        elif tag == f"{_W}noBreakHyphen":
+            parts.append("-")
+        else:
+            parts.append(_run_text(child))
+    return "".join(parts)
+
+
+def _text_boxes(element):
+    """The text boxes anchored in a paragraph, each once."""
+    for child in element:
+        if child.tag == _FALLBACK:
+            continue
+        if child.tag == f"{_W}txbxContent":
+            yield child
+        else:
+            yield from _text_boxes(child)
+
+
+def _all_text(element) -> list[str]:
+    """Every piece of text in a part, to check that nothing was missed."""
+    found = []
+    for child in element:
+        if child.tag in (_FALLBACK, f"{_W}del"):
+            continue
+        if child.tag == f"{_W}t" and (child.text or "").strip():
+            found.append(child.text.strip())
+        else:
+            found += _all_text(child)
+    return found
+
+
+def _docx_lines(path: Path) -> tuple[list[Line], list[str]]:
     try:
         import docx
-        from docx.oxml.ns import qn
-        from docx.table import Table
         from docx.text.paragraph import Paragraph
     except ImportError as err:
         raise Refused("Reading a .docx needs python-docx: pip install -r tools/requirements.txt") from err
@@ -122,55 +196,140 @@ def _docx_lines(path: Path) -> list[Line]:
         document = docx.Document(str(path))
     except Exception as err:  # python-docx raises several kinds for a file that isn't really a .docx
         raise Refused(f"{path.name} didn't open as a Word document ({err}).") from err
+    notes: list[str] = []
+    boxed: list[Line] = []  # Text boxes' lines, gathered apart from the page's own flow.
 
-    def lines_of(par) -> list[Line]:
+    def lines_of(p) -> list[Line]:
+        par = Paragraph(p, document)
         style = (par.style.name if par.style is not None else "") or ""
-        ppr = par._p.pPr
+        ppr = p.pPr
         bullet = "List" in style or (ppr is not None and ppr.numPr is not None)
         heading = style.startswith("Heading")  # Not "Title", which is usually the name.
-        return [Line(row, bullet and i == 0, heading) for i, row in enumerate(par.text.split("\n"))]
+        return [Line(row, bullet and i == 0, heading) for i, row in enumerate(_run_text(p).split("\n"))]
 
-    found: list[Line] = []
-    # A contact line kept in the page header reaches no parser, but it's still the person's contact line.
-    for section in document.sections[:1]:
-        if not section.header.is_linked_to_previous:
-            for par in section.header.paragraphs:
-                found += lines_of(par)
-    for child in document.element.body.iterchildren():
-        if child.tag == qn("w:p"):
-            found += lines_of(Paragraph(child, document))
-        elif child.tag == qn("w:tbl"):
-            for row in Table(child, document).rows:
-                cells, seen = [], set()
-                for cell in row.cells:
-                    if id(cell._tc) not in seen:  # A merged cell is listed once for each column it spans.
-                        seen.add(id(cell._tc))
-                        cells.append([line for par in cell.paragraphs for line in lines_of(par) if line.text.strip()])
-                if all(len(lines) <= 1 for lines in cells):
-                    # A row laid out as fields, such as a title in one cell and its dates in the next, is one line.
-                    texts = [lines[0].text.strip() for lines in cells if lines]
-                    if texts:
-                        first = next(lines[0] for lines in cells if lines)
-                        found.append(Line(" | ".join(texts), first.bullet, first.heading))
-                else:
-                    found += [line for lines in cells for line in lines]
-    return [_marked(line) for line in found if line.text.strip()]
+    def table_lines(tbl) -> list[Line]:
+        found: list[Line] = []
+        for tr in tbl.iterchildren(f"{_W}tr"):
+            # A merged cell is one w:tc, however many columns it spans. Its lines include any table nested in it.
+            cells = [[line for line in blocks(tc) if line.text.strip()] for tc in tr.iterchildren(f"{_W}tc")]
+            if all(len(lines) <= 1 for lines in cells):
+                # A row laid out as fields, such as a title in one cell and its dates in the next, is one line.
+                texts = [lines[0].text.strip() for lines in cells if lines]
+                if texts:
+                    first = next(lines[0] for lines in cells if lines)
+                    found.append(Line(" | ".join(texts), first.bullet, first.heading))
+            else:
+                found += [line for lines in cells for line in lines]
+        return found
+
+    def blocks(element) -> list[Line]:
+        """The lines of a body, a table cell, a header or a text box, in order, with whatever they nest."""
+        found: list[Line] = []
+        for child in element.iterchildren():
+            tag = child.tag
+            if tag == f"{_W}p":
+                found += lines_of(child)
+                for box in _text_boxes(child):
+                    boxed.extend(line for line in blocks(box) if line.text.strip())
+            elif tag == f"{_W}tbl":
+                found += table_lines(child)
+            elif tag == f"{_W}sdt":  # A content control, which Word's resume templates wrap whole sections in.
+                for content in child.iterchildren(f"{_W}sdtContent"):
+                    found += blocks(content)
+            elif tag in (f"{_W}customXml", f"{_W}ins", f"{_W}smartTag"):
+                found += blocks(child)
+        return found
+
+    def margin(kind: str) -> list[Line]:
+        """The first section's header or footer lines, each once, though a first page can have its own."""
+        section = document.sections[0]
+        parts = [getattr(section, kind)]
+        if section.different_first_page_header_footer:
+            parts.append(getattr(section, f"first_page_{kind}"))
+        found: list[Line] = []
+        seen: set[str] = set()
+        for part in parts:
+            if part.is_linked_to_previous:
+                continue
+            for line in blocks(part._element):
+                if line.text.strip() and line.text.strip() not in seen:
+                    seen.add(line.text.strip())
+                    found.append(line)
+        return found
+
+    margins = bool(document.sections)
+    body = blocks(document.element.body)
+    header = margin("header") if margins else []
+    # Page numbers aren't the resume's. A contact line in the footer or a text box is as much the contact line as one
+    # in the header, which reaches no parser either, so they all go at the top, where the contact line is looked for.
+    # A text box's other lines, often a sidebar of skills, go after the page's own text, and the footer's after that.
+    footer = [line for line in (margin("footer") if margins else []) if not _PAGE_NUMBER.match(line.text.strip())]
+    aside = boxed + footer
+    # Only a line with a way to reach the person counts here: "Python, Go" reads like "City, ST" on its own.
+    reaches = (lambda line: any(EMAIL.fullmatch(p) or PHONE.fullmatch(p) or LINK.fullmatch(p) for p in _contact_pieces(line.text) or []))
+    contact = [line for line in aside if reaches(line)]
+    rest = [line for line in aside if not reaches(line)]
+    found = header + contact + body + rest
+    if boxed:
+        notes.append(f"Read {len(boxed)} line(s) from text boxes, which sit beside the page's text rather than in it, and put "
+                     "them at the end. Check they landed in the right section.")
+    footnotes = [line for line in footer if line in rest]
+    if footnotes:
+        notes.append("Kept the page footer's other lines at the end: " + "; ".join(repr(line.text.strip()[:50]) for line in footnotes))
+    # Whatever is still unread is somewhere this doesn't look. It's named, since the draft would otherwise be short of
+    # it with nothing said.
+    read_text = "\n".join(line.text for line in found)
+    parts = [document.element.body]
+    if margins:
+        section = document.sections[0]
+        parts += [part._element for part in (section.header, section.footer, section.first_page_header, section.first_page_footer)
+                  if not part.is_linked_to_previous]
+    missed = list(dict.fromkeys(piece for part in parts for piece in _all_text(part)
+                                if piece not in read_text and not _PAGE_NUMBER.match(piece)))
+    if missed:
+        notes.append(f"Some of {path.name}'s text is somewhere this doesn't read, so it isn't in the draft. Copy it in by hand: "
+                     + "; ".join(repr(piece[:50]) for piece in missed[:5]))
+    return [_marked(line) for line in found if line.text.strip()], notes
 
 
 def _pdf_text(path: Path) -> str:
+    """The PDF's text laid out as on the page, or in reading order when the page has two columns.
+
+    pdftotext's layout mode keeps each line whole, so a role's title and its right-aligned dates stay together and
+    every bullet keeps its own line. A two-column page would come out with both columns side by side on each line,
+    though, and that reads better in the default order, a column at a time.
+    """
     if not shutil.which("pdftotext"):
         raise Refused("Reading a PDF needs poppler's pdftotext, which Git for Windows includes. "
                       "Or save the resume as .docx or .txt and import that.")
+    text = _pdftotext(path, "-layout")
+    if _two_columns(text):
+        text = _pdftotext(path)
+    if not text.strip():
+        raise Refused(f"{path.name} has no text to read. It may be a scanned image, which needs OCR first.")
+    return text
+
+
+def _pdftotext(path: Path, *options: str) -> str:
     try:
-        done = subprocess.run(["pdftotext", "-enc", "UTF-8", str(path), "-"], capture_output=True, timeout=60, check=False)
+        done = subprocess.run(["pdftotext", "-enc", "UTF-8", *options, str(path), "-"], capture_output=True, timeout=60, check=False)
     except subprocess.TimeoutExpired as err:
         raise Refused(f"pdftotext took over a minute on {path.name}, so it was stopped.") from err
     if done.returncode:
         raise Refused(f"pdftotext couldn't read {path.name}: {done.stderr.decode('utf-8', 'replace').strip()}")
-    text = done.stdout.decode("utf-8", "replace")
-    if not text.strip():
-        raise Refused(f"{path.name} has no text to read. It may be a scanned image, which needs OCR first.")
-    return text
+    return done.stdout.decode("utf-8", "replace")
+
+
+def _two_columns(text: str) -> bool:
+    """Whether a layout-mode page has text side by side: many lines with a wide gap and something other than dates or
+    a place after it. A role line with its dates at the right margin is still one column."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    split = 0
+    for line in lines:
+        gap = re.search(r"\S {4,}(\S.*)$", line)
+        if gap and not DATES.search(gap[1]) and not PLACE.match(gap[1].strip()):
+            split += 1
+    return split >= 5 and split >= len(lines) // 4
 
 
 def _marked(line: Line) -> Line:
@@ -180,6 +339,28 @@ def _marked(line: Line) -> Line:
     if mark and text[mark.end():] and not DATES.match(text):
         return Line(text[mark.end():].strip(), True, line.heading)
     return Line(text, line.bullet, line.heading)
+
+
+# Bullets run together on one line, as a PDF read in its plain order can give them: "Skills • Python: ... • Leadership: ...".
+INLINE_BULLET = re.compile(r"\s+[•●▪■]\s+")
+SENTENCE_END = (".", "!", "?", ":", ";")
+
+
+def _inline_bullets(text: str) -> list[Line]:
+    """A line holding several bullets, split into them. A contact line set out with bullets between short items, such as
+    "City, ST • name@example.com", stays one line: only bullets that read as sentences, or that follow a section's
+    name, are split off."""
+    parts = INLINE_BULLET.split(text)
+    if len(parts) < 2 or not (_section(parts[0]) or any(len(part.split()) >= 4 for part in parts[1:])):
+        return [_marked(Line(text))]
+    return [_marked(Line(parts[0]))] + [Line(part.strip(), True) for part in parts[1:] if part.strip()]
+
+
+def _join(first: str, rest: str) -> str:
+    """Two pieces of a wrapped line as one. A word broken at its hyphen, "AI-" then "assisted", is joined without a space."""
+    if first.endswith("-") and rest[:1].islower():
+        return re.sub(r"\s*-$", "-", first) + rest
+    return f"{first} {rest}"
 
 
 def _wrapped(text: str) -> list[Line]:
@@ -195,13 +376,21 @@ def _wrapped(text: str) -> list[Line]:
         if LONE_MARK.match(stripped):
             after_mark = True  # Some PDFs put the bullet mark on a line of its own.
             continue
-        line = _marked(Line(stripped, after_mark))
+        first, *more = _inline_bullets(stripped)
+        line = Line(first.text, first.bullet or after_mark, first.heading)
         after_mark = False
+        # A PDF laid out with space after each paragraph can put a blank line inside a wrapped bullet, before its tail:
+        # a bullet that hasn't ended its sentence, then a line that starts in lower case or with a number, is still that bullet.
+        if (len(out) >= 2 and not out[-1].text and out[-2].bullet and not line.bullet
+                and (line.text[:1].islower() or line.text[:1].isdigit())
+                and not out[-2].text.endswith(SENTENCE_END)):
+            out.pop()
         prev = out[-1] if out else None
         if prev and prev.text and _continues(prev, line):
-            out[-1] = Line(f"{prev.text} {line.text}", prev.bullet, prev.heading)
+            out[-1] = Line(_join(prev.text, line.text), prev.bullet, prev.heading)
         else:
             out.append(line)
+        out += more
     return [line for line in out if line.text]
 
 
@@ -551,4 +740,6 @@ def convert(lines: list[Line], name: str = "") -> Draft:
 
 
 def draft(path: Path, name: str = "") -> Draft:
-    return convert(read_lines(path), name)
+    lines, notes = read(path)
+    found = convert(lines, name)
+    return Draft(found.text, notes + found.notes, found.problems)
