@@ -25,6 +25,7 @@ The dashboard listens on localhost only. Nothing on it is reachable from another
 | Industries tab, official numbers | The US Bureau of Labor Statistics (data.bls.gov) | Requests for its public employment tables. The area codes asked for show the metro area and state you set under `[market]`. The BLS sees your IP address and Pyrite's user agent. |
 | Industries tab, outlook | Anthropic, through Claude Code, with web search and web fetch | The industry's name and codes, the metro area, state and country you set, the employers you follow in it, and the official numbers. Claude's searches and the pages it opens go to search providers and those sites. |
 | Workday autofill | The employer's Workday site | What your answer sheet and tailored documents say, typed into a browser window you watch. Nothing is submitted. |
+| Update available | GitHub, or wherever Pyrite's code folder was cloned from | A `git fetch` of `main`, once an hour while the dashboard is open, and the code itself when you click **Update and restart**. GitHub sees your IP address. Nothing about you is sent. `check_updates = false` under `[dashboard]` turns it off. |
 | Building `.docx` and `.pdf` | LibreOffice or Word on your computer | Nothing leaves your computer. |
 
 ## Other people's information

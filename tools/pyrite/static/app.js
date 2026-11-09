@@ -2025,7 +2025,7 @@ RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarF
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
   // A dialog on top handles its own keys, Escape included.
-  if ($("add-dialog").open) return;
+  if (document.querySelector("dialog[open]")) return;
   if (e.key === "Escape" && openJobId) closeDrawer();
   else if (e.key === "/" && !openJobId && !e.ctrlKey && !e.metaKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
     e.preventDefault();
@@ -2064,7 +2064,102 @@ $("add-form").addEventListener("submit", async (e) => {
   }
 });
 
+// Update available: shown when GitHub's main has code this copy of Pyrite lacks. The server asks GitHub at most once
+// an hour, so asking it often costs nothing.
+let updateInfo = null;
+const UPDATED = "pyrite-updated";  // What an update said, kept across the reload onto the new code.
+const commits = (n) => `${n} commit${n === 1 ? "" : "s"}`;
+
+async function checkUpdate() {
+  try {
+    updateInfo = await api("/api/update");
+  } catch (err) {
+    return;  // A check that failed shows nothing, and the next one tries again.
+  }
+  const button = $("update-open");
+  button.hidden = !updateInfo.available;
+  if (updateInfo.available) button.title = `GitHub's main has ${commits(updateInfo.behind)} this copy of Pyrite doesn't.`;
+}
+
+function openUpdate() {
+  const info = updateInfo;
+  if (!info || !info.available) return;
+  $("update-summary").textContent = `GitHub's main has ${commits(info.behind)} this copy doesn't (${info.current} to ${info.latest}). What they say:`;
+  const shown = info.changes.slice(0, 20);
+  fill($("update-changes"), shown.map((subject) => h("li", {}, subject)),
+    info.changes.length > shown.length ? h("li", { class: "muted" }, "and more") : null);
+  $("update-note").textContent = info.why_not
+    || "Pyrite moves its code forward to match, installs its packages again if they changed, and restarts the dashboard. Your workspace isn't touched.";
+  $("update-go").hidden = Boolean(info.why_not);
+  $("update-go").disabled = false;
+  $("update-cancel").disabled = false;
+  $("update-cancel").textContent = info.why_not ? "Close" : "Not now";
+  $("update-error").textContent = "";
+  $("update-dialog").showModal();
+}
+
+// After an update the server stops and a new one starts on the new code. The page reloads once the new one answers.
+async function waitForRestart(old) {
+  const until = Date.now() + 60000;
+  while (Date.now() < until) {
+    await new Promise((resolve) => { setTimeout(resolve, 1000); });
+    try {
+      const { server } = await api("/api/alive");
+      if (server !== old) {
+        location.reload();
+        return;
+      }
+    } catch (err) {
+      // Down between the old server and the new one.
+    }
+  }
+  throw new Error("The code was updated, but the dashboard hasn't come back after a minute. Run `pyrite open`, or Pyrite.cmd on Windows, to start it.");
+}
+
+$("update-open").addEventListener("click", openUpdate);
+$("update-cancel").addEventListener("click", () => $("update-dialog").close());
+// Escape doesn't close it while an update is going, since the page still has to follow the restart.
+$("update-dialog").addEventListener("cancel", (e) => { if ($("update-go").disabled) e.preventDefault(); });
+$("update-go").addEventListener("click", async () => {
+  $("update-go").disabled = true;
+  $("update-cancel").disabled = true;
+  $("update-error").textContent = "";
+  $("update-note").textContent = "Updating. This takes a minute or so if packages need installing.";
+  try {
+    const done = await api("/api/update", {});
+    const said = `Pyrite was updated from ${done.from} to ${done.to}.${done.packages ? ` ${done.packages}` : ""}`;
+    if (!done.restarting) {
+      $("update-note").textContent = `${said} Restart the dashboard to run the new code.`;
+      $("update-cancel").disabled = false;
+      $("update-cancel").textContent = "Close";
+      return;
+    }
+    $("update-note").textContent = `${said} Restarting the dashboard…`;
+    try { sessionStorage.setItem(UPDATED, said); } catch (err) { /* The toast after the reload is a nicety. */ }
+    await waitForRestart(done.server);
+  } catch (err) {
+    $("update-error").textContent = err.message;
+    $("update-note").textContent = "";
+    $("update-go").disabled = false;
+    $("update-cancel").disabled = false;
+  }
+});
+
+function sayUpdated() {
+  let said = null;
+  try {
+    said = sessionStorage.getItem(UPDATED);
+    sessionStorage.removeItem(UPDATED);
+  } catch (err) {
+    return;
+  }
+  if (said) toast(said);
+}
+
 restoreRadarFilters();
+sayUpdated();
+checkUpdate();
+setInterval(() => { if (!document.hidden) checkUpdate(); }, 3600000);
 // A job's address opens its panel once the page has loaded what the panel needs, over the first tab.
 const startJob = jobInAddress();
 if (!startJob) showTab(location.hash.slice(1));

@@ -243,6 +243,9 @@ before_send = ["Check that anything you cite from a past employer is yours to sh
 # A to-do item reminding you to write to the hiring manager a day to three after applying: one item, however many
 # applications are due one. False leaves it off; Reached out still logs a note you sent.
 reach_out = true
+# Whether the dashboard asks GitHub, once an hour, for a newer Pyrite, and shows Update available when there is one.
+# False never asks: update with `git pull` instead.
+check_updates = true
 
 [inbox]
 # How far back `pyrite inbox` reads mail. Only mail since you applied can match.

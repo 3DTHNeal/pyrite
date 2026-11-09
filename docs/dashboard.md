@@ -64,3 +64,16 @@ Two buttons at the top start a run without waiting for the schedule:
 A third, **Tailor these now**, sits in the **Being tailored** column of the Pipeline board. It has Claude write every draft waiting there, stretch jobs included, without judging new postings and without the daily run's limit, and its result shows beside the buttons at the top. It uses your Claude plan, so it asks first. A draft that has used up its fix attempts is left alone; **Tailor this one first** on that job gives it another go.
 
 Each runs in the background, shows its progress beside the buttons, and refuses to start while one of its kind is already going. The Claude run and the tailoring batch also refuse to start while the other is going, since both write drafts. The demo starts none of them.
+
+## Updating Pyrite
+
+Once an hour while the page is open, the dashboard fetches GitHub's `main` into Pyrite's code folder and compares it with the copy you're running. When GitHub's is ahead, an **Update available** button appears beside **Check boards now**. It lists what the new commits say, and **Update and restart** moves the code forward to match, runs `pip install -r tools/requirements.txt` with the Python running Pyrite if that file changed, and restarts the dashboard so it runs the new code. The page reloads on its own once the new one answers. Your workspace isn't touched.
+
+It only ever fast-forwards, so it never merges or throws work away. It says why and does nothing when the code folder is on a branch other than `main`, has edits of your own to files git tracks, or has commits GitHub's `main` doesn't: run `git pull` there yourself in those cases. It also waits while a pan, Claude run or tailoring batch is going, since those run the code being replaced. A pan the schedule started counts too. In the demo it says how to update instead.
+
+A dashboard started with `pyrite serve` in a terminal stops there and comes back in the background, as `pyrite open` would start it. To never ask GitHub, set this, and update with `git pull` when you choose:
+
+```toml
+[dashboard]
+check_updates = false
+```

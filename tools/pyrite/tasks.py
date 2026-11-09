@@ -46,6 +46,14 @@ def _scheduled_sweep_running(conn) -> bool:
     return bool(row and not row["finished_at"] and _minutes_since(row["started_at"]) < STALE_MINUTES[SWEEP])
 
 
+def going(conn) -> str | None:
+    """The run going now, by its label, or None. A pan the timer started counts too."""
+    for kind, run in latest(conn).items():
+        if run["state"] == "running":
+            return LABELS.get(kind, kind)
+    return LABELS[SWEEP] if _scheduled_sweep_running(conn) else None
+
+
 def _facts_still_example() -> bool:
     """A workspace copied from the example and not yet made yours. A Claude run there spends usage on a fictional candidate."""
     return "profile/facts.md" in doctor.still_example(ROOT)
