@@ -364,6 +364,21 @@ class Profile(unittest.TestCase):
         with self.assertRaises(ValueError):
             profile.kept("terms", "../../facts")
 
+    def test_saves_that_read_the_same_time_keep_a_copy_each(self):
+        # Windows' clock on Python 3.11 moves in steps of about 15 ms, so quick saves can read the same time. Each
+        # copy must still get its own name, or the later one overwrites the earlier and its history is lost.
+        class Stopped(profile.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return profile.datetime(2026, 11, 8, 12, 0, 0, tzinfo=tz)
+        with mock.patch.object(profile, "datetime", Stopped):
+            for n in range(4):
+                profile.write({"terms": f"Term{n}\n"}, profile.versions(), f"Save {n}")
+        kept = [e for e in profile.history() if e["kept"]]
+        self.assertEqual([e["reason"] for e in kept], ["Save 3", "Save 2", "Save 1", "Save 0"])
+        self.assertEqual(len({e["stamp"] for e in kept}), 4)
+        self.assertEqual([profile.kept("terms", e["stamp"]) for e in kept[:3]], ["Term2\n", "Term1\n", "Term0\n"])
+
 
 class Hub(Profile):
     """The Profile tab's front page: each section's state and summary, what needs you, and History."""

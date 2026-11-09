@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 import tomllib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import doctor, factsdoc, settings, store
@@ -305,8 +305,18 @@ def _clean(key: str, text) -> str:
     return text
 
 
-def _stamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+def _stamp(keys: list[str]) -> str:
+    """A save's stamp, which names the copies it keeps, so it must not be one those files already have.
+
+    On Windows, Python 3.11's clock moves in steps of about 15 ms, so two quick saves could read the same time, and
+    the second's copy of a file would overwrite the first's. The stamp is moved on a microsecond until it's free.
+    """
+    now = datetime.now(UTC)
+    while True:
+        stamp = now.strftime("%Y%m%dT%H%M%S%fZ")
+        if not any((_history_dir() / key / f"{stamp}{Path(FILES[key]).suffix}").exists() for key in keys):
+            return stamp
+        now += timedelta(microseconds=1)
 
 
 def _keep(stamp: str, key: str, text: str, reason: str, step: str | None) -> None:
@@ -351,7 +361,7 @@ def write(changes: dict, based_on: dict, reason: str, step: str | None = None) -
         refuse_stale(current, based_on)
         changed = [key for key, text in texts.items() if text != current[key]]
         existed = {key: _path(key).exists() for key in changed}
-        stamp = _stamp()
+        stamp = _stamp(changed)
         for key in changed:
             if existed[key]:
                 _keep(stamp, key, current[key], reason, step)
