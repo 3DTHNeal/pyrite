@@ -897,7 +897,7 @@ def cmd_init(args):
 
 def cmd_import_resume(args):
     """Draft profile/resume.md from the resume someone already has, read mechanically, with notes on what to check."""
-    from . import doctor, profile, resumeimport
+    from . import doctor, profile, resumeimport, steps
 
     if args.save and store.IS_EXAMPLE:
         sys.exit(f"No workspace is set, so --save would write into the fictional example. `{INIT_EXAMPLE}` makes yours. "
@@ -925,6 +925,8 @@ def cmd_import_resume(args):
     if target != profile.FILES["resume"]:
         print(f"The assay reads employer and role headings from {target}, set by heading_source under [guard], "
               "so change those there too.")
+    # The contact details and work history it holds go into facts.md too, where that has none, so they're typed once.
+    told = steps.fill_from_resume(f"Imported from {Path(args.file).name}") + told
     print("\n".join(told))
 
 
