@@ -38,6 +38,10 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- A place under `places` that ends in a US state matches the state written out or first: "Madison, WI" also matches "Madison, Wisconsin" and "US-WI-Madison". Periods and parentheses count as spaces, so "St. Louis" matches "St Louis".
+- A `**Deadline:**` line in a job's notes.md now wins over the date read from the posting.
+- The example search.toml ties Madison to Wisconsin, and its `agent`, `field` and `store` patterns no longer catch "Insurance Agent", "Field Robotics" or "Object Store".
+- Scoring version 2: the next pan rescores prospects nobody has acted on.
 - History offers **Put back this whole save** for a save that changed several files, and warns that putting back one of them leaves the others as they are.
 - The job panel works as a dialog: the page behind it can't be clicked or tabbed to while it's open, and closing it returns focus to the job you opened.
 - In `approved-terms.txt`, a line starting with `#` is a comment and approves nothing. The Facts tab says so, and adding one needs no code.
@@ -81,6 +85,21 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- Text hidden in a Lever, Ashby or Workday posting stays hidden when the posting also shows a tag such as "&lt;script&gt;". Only Greenhouse's escaped descriptions are unescaped now.
+- More ways of hiding text in a posting are caught: transparent text, text the color of its own background, near-zero opacity or font size, `scale(0)`, and `<font color="white">`.
+- A job you added yourself and closed out no longer takes a new posting with the same title. The new opening comes in as its own job.
+- A `[watch.workday]` entry written like the other boards' (`globex = "Globex"`), or the reverse, fails only that company, with how to write it, in a pan, `pyrite sources` and `pyrite doctor`.
+- A track limited to `industries` now matches Greenhouse and Workday listings: their descriptions are fetched so the industry can be judged.
+- A pattern in search.toml that isn't valid stops a pan with one line naming it and its setting, instead of every board showing as failing. `pyrite doctor` names it too.
+- search.toml saved with a byte-order mark, as Windows PowerShell 5.1 writes it, now reads. One that isn't valid TOML, or has a number in quotes such as `min_score = "forty"`, gives one line naming the line or setting, in the commands, `pyrite doctor` and the dashboard.
+- Industry codes written without quotes (`naics = [333998]`) no longer break the Industries tab.
+- Remote roles in American towns named for foreign places (Dublin, CA; Paris, TX), and in New Mexico, are no longer dropped as foreign. A remote role that names a US place beside a foreign one is kept.
+- "Remote" limited to one state is recognized in more spellings: "REMOTE - CA", "Remote (CA)", "Remote, CA", "Remote - California", "CA - Remote".
+- `level_top` and `level_mid` patterns with alternatives, such as `principal|staff`, match whole words only, so "Principality" isn't a principal title.
+- Deadlines: "until the position is filled" and the posted or start date are no longer read as the deadline, and "11/30/2026", "30th of November 2026" and longer "will close at 11:59 PM … on Monday, November 16, 2026" are found.
+- The Settings tab refuses to save when [promote] holds settings it doesn't show, such as `points` on a skill or a `[promote.extra]` table, instead of dropping them.
+- Removing an item from a list in the Profile tab removes its comment too.
+- `pyrite add` without a link adds the same title in another place as another job, and says when a posting was already tracked.
 - A Gmail mail check that couldn't read your mail, or handed back a list that was cut off, no longer counts as a good check that found nothing. It shows as failed on the Sources tab, and the next check reads those days again.
 - Moving a job on, for instance marking it applied, while Claude is polishing or refreshing its draft puts back the draft that passed the assay, so a sent folder never keeps text the assay didn't check. The same goes for losing the Claude Code sign-in during a polish.
 - A long tailoring job no longer looks stopped while it's still writing, which could let a second Claude run or tailoring batch start beside it. The dashboard now shows each step, such as "writing draft 2" or "checking draft 1". A Refresh resume still building its documents after its time limit no longer looks stopped either.
