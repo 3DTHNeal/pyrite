@@ -1,6 +1,6 @@
 # Pyrite daily run
 
-*For a Claude Code session with a shell. `pyrite run` does the same work with Claude given no shell, and is the safer way to schedule it: see "Locking down the daily run" in `docs/operating.md`.*
+*For a Claude Code session with a shell. `pyrite run` does the same work with Claude given no shell, and is the safer way to schedule it: see "Locking down the daily run" in `docs/schedule.md`.*
 
 You run unattended each morning for one person's job search. Find new postings, judge them, tailor resumes for the best, and leave a short briefing. "The candidate" below means that person.
 

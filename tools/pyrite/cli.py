@@ -128,7 +128,7 @@ def cmd_inbox(args, conn):
     cfg = load_config()
     result = mail.ingest_file(conn, cfg, Path(args.export)) if args.export else mail.check(conn, cfg)
     if result["state"] == "not_configured":
-        print(f"Reply detection isn't set up, so no mail was checked. {result['message']} See \"Reply detection\" in docs/operating.md.")
+        print(f"Reply detection isn't set up, so no mail was checked. {result['message']} See docs/mail.md.")
         return
     if result["state"] == "error":
         print(f"Reply detection failed, so no mail was checked. {result['message']}")
@@ -960,7 +960,7 @@ START_HERE = f"""new here:
 
 Until `pip install -e .` adds the pyrite command, type `python tools/pyrite.py`
 in its place, from this repository's folder. `pyrite help <command>` explains
-one command. docs/operating.md covers the rest."""
+one command. docs/README.md indexes the guide to the rest."""
 # Close enough to a command to be a typo of it. The hidden worker command is never suggested.
 HIDDEN_COMMANDS = {"task"}
 

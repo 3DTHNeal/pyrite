@@ -228,7 +228,7 @@ paper = "letter"  # or "a4"
 queries = ['principal engineer', 'firmware embedded', 'software engineering manager']
 max_pages = 2
 # Experimental: `pyrite autofill` and the Fill Workday form button type a job's fill sheet into its
-# Workday form while you watch. It never submits. Off unless this is true. See docs/operating.md.
+# Workday form while you watch. It never submits. Off unless this is true. See docs/applying.md.
 autofill = false
 
 [dashboard]

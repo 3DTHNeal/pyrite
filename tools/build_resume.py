@@ -42,7 +42,7 @@ from pathlib import Path
 
 if sys.version_info < (3, 11):  # noqa: UP036  Kept so an old Python gets a message, not a traceback.
     sys.exit("The builder needs Python 3.11 or newer, and this is {}.{}. Run it with the venv's Python: "
-             "see docs/operating.md.".format(*sys.version_info[:2]))
+             "see docs/setup.md.".format(*sys.version_info[:2]))
 try:
     import docx  # noqa: F401  Only to say what to install when it's missing.
 except ImportError:

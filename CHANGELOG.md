@@ -30,7 +30,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - `pyrite doctor` and the dashboard's Finish setup list also name the example's settings left in `search.toml`: its local places, confidential and unsupported terms, ordinary words, the degree every resume is expected to name, preferred cities and mail domains.
 - `pyrite --help` lists where to start, and each job id argument says what it is.
 - `pyrite doctor` and Finish setup check the master resume and letter for the lines the assay needs (`# Name`, the `@` contact line, `## Experience`, `## Education`, an employer heading) and name what's missing, instead of leaving every draft to fail. They name the example's tracks and industries left in `search.toml`, and a `workday-paste.md` that's still the example's.
-- docs/operating.md has a "How the documents are written" section on the form of a resume and letter.
+- docs/documents.md describes the form a resume and letter are written in.
 - `pyrite help`, and `pyrite help <command>` for one command. `pyrite` on its own prints the help instead of an error.
 - A mistyped command suggests the one meant, such as `pyrite doctor` for `dcotor`, and a value with a space left out of quotes, such as `--name Alex Rivera`, says to quote it.
 - `pip install -r requirements.txt` works from the top of the repository.
@@ -46,6 +46,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- The guide in `docs/operating.md` is now a page per topic, indexed by [docs/README.md](docs/README.md): setting up, writing the documents, the dashboard, finding and ranking postings, the assay, applying and after, your profile and facts, scheduling and Claude runs, reply detection and the common commands. `docs/operating.md` says where each of its sections went, and `pyrite doctor` and the other messages that named it point at the page that now has the answer. The dashboard page has a table of what each colour means.
 - The dashboard takes its look from the icons: warm paper and ink in light mode, warm charcoal in dark, and brass for the primary buttons, the selected tab, the funnel's bars and anything that wants you. The masthead has the pixel wordmark beside the crystal. Information tags such as a preferred city are teal and warnings orange, so neither reads as a brass button. Each Pipeline column and the job panel show their stage's icon, the to-do kinds are coloured tags, and an empty to-do list, Prospects search or Closed tab shows the icon of what would be there.
 - **Reach out** is one to-do item however many applications are due a note, naming the one whose window closes first and counting the rest, below the other items.
 - The systemd sweep unit runs `pyrite sweep`, the same sweep as the dashboard's button, so a timed sweep and one you start can't overlap.

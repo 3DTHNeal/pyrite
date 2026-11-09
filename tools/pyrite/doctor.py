@@ -20,12 +20,12 @@ from .store import DB_PATH, EXAMPLE_ROOT
 
 # The profile files a new workspace copies from the example and must then make its own.
 OWN_FILES = ("profile/facts.md", "profile/approved-terms.txt", "profile/run-notes.md", "profile/resume.md", "profile/cover-letter.md")
-SETUP_DOCS = 'See "Your workspace" in docs/operating.md.'
+SETUP_DOCS = 'See "Your workspace" in docs/setup.md.'
 # Optional profile files that, left as the example's, would put the fictional candidate's answers into a real application.
 OPTIONAL_FILES = {
     "profile/workday-paste.md": "Optional. Type your own Workday answers into it, or delete it: `pyrite fill` copies it into each job's fill sheet.",
 }
-FORMAT_DOCS = 'See "How the documents are written" in docs/operating.md.'
+FORMAT_DOCS = 'See "How the documents are written" in docs/documents.md.'
 # Names copied from the docs as they are, rather than a person's.
 PLACEHOLDER_NAMES = {"your name", "your full name", "name", "first last", "firstname lastname"}
 # Settings in search.toml that describe the fictional candidate rather than how Pyrite works. Left as they are, they
@@ -229,10 +229,10 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     if not any(isinstance(board, dict) and board for board in cfg.get("watch", {}).values()):
         todos.append({"what": "profile/search.toml watches no companies, so a pan reads no job boards.",
                       "fix": 'Add each company under [watch.greenhouse], [watch.lever], [watch.ashby] or [watch.workday]. See '
-                             '"Adding companies" in docs/operating.md.', "step": "companies"})
+                             '"Adding companies" in docs/prospects.md.', "step": "companies"})
     for problem in discover.watch_problems(cfg):
         todos.append({"what": problem, "fix": 'Until then a pan skips that company and lists it as failing. See "Adding companies" '
-                                              "in docs/operating.md.", "step": "companies"})
+                                              "in docs/prospects.md.", "step": "companies"})
     for problem in score.pattern_problems(cfg):
         todos.append({"what": problem, "fix": "Until it's fixed, a pan stops before reading any job board. A literal character "
                                               "such as ( or + needs a backslash before it.", "severity": "bad"})
@@ -390,5 +390,5 @@ def tool_checks(cfg: dict | None) -> list[dict]:
     elif inbox.CREDENTIALS_PATH.exists():
         found.append({"ok": True, "what": f"Reply detection reads mail with the login in {inbox.CREDENTIALS_PATH}", "fix": "Test it with `pyrite inbox`."})
     else:
-        found.append({"ok": None, "what": "Reply detection isn't set up", "fix": 'Optional. See "Reply detection" in docs/operating.md.'})
+        found.append({"ok": None, "what": "Reply detection isn't set up", "fix": 'Optional. See docs/mail.md.'})
     return found

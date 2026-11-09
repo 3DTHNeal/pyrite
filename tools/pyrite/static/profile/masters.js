@@ -65,7 +65,7 @@ profileStep("masters", {
         h("div", { class: "row" }, h("small", { class: "muted" }, "Headings come from Work history, and the name and contact line from Name and contact."),
           go("history", "Work history"), go("basics", "Name and contact")));
     })() : h("div", { class: "callout" }, h("b", {}, "There's no profile/resume.md."),
-      h("p", {}, "Copy your best resume there, in the form docs/operating.md describes, to edit it here."));
+      h("p", {}, "Copy your best resume there, in the form docs/documents.md describes, to edit it here."));
 
     const letter = shown.letter.exists
       ? h("section", { class: "panel stack", "aria-label": "Cover letter" },

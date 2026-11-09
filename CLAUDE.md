@@ -1,6 +1,6 @@
 # Pyrite
 
-Code for a job-search system. Real data never lives here: it's in a private workspace, and this repository is public. `docs/operating.md` covers setup and commands.
+Code for a job-search system. Real data never lives here: it's in a private workspace, and this repository is public. `docs/README.md` indexes the guide to setup, the dashboard and the commands.
 
 - Python 3.11 or newer. `.venv/Scripts/python.exe` on Windows, `.venv/bin/python` elsewhere.
 - **Nothing personal goes in this repository**: no real names of employers or targets, contact details, locations, confidential terms or machine names. Anything about a person belongs in the workspace's `profile/`. Fixtures use the fictional candidate in `example/`.
