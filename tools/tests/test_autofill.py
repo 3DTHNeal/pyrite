@@ -702,6 +702,72 @@ class Autofill(ClaudeRun):
                 workday.SETTLE_MS = saved
                 browser.close()
 
+    @unittest.skipUnless(HAVE_BROWSER, "Playwright's Chromium isn't installed")
+    def test_dates_typed_into_workday_date_parts_keep_their_months(self):
+        # As on Medtronic's tenant: each date is a month and a year spin button, kept outside the window under the text
+        # shown. The date keeps its own note of which part keys go to: a full month moves it on to the year, and
+        # Backspace in an empty year moves it back to the month without moving the page's focus, so focusing the year
+        # again changes nothing. The inputs' own text is only the last keys typed, and a two-digit year becomes 20xx
+        # when the year is left. Clearing an empty year with Backspace put its first "2" in the month: every month was 02.
+        date = """<input id="workExperience-1--{d}-dateSectionMonth-input" role="spinbutton" class="part">
+                  <input id="workExperience-1--{d}-dateSectionYear-input" role="spinbutton" class="part">"""
+        page_html = f"""<input id="workExperience-1--jobTitle"><input id="workExperience-1--companyName">
+            {date.format(d="startDate")}{date.format(d="endDate")}<textarea id="workExperience-1--roleDescription"></textarea>
+            <style>.part {{ position: absolute; left: -9999px; }}</style>
+            <script>
+            const part = (d, which) => document.getElementById(`workExperience-1--${{d}}-dateSection${{which}}-input`);
+            const set = (el, n) => {{ if (n === null) el.removeAttribute("aria-valuenow"); else el.setAttribute("aria-valuenow", n); }};
+            for (const d of ["startDate", "endDate"]) {{
+              const month = part(d, "Month"), year = part(d, "Year");
+              let keys = "", active = month;
+              for (const el of [month, year]) {{
+                el.addEventListener("focus", () => {{ active = el; keys = ""; }});
+                el.addEventListener("keydown", (ev) => {{
+                  ev.preventDefault();
+                  if (ev.key === "Backspace") {{
+                    if (active.hasAttribute("aria-valuenow")) {{ set(active, null); active.value = ""; }}
+                    else if (active === year) active = month;
+                    keys = "";
+                    return;
+                  }}
+                  if (!/^[0-9]$/.test(ev.key)) return;
+                  if (active === month) {{
+                    keys += ev.key;
+                    month.value = keys;
+                    if (keys.length === 2 || Number(keys) > 1) {{ set(month, Number(keys)); year.focus(); active = year; keys = ""; }}
+                    return;
+                  }}
+                  keys = (keys + ev.key).slice(-4);
+                  set(year, Number(keys));
+                  year.value = keys.slice(-2);
+                }});
+              }}
+              year.addEventListener("blur", () => {{
+                const n = Number(year.getAttribute("aria-valuenow"));
+                if (year.hasAttribute("aria-valuenow") && n < 100) set(year, 2000 + n);
+              }});
+            }}
+            </script>"""
+        role = {"title": "Firmware Lead", "company": "Lakeshore Instruments", "from": "03/2026", "to": "11/2026"}
+        values = "[...document.querySelectorAll('.part')].map(e => e.getAttribute('aria-valuenow'))"
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_content(page_html)
+            report = workday.Report()
+            workday._fill_role(page, "workExperience-1", role, report, "job 1")
+            page.locator("#workExperience-1--jobTitle").focus()
+            fresh = page.evaluate(values)
+            # A draft kept from a run that went wrong is put right.
+            again = workday.Report()
+            workday._fill_role(page, "workExperience-1", {**role, "from": "01/2022", "to": "12/2025"}, again, "job 1")
+            page.locator("#workExperience-1--jobTitle").focus()
+            fixed = page.evaluate(values)
+            browser.close()
+        self.assertEqual(fresh, ["3", "2026", "11", "2026"])
+        self.assertEqual(fixed, ["1", "2022", "12", "2025"])
+        self.assertFalse([s for s in report.skipped + again.skipped if "check it" in s])
+
     def test_a_click_that_timed_out_says_what_was_in_the_way(self):
         err = Exception("Locator.click: Timeout 8000ms exceeded.\nCall log:\n  - waiting for locator\n"
                         '  - <div data-automation-id="activeListContainer">…</div> intercepts pointer events\n  - retrying')
