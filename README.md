@@ -14,7 +14,7 @@ Pyrite is fool's gold. The name covers both halves of the job: telling real open
 
 The interesting problem isn't generating a resume. It's that a language model will happily write a confident, plausible, false one. So the model isn't trusted to police itself. A deterministic fact checker stands between every draft and "ready to send", and it can't be talked out of its answer. Pyrite calls it the assay, after the test that tells gold from fool's gold.
 
-![The dashboard, showing the to-do list, the funnel and the pipeline](docs/screenshots/dashboard.png)
+![The dashboard: the rail of views with a count at each stage, the status line, and the to-do list with the key numbers beside it](docs/screenshots/dashboard.png)
 
 *Everything in this screenshot is fictional. See [Keeping my data out of this repo](#keeping-my-data-out-of-this-repo).*
 
