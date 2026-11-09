@@ -303,7 +303,7 @@ Pyrite reads a few more things into each posting, in plain code, and shows them 
 
 ## Preferred cities and industries
 
-Open the dashboard's **Settings** tab to choose the cities and industries you want to see first. A match adds to Priority and shows as a blue tag on Prospects, whose **Preferred city or industry** filter lists only those postings. Open a job to see the points under **Why its priority is**.
+Open the dashboard's **Settings** tab to choose the cities and industries you want to see first. A match adds to Priority and shows as a teal tag on Prospects, whose **Preferred city or industry** filter lists only those postings. Open a job to see the points under **Why its priority is**.
 
 The tab has a panel for the points, one for cities and a card for each industry, and each has its own **Save**. A save writes only that panel's part, so an edit you haven't finished in another panel isn't saved with it. Industry cards stay closed until you open one, and show what's saved in a line.
 

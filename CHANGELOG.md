@@ -46,6 +46,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- The dashboard takes its look from the icons: warm paper and ink in light mode, warm charcoal in dark, and brass for the primary buttons, the selected tab, the funnel's bars and anything that wants you. The masthead has the pixel wordmark beside the crystal. Information tags such as a preferred city are teal and warnings orange, so neither reads as a brass button. Each Pipeline column and the job panel show their stage's icon, the to-do kinds are coloured tags, and an empty to-do list, Prospects search or Closed tab shows the icon of what would be there.
 - **Reach out** is one to-do item however many applications are due a note, naming the one whose window closes first and counting the rest, below the other items.
 - The systemd sweep unit runs `pyrite sweep`, the same sweep as the dashboard's button, so a timed sweep and one you start can't overlap.
 - A place under `places` that ends in a US state matches the state written out or first: "Madison, WI" also matches "Madison, Wisconsin" and "US-WI-Madison". Periods and parentheses count as spaces, so "St. Louis" matches "St Louis".

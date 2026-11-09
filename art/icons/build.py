@@ -91,8 +91,12 @@ def main(argv=None):
         fs, ms = frames(name, 32)
         save(strip(fs), icons / file)
         print(f"{file}: {len(fs)} frames, {ms} ms each")
+    # 24 px beside a stage's name, and 48 px where a stage or a view is empty.
     for name in STAGES:
         save(still(name, 24), icons / f"{name}-24.png")
+        save(still(name, 48), icons / f"{name}-48.png")
+    # The name beside the mark in the dashboard's masthead, its letters 21 px tall to sit with the 32 px mark.
+    save(wordmark(scale=3), icons / "wordmark.png")
 
     save(upscale(lockup(marks[32]), 4), docs / "pyrite-logo.png")
     save(upscale(row([still(name, 48) for name in STAGES], 8), 2), docs / "icon-set.png")
