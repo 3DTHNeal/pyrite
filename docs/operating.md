@@ -165,7 +165,7 @@ The dashboard labels its parts in plain words. The code and these docs sometimes
 | Check boards now | Pan | Reading the boards and checking mail. The command is `pyrite sweep` |
 | Fact check | Assay | The checker that decides whether a draft is ready |
 
-The icons follow the same metaphor, reading each stage of **Where they stand** as a step in a fire assay:
+The icons follow the same metaphor, reading each stage as a step in a fire assay. Each one appears beside its stage in **Where they stand**, at the head of its Pipeline column and at the top of the job panel, and a large faded one fills a view with nothing in it, such as an empty Closed tab. A stage with no jobs greys its icon out.
 
 ![The stage icons: a gold pan, an anvil, a streak plate, a furnace, a crucible, a balance, a cupel and a tarnished crystal](images/icon-set.png)
 
@@ -180,7 +180,20 @@ The icons follow the same metaphor, reading each stage of **Where they stand** a
 | Cupel and prill | Offer | The bead of real gold left at the end of an assay |
 | Tarnished crystal | Closed | Fool's gold, set aside |
 
-The crystal beside the title glints now and then, and throws sparks while a run is going: pyrite's name comes from the Greek for fire, because it sparks when struck against steel. With reduced motion turned on in your system, it holds still. `art/icons/build.py` draws every icon, and its README says how.
+The crystal beside the name glints now and then, and throws sparks while a run is going: pyrite's name comes from the Greek for fire, because it sparks when struck against steel. With reduced motion turned on in your system, it holds still. `art/icons/build.py` draws every icon and the pixel wordmark, and its README says how.
+
+The colours mean the same thing everywhere, on the to-do list's tags, on cards and in Prospects:
+
+| Colour | Means | For example |
+|---|---|---|
+| Brass | Something to act on | The main button, the selected tab, a key number that needs you |
+| Red | It stops you or is urgent | **Blocked**, **Failed assay**, **Possible ghost**, a deadline within two days |
+| Orange | Worth acting on soon | **Follow up**, **Possible reply**, **Reposted** once, a deadline within `decide_days` |
+| Teal | Information | **New listing**, **Reach out**, **Your pick**, a preferred city or industry, **Rare near you** |
+| Green | Good news | **Send**, **New**, a strong or good fit |
+| Grey | For reference | A deadline still weeks away, **May be a repost** |
+
+The page follows your system's light or dark setting.
 
 Two buttons at the top start a run without waiting for the schedule:
 
@@ -257,7 +270,7 @@ After applying, find the hiring manager and send one short note within a few day
 
 ## Deadlines and what to check before applying
 
-Boards have no closing-date field, so the dashboard reads the `**Deadline:**` line in the job's `notes.md` and, failing that, the posting's own words ("accepted at least until November 8, 2026", "expected to close on November 16th, 2026", "accepted until 11/30/2026"). A date after "posted" or "start", or past the end of the sentence, isn't taken for the deadline. A job that hasn't been sent shows **Apply by** on its card and in Prospects: amber within `decide_days` under `[run]` (5 if unset), so there's still time to tailor, and red within two days. Ready drafts closing soonest lead the to-do list, and a prospect or shortlisted job inside that window gets a **Closing soon** item even if it isn't new, saying to tailor it or pass. The daily run judges and tailors those before anything else but your own picks. Prospects can be sorted by deadline.
+Boards have no closing-date field, so the dashboard reads the `**Deadline:**` line in the job's `notes.md` and, failing that, the posting's own words ("accepted at least until November 8, 2026", "expected to close on November 16th, 2026", "accepted until 11/30/2026"). A date after "posted" or "start", or past the end of the sentence, isn't taken for the deadline. A job that hasn't been sent shows **Apply by** on its card and in Prospects: orange within `decide_days` under `[run]` (5 if unset), so there's still time to tailor, and red within two days. Ready drafts closing soonest lead the to-do list, and a prospect or shortlisted job inside that window gets a **Closing soon** item even if it isn't new, saying to tailor it or pass. The daily run judges and tailors those before anything else but your own picks. Prospects can be sorted by deadline.
 
 A deadline is firm unless the posting words it as a floor: "accepted at least until November 8" or "or until the position is filled" says how long it stays up, not when it comes down. Once a firm deadline has gone by, the next pan or run passes on the job, if it hasn't been sent, and says why in its timeline. **Undo pass** puts it back for good: the sweep passes on a job only once. A pan doesn't store a new posting whose own firm deadline has already gone by. Past a floor, a job shows **May close any day** for two weeks and stays on the to-do list, since it's still open but not for long.
 

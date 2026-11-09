@@ -26,6 +26,8 @@ Pyrite is a personal project. I run it on my own job search and share it so othe
 
   The hook uses this checkout's venv, or the main checkout's from a `git worktree`. To use another Python, set `git config pyrite.python /path/to/python`.
 
+  On the dashboard, use the colour variables at the top of `tools/pyrite/static/style.css` rather than new colours. Each has a light and a dark value, every text colour clears 4.5:1 on every surface, and a colour means the same thing everywhere (see the table under "The dashboard" in [docs/operating.md](docs/operating.md)). Icons are drawn by `art/icons/build.py`, never edited by hand: change the script and run it again. Show a change to the page in both themes and at phone width.
+
   The tests are split by area (`test_assay.py`, `test_discovery.py`, `test_dashboard.py` and so on), and `tools/tests/support.py` sets up the throwaway workspace they share. Note what changed under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
 
 - **Security problems** go through [SECURITY.md](SECURITY.md), not an issue.
