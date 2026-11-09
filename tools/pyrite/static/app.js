@@ -1096,8 +1096,14 @@ function renderRuns() {
     if (!task || (kind === "sweep" && sweepShownAbove(task))) continue;
     const ended = task.finished_at || task.started_at;
     if (busy) lines.push(h("span", {}, `${run.name}, started ${ago(task.started_at)}: ${task.detail}`));
-    else if (task.state === "failed") lines.push(h("span", { class: "alert" }, `${run.name} failed ${ago(ended)}: ${task.detail}`));
-    else if (Date.now() - toDate(ended).getTime() < RUN_RESULT_SHOWN_FOR) {
+    else if (task.state === "failed") {
+      lines.push(h("span", { class: "alert" }, `${run.name} failed ${ago(ended)}: ${task.detail}`));
+      if (task.problem && task.problem.kind === "profile_changed") lines.push(profileChangeAnswers(kind, task, tasks));
+    } else if (task.state === "cleared") {
+      if (Date.now() - toDate(task.cleared_at).getTime() < RUN_RESULT_SHOWN_FOR) {
+        lines.push(h("span", {}, `${run.name} stopped ${ago(ended)} for a change to profile/ you said was yours.`));
+      }
+    } else if (Date.now() - toDate(ended).getTime() < RUN_RESULT_SHOWN_FOR) {
       lines.push(h("span", {}, `${run.name} finished ${ago(ended)}. ${kind === "claude" ? "Its field report is on the To do page." : task.detail}`));
     }
   }
@@ -1109,12 +1115,38 @@ function renderRuns() {
   if (running) runWatch = setTimeout(refresh, 5000);
 }
 
+const RUN_QUESTIONS = {
+  claude: "Have Claude judge the new postings and tailor the best ones now?\n\nIt can take a while and uses your Claude plan. Each draft still has to pass the assay.",
+  tailor: "Have Claude write every draft under Being tailored now, stretch jobs included?\n\nIt uses your Claude plan. Each draft still has to pass the assay.",
+};
+
+// A writing run stops when something under profile/ changes while Claude writes. When the change was yours, these say
+// so: that one warning clears and the job's timeline keeps that you said it. Again also starts the same kind of run.
+function profileChangeAnswers(kind, task, tasks) {
+  const writing = ["claude", "tailor"].find((other) => tasks[other] && tasks[other].state === "running");
+  const why = state.demo ? "Not in the demo, which starts no runs." : notReady(kind)
+    || (writing ? `${RUNS[writing].name} is going, and both write drafts, so this waits for it.` : "");
+  return h("span", { class: "row run-answers" },
+    h("button", { class: "btn small", type: "button", title: "Clear this warning. The job's timeline keeps that you said so.",
+      onclick: () => acceptProfileChange(kind, task, false) }, "I made this change"),
+    h("button", { class: "btn small", type: "button", disabled: Boolean(why),
+      title: why || "Clear this warning and start the run again. Uses your Claude plan.",
+      onclick: () => acceptProfileChange(kind, task, true) }, kind === "tailor" ? "I made it, tailor again" : "I made it, run Claude again"));
+}
+
+async function acceptProfileChange(kind, task, retry) {
+  if (retry && !window.confirm(RUN_QUESTIONS[kind])) return;
+  runError = "";
+  try {
+    await api("/api/run/accept", { id: task.id, retry });
+  } catch (err) {
+    runError = err.message;
+  }
+  await refresh();
+}
+
 async function startRun(kind) {
-  const questions = {
-    claude: "Have Claude judge the new postings and tailor the best ones now?\n\nIt can take a while and uses your Claude plan. Each draft still has to pass the assay.",
-    tailor: "Have Claude write every draft under Being tailored now, stretch jobs included?\n\nIt uses your Claude plan. Each draft still has to pass the assay.",
-  };
-  if (questions[kind] && !window.confirm(questions[kind])) return;
+  if (RUN_QUESTIONS[kind] && !window.confirm(RUN_QUESTIONS[kind])) return;
   runError = "";
   try {
     await api("/api/run", { kind });

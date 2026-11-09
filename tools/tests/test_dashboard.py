@@ -308,6 +308,15 @@ class Security(unittest.TestCase):
     def post(self, path, body):
         return self.call(path, "POST", {"Content-Type": "application/json"}, body)
 
+    def test_clearing_a_run_warning_needs_a_run_whose_warning_is_showing(self):
+        for body in (b"{}", b'{"id": "1"}', b'{"id": true}'):
+            with self.subTest(body):
+                status, said, _ = self.post("/api/run/accept", body)
+                self.assertEqual((status, json.loads(said)["error"]), (400, "Say which run's warning to clear."))
+        status, said, _ = self.post("/api/run/accept", b'{"id": 987654, "retry": true}')
+        self.assertEqual(status, 400)
+        self.assertIn("isn't showing any more", json.loads(said)["error"])
+
     def test_a_body_that_is_not_an_object_is_refused(self):
         status, body, _ = self.post("/api/jobs", b"[1]")
         self.assertEqual((status, json.loads(body)["error"]), (400, "bad request"))

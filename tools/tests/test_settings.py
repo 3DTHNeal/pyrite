@@ -425,6 +425,20 @@ class OlderDatabase(unittest.TestCase):
                 self.assertEqual(reasons, [cut + "…", whole, "Short and whole."])
                 conn.close()
 
+    def test_gains_the_columns_that_let_you_clear_a_runs_profile_warning(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            path = Path(folder) / "old.db"
+            conn = store.connect(path)
+            conn.execute("INSERT INTO tasks (kind, started_at, updated_at, finished_at, ok, detail) VALUES ('tailor', 'x', 'x', 'x', 0, 'Stopped.')")
+            conn.execute("ALTER TABLE tasks DROP COLUMN problem")
+            conn.execute("ALTER TABLE tasks DROP COLUMN cleared_at")
+            conn.commit()
+            conn.close()
+            conn = store.connect(path)
+            self.assertLessEqual({"problem", "cleared_at"}, {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")})
+            self.assertEqual(tuple(conn.execute("SELECT detail, problem, cleared_at FROM tasks").fetchone()), ("Stopped.", None, None))
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

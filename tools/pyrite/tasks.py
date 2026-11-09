@@ -4,11 +4,12 @@ Each runs in its own process, one of each kind at a time, and reports its progre
 `tasks` table so the dashboard can show it. The Claude run and the tailoring batch both write
 drafts, so only one of those two goes at a time.
 """
+import json
 from datetime import UTC, datetime
 
 from . import claude_code, discover, doctor, mail
 from .claude_code import find_claude, sign_in_help
-from .store import IS_EXAMPLE, ROOT, now
+from .store import IS_EXAMPLE, ROOT, log_event, now
 
 SWEEP, CLAUDE, TAILOR = "sweep", "claude", "tailor"
 LABELS = {SWEEP: "pan", CLAUDE: "Claude run", TAILOR: "tailoring batch"}
@@ -26,18 +27,52 @@ def _minutes_since(iso: str) -> float:
     return (datetime.now(UTC) - datetime.fromisoformat(iso)).total_seconds() / 60
 
 
+def _problem(row) -> dict | None:
+    """What stopped a failed run, in a form the dashboard can act on, when the run said."""
+    try:
+        found = json.loads(row["problem"]) if row["problem"] else None
+    except ValueError:
+        return None
+    return found if isinstance(found, dict) else None
+
+
 def latest(conn) -> dict[str, dict]:
-    """The latest run of each kind, by kind: its state, when it started and what it last said."""
+    """The latest run of each kind, by kind: its state, when it started and what it last said.
+
+    A failed run you've cleared, by saying the profile change that stopped it was yours, is "cleared" rather than
+    "failed", so it no longer counts as a problem."""
     rows = conn.execute("SELECT * FROM tasks WHERE id IN (SELECT MAX(id) FROM tasks GROUP BY kind)").fetchall()
     found = {}
     for row in rows:
         state, detail = "running", row["detail"]
         if row["finished_at"]:
-            state = "done" if row["ok"] else "failed"
+            state = "done" if row["ok"] else "cleared" if row["cleared_at"] else "failed"
         elif _minutes_since(row["updated_at"]) > STALE_MINUTES.get(row["kind"], 60):
             state, detail = "failed", DIED
-        found[row["kind"]] = {"state": state, "started_at": row["started_at"], "finished_at": row["finished_at"], "detail": detail}
+        found[row["kind"]] = {"id": row["id"], "state": state, "started_at": row["started_at"],
+                              "finished_at": row["finished_at"], "detail": detail, "problem": _problem(row),
+                              "cleared_at": row["cleared_at"]}
     return found
+
+
+def accept_profile_change(conn, task_id: int) -> str:
+    """Say the profile change that stopped this writing run was yours. That one warning clears, and the job whose draft
+    went back keeps on its timeline that you said so. No file changes here, so this changes nothing a draft may say:
+    the files under profile/ already decide that. Returns the run's kind, so it can be started again."""
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    problem = _problem(row) if row else None
+    newest = conn.execute("SELECT MAX(id) FROM tasks WHERE kind = ?", (row["kind"],)).fetchone()[0] if row else None
+    if (not problem or problem.get("kind") != claude_code.PROFILE_CHANGED or row["ok"] or row["cleared_at"]
+            or newest != task_id):
+        raise ValueError("That warning isn't showing any more: it was cleared already, or a newer run took its place.")
+    conn.execute("UPDATE tasks SET cleared_at = ? WHERE id = ?", (now(), task_id))
+    job_id, files = problem.get("job_id"), [str(path) for path in problem.get("files") or ()]
+    if isinstance(job_id, int) and conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone():
+        log_event(conn, job_id, "profile_change_accepted",
+                  f"You said the change to {claude_code.some(files) or 'profile/'} that stopped the {LABELS[row['kind']]} "
+                  "was yours.")
+    conn.commit()
+    return row["kind"]
 
 
 def _scheduled_sweep_running(conn) -> bool:
@@ -115,10 +150,10 @@ def progress(conn, task_id: int, detail: str) -> None:
     conn.commit()
 
 
-def _finish(conn, task_id: int, ok: bool, detail: str) -> None:
+def _finish(conn, task_id: int, ok: bool, detail: str, problem: dict | None = None) -> None:
     ts = now()
-    conn.execute("UPDATE tasks SET finished_at = ?, updated_at = ?, ok = ?, detail = ? WHERE id = ?",
-                 (ts, ts, int(ok), detail[:1500], task_id))
+    conn.execute("UPDATE tasks SET finished_at = ?, updated_at = ?, ok = ?, detail = ?, problem = ? WHERE id = ?",
+                 (ts, ts, int(ok), detail[:1500], json.dumps(problem) if problem else None, task_id))
     conn.commit()
 
 
@@ -170,7 +205,8 @@ def run(conn, cfg: dict, task_id: int) -> bool:
             said = work(conn, cfg, lambda text: progress(conn, task_id, text))
     except Exception as err:  # Anything uncaught would leave the dashboard saying "running" until it went stale.
         conn.rollback()
-        _finish(conn, task_id, False, f"{err}" if str(err) else type(err).__name__)
+        problem = getattr(err, "problem", None)  # one the dashboard offers a way past, such as daily.ProfileChanged
+        _finish(conn, task_id, False, f"{err}" if str(err) else type(err).__name__, problem if isinstance(problem, dict) else None)
         return False
     _finish(conn, task_id, True, said)
     return True

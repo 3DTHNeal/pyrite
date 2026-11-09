@@ -11,7 +11,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import checks, claude_code, discover, signals, skillage
+from . import checks, claude_code, confirm, discover, signals, skillage
 from .claude_code import ClaudeFailed, find_claude
 from .cli import BOARD_FIELDS, apply_triage, ensure_folder, finish_job, queue
 from .store import ROOT, get_job, log_event, now, shorten
@@ -43,7 +43,17 @@ class NotSignedIn(ClaudeFailed):
 
 class ProfileChanged(ClaudeFailed):
     """Something under profile/ changed while Claude was writing. Every draft is checked against the fact bank there,
-    so the run stops rather than check any more of them against something it didn't start with."""
+    so the run stops rather than check any more of them against something it didn't start with.
+
+    `problem` is what the run's record keeps, so the dashboard can name the files and let you say the change was yours."""
+
+    def __init__(self, message: str, job_id: int | None = None, files: list[str] | None = None):
+        super().__init__(message)
+        self.problem = {"kind": claude_code.PROFILE_CHANGED, "job_id": job_id, "files": list(files or ())}
+
+
+# The profile files whose changes can let drafts say more, by the names confirm.loosening knows them by.
+LOOSENING = {"profile/facts.md": "facts", "profile/approved-terms.txt": "terms", "profile/search.toml": "config"}
 
 
 def parse_verdict(message: str) -> tuple[str, str] | None:
@@ -142,12 +152,33 @@ def _put_back(files: list[Path], kept: dict[Path, bytes]) -> None:
             path.unlink()
 
 
-def _profile_unchanged(profile: str, files: list[Path], kept: dict[Path, bytes]) -> None:
-    """Raise ProfileChanged, with what this run wrote undone, if anything under profile/ changed since `profile`."""
-    if claude_code.profile_digest(ROOT) != profile:
-        _put_back(files, kept)
-        raise ProfileChanged("Something in profile/ changed while Claude was writing, so the run stopped and the draft it was "
-                             "working on went back as it was. Look over profile/ for a change you didn't make.")
+def _text(data: bytes | None) -> str:
+    return (data or b"").decode("utf-8", errors="replace")
+
+
+def _profile_unchanged(conn, job_id: int, profile: dict[str, bytes], files: list[Path], kept: dict[Path, bytes]) -> None:
+    """Raise ProfileChanged, with what this run wrote undone, if anything under profile/ changed since `profile`.
+
+    The message names the files and what the change lets drafts say that they couldn't before, so you can tell your own
+    edit from one you didn't make. The job's timeline keeps it too."""
+    now_there = claude_code.profile_snapshot(ROOT)
+    changed = claude_code.profile_changes(profile, now_there)
+    if not changed:
+        return
+    _put_back(files, kept)
+    loosens = [phrase for path in changed if path in LOOSENING
+               for phrase in confirm.loosening(LOOSENING[path], _text(profile.get(path)), _text(now_there.get(path)))]
+    company = get_job(conn, job_id)["company"]
+    files_said = claude_code.some(changed)
+    said = (f"{files_said} changed while Claude was writing the {company} draft, so the run stopped and that draft went "
+            "back as it was.")
+    if loosens:
+        said += f" The change will {claude_code.some(loosens)}."
+    said += " If you made this change, say so. If you didn't, look it over before tailoring again."
+    log_event(conn, job_id, claude_code.PROFILE_CHANGED,
+              f"{files_said} changed while Claude was writing this draft, so the run stopped and the draft went back as it was.")
+    conn.commit()
+    raise ProfileChanged(said, job_id, changed)
 
 
 def _time_left(deadline: float) -> bool:
@@ -161,7 +192,7 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambd
     folder = ensure_folder(conn, job_id)
     cmd = claude_code.command(claude, tailor_files(folder, cfg))
     files = [ROOT / path for path in tailor_files(folder, cfg)]
-    profile = claude_code.profile_digest(ROOT)
+    profile = claude_code.profile_snapshot(ROOT)
     feedback = ""
     for attempt in range(1, ATTEMPTS + 1):
         job = get_job(conn, job_id)
@@ -170,7 +201,7 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambd
         kept = _keep(files)
         say(f"writing draft {attempt}")
         _ask(conn, job_id, "tailor", cmd, tailor_prompt(job, folder, cfg, feedback), deadline)
-        _profile_unchanged(profile, files, kept)
+        _profile_unchanged(conn, job_id, profile, files, kept)
         if get_job(conn, job_id)["status"] not in TAILORING:
             _put_back(files, kept)  # You moved it on while Claude wrote, so what it wrote, unchecked, is undone.
             return False
@@ -185,7 +216,7 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambd
     return False
 
 
-def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: dict, deadline: float, profile: str,
+def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: dict, deadline: float, profile: dict[str, bytes],
            say=lambda step: None) -> None:
     """One more pass over a draft that passed with warnings a rewrite can clear, such as a letter naming unapproved
     terms or a resume that copies the posting's skill terms. Unless that pass passes the assay, the passing draft goes
@@ -200,7 +231,7 @@ def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: di
         text = tailor_prompt(get_job(conn, job_id), folder, cfg, polish="\n".join(f"- {ask}" for ask in asks))
         say("clearing the assay's warnings")
         _ask(conn, job_id, "tailor", cmd, text, deadline)
-        _profile_unchanged(profile, files, kept)
+        _profile_unchanged(conn, job_id, profile, files, kept)
         if get_job(conn, job_id)["status"] == "ready":
             say("checking the cleared draft")
             if finish_job(conn, cfg, job_id)["ok"]:

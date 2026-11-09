@@ -237,7 +237,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TEXT NOT NULL,
     finished_at TEXT,
     ok INTEGER,
-    detail TEXT DEFAULT ''
+    detail TEXT DEFAULT '',
+    problem TEXT,
+    cleared_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -399,11 +401,14 @@ def scoring_version(conn) -> int:
 def _migrate(conn) -> None:
     """Bring an older database up to date. Its listing history starts from what it already knows."""
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
-    # The sent copy's fingerprints, and the folder's as they were when you said its changes since were fine.
-    for column in ("sent_files", "sent_ack"):
-        if column not in columns:
+    task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
+    # The sent copy's fingerprints, and the folder's as they were when you said its changes since were fine. Then a
+    # failed run's problem in a form the dashboard can act on, and when you said it was yours.
+    for table, column, have in (("jobs", "sent_files", columns), ("jobs", "sent_ack", columns),
+                                ("tasks", "problem", task_columns), ("tasks", "cleared_at", task_columns)):
+        if column not in have:
             try:
-                conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError as err:
                 if "duplicate column" not in str(err):
                     raise
