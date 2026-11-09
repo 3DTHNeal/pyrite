@@ -75,6 +75,26 @@ class Filtering(unittest.TestCase):
         self.assertTrue(score.evaluate(title, "Remote - US", "", "python", cfg, company="Cyberdyne Research").keep)
         self.assertFalse(score.evaluate(title, "Remote - US", "", "python", cfg, company="Initech").keep)
 
+    def test_places_and_titles_in_plain_words(self):
+        # Someone starting out writes names, not patterns. Each is whole words in any case, with any spacing or commas.
+        cfg = {**CFG, "location": {"local": [], "local_exact": [], "places": ["Springfield, IL", "Oak Park"],
+                                   "accept_remote": False},
+               "track": [{"name": "Data", "titles": ["data engineer", "Sr. Product Owner"], "needs_level": False}]}
+        for location, expected in {"Springfield, IL": "local", "springfield il, US": "local", "Springfield,IL": "local",
+                                   "Oak Park, Illinois": "local", "Springfield, MO": "out", "Springfielder, IL": "out",
+                                   "Oakpark": "out"}.items():
+            with self.subTest(location):
+                self.assertEqual(score.classify_location(location, "", cfg), expected)
+        for title, wanted in {"Senior Data Engineer": True, "data-engineer II": True, "Sr. Product Owner, Platform": True,
+                              "Data Engineering Manager": False, "Big Data Engineers": False}.items():
+            with self.subTest(title):
+                self.assertEqual(score.match_track(title, cfg) is not None, wanted)
+        # Patterns and plain words together, and one phrase written without brackets.
+        both = {"local": ["madison"], "places": "Verona"}
+        self.assertEqual(score.local_patterns(both)[0], "madison")
+        self.assertEqual(score.classify_location("Verona, WI", "", {**cfg, "location": both}), "local")
+        self.assertEqual(score.plain_pattern(" , "), r"(?!)")  # nothing to match, so it matches nothing
+
     def test_exclusions_match_word_starts_only(self):
         # "hr" must not exclude "Three" or "Shrink"; "intern" must not exclude "Internal".
         self.assertIsNotNone(score.match_track("Principal Engineer, Internal AI Tools", CFG))

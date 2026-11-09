@@ -216,8 +216,9 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     # What a blank search.toml leaves empty, and what each stops. An example's copy has both, so it's named above instead.
     if not cfg.get("track"):
         todos.append({"what": "profile/search.toml lists no roles under [[track]], so a pan keeps no postings.",
-                      "fix": "Add a [[track]] for each kind of role you want, with the title words that name it. A blank "
-                             "search.toml shows the form in a comment where they go.", "step": "roles"})
+                      "fix": "Add a [[track]] for each kind of role you want, with the title words that name it in plain words, "
+                             "such as titles = [\"data engineer\"]. A blank search.toml shows the form in a comment where "
+                             "they go.", "step": "roles"})
     if not any(isinstance(board, dict) and board for board in cfg.get("watch", {}).values()):
         todos.append({"what": "profile/search.toml watches no companies, so a pan reads no job boards.",
                       "fix": 'Add each company under [watch.greenhouse], [watch.lever], [watch.ashby] or [watch.workday]. See '

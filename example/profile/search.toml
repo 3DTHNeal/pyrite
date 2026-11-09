@@ -6,7 +6,9 @@
 name = "Alex Rivera"
 
 [location]
-# A posting is "local" if its location matches any of these (case-insensitive).
+# A posting is "local" if its location matches any of these (case-insensitive). These are
+# patterns; `places` takes plain names instead, each matched as whole words in any case, with
+# any spacing or commas: places = ["Springfield, IL", "Oak Park"]. Either or both will do.
 local = [
   'madison', 'sun prairie', 'middleton', 'verona', 'waunakee', 'wisconsin', 'rockford,?\s*(il|illinois)',
 ]
@@ -101,6 +103,8 @@ terms = ['\bsemiconductors?\b', '\bwafers?\b', '\blithography\b']
 naics = ["334413", "333242"]
 
 # Roles to pursue. A title must match a track's `title` pattern and not match `exclude_titles`.
+# `titles` takes plain job-title words instead of patterns, each matched as whole words in any
+# case: titles = ["data engineer", "platform engineer"]. Either or both will do.
 # Add `industries = ["Robotics"]` to a track to apply it only to postings in those industries,
 # judged the same way [promote] judges them. That lets a broad title such as "software engineer"
 # through at the employers you care most about without opening it up everywhere.

@@ -33,8 +33,9 @@ BLANK = Path(__file__).parent / "blank"
 BLANK_NAME = "Your Name"
 # Settings in the example's search.toml that describe the fictional candidate, emptied in a blank one. The rest are
 # how Pyrite works, such as the run's limits and the titles every search leaves out, and are kept as they are.
+# `places` isn't in the example, so it's added: plain place names are what someone starting out wants to write.
 BLANK_EMPTIED = (
-    ("location", "local"), ("location", "local_exact"), ("promote", "cities"), ("scoring", "keywords"),
+    ("location", "local"), ("location", "local_exact"), ("location", "places"), ("promote", "cities"), ("scoring", "keywords"),
     ("guard", "forbidden"), ("guard", "unsupported"), ("guard", "ordinary_words"), ("guard", "expected_on_resume"),
     ("workday", "queries"), ("dashboard", "allowed_hosts"),
 )
@@ -44,7 +45,7 @@ BLANK_CLEARED = ("inbox.domains", "watch.greenhouse", "watch.lever", "watch.ashb
 # Lists of tables, each replaced by a comment showing the form of one.
 BLANK_TABLES = {
     "promote.industry": "# [[promote.industry]]\n# name = \"Healthcare\"\n# terms = ['\\bhealth ?care\\b', '\\bhospitals?\\b']\n",
-    "track": "# [[track]]\n# name = \"Data engineering\"\n# title = ['\\bdata engineer(ing)?\\b', '\\banalytics engineer\\b']\n"
+    "track": "# [[track]]\n# name = \"Data engineering\"\n# titles = [\"data engineer\", \"analytics engineer\"]\n"
              "# needs_level = true\n",
 }
 # Comment lines in the example that would describe the fictional candidate, and what a blank search.toml says instead.

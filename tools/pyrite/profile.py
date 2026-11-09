@@ -13,7 +13,7 @@ import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import doctor, factsdoc, settings, store
+from . import doctor, factsdoc, score, settings, store
 
 # What may be written, by key. The paths are fixed here and never come from a request.
 FILES = {
@@ -223,8 +223,8 @@ def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict]
         if heading == FILES["resume"] else f"Headings checked against {heading}"
     tracks = [str(track.get("name", "")) for track in cfg.get("track", []) if isinstance(track, dict)]
     location = cfg.get("location", {})
-    places = len(location.get("local", [])) + len(location.get("local_exact", []))
-    where = [_plural(places, "local place pattern")] if places else []
+    places = len(score.local_patterns(location)) + len(location.get("local_exact", []))
+    where = [_plural(places, "local place")] if places else []
     where += ["remote" if location.get("accept_remote") else "no remote"]
     where += ["will relocate"] if location.get("accept_relocation") else []
     watched, by_hand = _watched(cfg), len(cfg.get("manual_check", []))
