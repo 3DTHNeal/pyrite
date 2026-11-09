@@ -904,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": True, "started": kind}, 202)
                 return self._json({"ok": True})
             if path == "/api/update":
-                return self._update(conn, cfg)
+                return self._update(conn, cfg, body.get("switch") is True)
             if path == "/api/industries/outlook":
                 outlook.start(cfg, str(body.get("name") or ""))
                 return self._json({"ok": True}, 202)
@@ -925,8 +925,9 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _update(self, conn, cfg: dict) -> None:
-        """Update Pyrite's code to GitHub's main, then restart on it once the page has heard what happened."""
+    def _update(self, conn, cfg: dict, switch: bool) -> None:
+        """Update Pyrite's code to GitHub's main, then restart on it once the page has heard what happened. `switch`
+        says the page offered to switch the code folder to main, so a folder on another branch may be."""
         # The page hides the button then, but `check_updates = false` promises GitHub is never asked, so this keeps it.
         if not updates_on(cfg):
             raise ValueError("check_updates = false under [dashboard], so Pyrite doesn't ask GitHub. Update with "
@@ -934,7 +935,7 @@ class Handler(BaseHTTPRequestHandler):
         running = tasks.going(conn)
         if running:
             raise ValueError(f"A {running} is going, and updating the code under it could break it. Update once it's done.")
-        done = update.apply(demo=IS_EXAMPLE)
+        done = update.apply(demo=IS_EXAMPLE, switch=switch)
         restart = getattr(self.server, "restart_soon", None)
         self._json({**done, "restarting": restart is not None, "server": SERVER_ID})
         if restart:
