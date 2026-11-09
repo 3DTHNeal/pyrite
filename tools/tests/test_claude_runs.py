@@ -741,11 +741,81 @@ class RunClaudeNow(ClaudeRun):
             facts = self.root / "profile" / "facts.md"
             facts.write_text(facts.read_text(encoding="utf-8") + f"\n- Built {CONFIDENTIAL} tooling.\n", encoding="utf-8")
         self.claude_says(drafts=[self.draft + f"\n- Built {CONFIDENTIAL} tooling.\n"], meanwhile=tamper)
-        with self.assertRaisesRegex(daily.ProfileChanged, "profile/"):
+        with self.assertRaises(daily.ProfileChanged) as caught:
             self.run_it()
         self.assertEqual(self.row()["status"], "shortlisted")
         self.assertFalse((self.root / self.row()["app_folder"] / "resume.md").exists())
         self.build.assert_not_called()
+        # It names the file and the draft that went back, so you can tell your own edit from one you didn't make.
+        self.assertIn("profile/facts.md changed while Claude was writing the Acme draft", str(caught.exception))
+        self.assertIn("If you made this change, say so.", str(caught.exception))
+        self.assertEqual(caught.exception.problem, {"kind": "profile_changed", "job_id": self.posting, "files": ["profile/facts.md"]})
+        timeline = self.conn.execute("SELECT detail FROM events WHERE job_id = ? AND kind = 'profile_changed'", (self.posting,)).fetchall()
+        self.assertEqual(len(timeline), 1)
+        self.assertIn("profile/facts.md", timeline[0]["detail"])
+
+    def test_a_profile_change_that_loosens_the_check_says_what_it_lets_drafts_say(self):
+        def approve(n):
+            terms = self.root / "profile" / "approved-terms.txt"
+            terms.write_text(terms.read_text(encoding="utf-8") + "\nZanzibarScript\n", encoding="utf-8")
+            (self.root / "profile" / "run-notes.md").write_text("Lead with the firmware.\n", encoding="utf-8")
+        self.claude_says(meanwhile=approve)
+        with self.assertRaises(daily.ProfileChanged) as caught:
+            self.run_it()
+        said = str(caught.exception)
+        self.assertIn("profile/approved-terms.txt and profile/run-notes.md changed", said)
+        self.assertIn("The change will approve “ZanzibarScript” for every draft.", said)
+
+    def profile_change_stops_a_run(self):
+        """A Claude run, started the way the dashboard starts one, that stops because facts.md changed under it."""
+        def tamper(n):
+            facts = self.root / "profile" / "facts.md"
+            facts.write_text(facts.read_text(encoding="utf-8") + "\n- Shipped a fleet dashboard.\n", encoding="utf-8")
+        self.claude_says(meanwhile=tamper)
+        task = tasks.begin(self.conn, tasks.CLAUDE)
+        with mock.patch.object(daily, "find_claude", return_value="claude"):
+            self.assertFalse(tasks.run(self.conn, CFG, task))
+        return task
+
+    def test_saying_a_profile_change_was_yours_clears_that_warning_and_the_timeline_keeps_it(self):
+        task = self.profile_change_stops_a_run()
+        shown = tasks.latest(self.conn)[tasks.CLAUDE]
+        self.assertEqual((shown["state"], shown["id"]), ("failed", task))
+        self.assertEqual(shown["problem"], {"kind": "profile_changed", "job_id": self.posting, "files": ["profile/facts.md"]})
+        facts = (self.root / "profile" / "facts.md").read_bytes()
+
+        self.assertEqual(tasks.accept_profile_change(self.conn, task), tasks.CLAUDE)
+        shown = tasks.latest(self.conn)[tasks.CLAUDE]
+        self.assertEqual(shown["state"], "cleared")
+        self.assertTrue(shown["cleared_at"])
+        said = self.conn.execute("SELECT detail FROM events WHERE job_id = ? AND kind = 'profile_change_accepted'", (self.posting,)).fetchall()
+        self.assertEqual([r["detail"] for r in said], ["You said the change to profile/facts.md that stopped the Claude run was yours."])
+        self.assertEqual((self.root / "profile" / "facts.md").read_bytes(), facts)  # Saying so changes no file.
+        # Once per warning: a second answer to the same one is refused, and records nothing more.
+        with self.assertRaisesRegex(ValueError, "isn't showing any more"):
+            tasks.accept_profile_change(self.conn, task)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM events WHERE kind = 'profile_change_accepted'").fetchone()[0], 1)
+
+    def test_only_the_warning_still_showing_can_be_cleared_and_only_for_a_profile_change(self):
+        task = self.profile_change_stops_a_run()
+        newer = tasks.begin(self.conn, tasks.CLAUDE)  # A newer run of the same kind has taken its place.
+        with self.assertRaisesRegex(ValueError, "isn't showing any more"):
+            tasks.accept_profile_change(self.conn, task)
+        with self.assertRaisesRegex(ValueError, "isn't showing any more"):
+            tasks.accept_profile_change(self.conn, newer)  # Still running.
+        tasks._finish(self.conn, newer, True, "Done.")
+        self.conn.execute("UPDATE jobs SET status = 'new' WHERE id = ?", (self.posting,))
+        self.conn.commit()
+        self.claude_says(returncode=1)
+        signed_out = tasks.begin(self.conn, tasks.CLAUDE)
+        with mock.patch.object(daily, "find_claude", return_value="claude"):
+            self.assertFalse(tasks.run(self.conn, CFG, signed_out))
+        self.assertEqual(tasks.latest(self.conn)[tasks.CLAUDE]["state"], "failed")
+        self.assertIsNone(tasks.latest(self.conn)[tasks.CLAUDE]["problem"])
+        with self.assertRaisesRegex(ValueError, "isn't showing any more"):
+            tasks.accept_profile_change(self.conn, signed_out)  # Any other failure stays until a run gets past it.
+        with self.assertRaisesRegex(ValueError, "isn't showing any more"):
+            tasks.accept_profile_change(self.conn, 9999)
 
     def test_a_long_tailoring_job_says_what_it_is_doing_so_it_never_looks_dead(self):
         task = tasks.begin(self.conn, tasks.CLAUDE)

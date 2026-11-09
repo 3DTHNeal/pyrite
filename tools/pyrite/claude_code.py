@@ -6,7 +6,6 @@ and hand back what they wrote in their closing message for the code to save. Tai
 Edit, with rules that let it edit only the application's own drafts and never read or change the private
 parts of the workspace.
 """
-import hashlib
 import json
 import os
 import re
@@ -195,15 +194,27 @@ def command(claude: str, editable: list[str]) -> list[str]:
     ]
 
 
-def profile_digest(root: Path) -> str:
-    """A fingerprint of every file under profile/, so a writing run that changed the fact bank is caught before its
-    draft is checked against it."""
-    digest = hashlib.sha256()
+def profile_snapshot(root: Path) -> dict[str, bytes]:
+    """Every file under profile/, by its path in the workspace, so a writing run that changed the fact bank is caught
+    before its draft is checked against it, and can say which files changed and what the change lets drafts say."""
     folder = root / "profile"
-    for path in sorted(folder.rglob("*")) if folder.is_dir() else ():
-        if path.is_file():
-            digest.update(path.relative_to(folder).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
-    return digest.hexdigest()
+    if not folder.is_dir():
+        return {}
+    return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(folder.rglob("*")) if path.is_file()}
+
+
+def profile_changes(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+    """The files under profile/ added, removed or changed between two snapshots."""
+    return sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+
+
+PROFILE_CHANGED = "profile_changed"  # a writing run's problem when profile/ changed under it
+
+
+def some(items: list[str], named: int = 4) -> str:
+    """The first few of a list in words, and how many more there are."""
+    shown = items[:named] + ([f"{len(items) - named} more"] if len(items) > named else [])
+    return ", ".join(shown[:-1]) + " and " + shown[-1] if len(shown) > 1 else "".join(shown)
 
 
 # Refresh resume and interview prep write one document each, so they get no tools: the document comes back in the

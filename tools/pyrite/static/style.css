@@ -133,6 +133,7 @@ h1 { display: flex; align-items: center; font: 700 18px/1.2 var(--mono); letter-
 .sweep .alert { color: var(--bad); font-weight: 600; }
 .runs { margin: 0; }
 .runs:empty { display: none; }
+.runs .run-answers { margin: 8px 0 2px; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 
 main { padding: 20px 24px 64px; width: 100%; max-width: 1640px; margin: 0 auto; display: grid; gap: 20px; min-width: 0; }

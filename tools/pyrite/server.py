@@ -869,6 +869,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/run":
                 tasks.start(conn, str(body.get("kind") or ""))
                 return self._json({"ok": True}, 202)
+            if path == "/api/run/accept":
+                # "I made this change": clears one run's profile-changed warning, and with retry starts that run again.
+                task_id = body.get("id")
+                if not isinstance(task_id, int) or isinstance(task_id, bool):
+                    raise ValueError("Say which run's warning to clear.")
+                kind = tasks.accept_profile_change(conn, task_id)
+                if body.get("retry") is True:
+                    tasks.start(conn, kind)
+                    return self._json({"ok": True, "started": kind}, 202)
+                return self._json({"ok": True})
             if path == "/api/update":
                 return self._update(conn, cfg)
             if path == "/api/industries/outlook":
