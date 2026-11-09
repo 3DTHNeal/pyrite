@@ -27,4 +27,6 @@ How to set Pyrite up and use it day to day. The [project README](../README.md) s
 | [Reply detection](mail.md) | Reading Gmail through the connector or IMAP, what counts as a reply, and scam warnings |
 | [Common commands](commands.md) | `sweep`, `run`, `discover`, `sources`, `rescore`, `queue` and `gaps`, and their JSON output |
 
+[Keeping an agent honest on hard data](technique.md) sets out the technique behind the assay as rules you could use on another agent, and shows how its catch rate is measured.
+
 [The resume playbook](resume-playbook.md) has the evidence behind how the documents are shaped and written, and what each application system does with an upload.
