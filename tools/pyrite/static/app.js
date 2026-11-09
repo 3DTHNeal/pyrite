@@ -285,11 +285,15 @@ function renderFunnel() {
   const max = Math.max(1, ...state.funnel.map((f) => f.count));
   fill($("funnel"), state.funnel.map((f) => {
     const width = f.count ? Math.max(1, Math.sqrt(f.count / max) * 100) : 0;
+    // An older server sends no icon, so its cell stays empty and the columns still line up.
     return h("div", { class: "funnel-row", title: `${f.stage}: ${f.count}` },
+      f.icon ? h("img", { class: "stage-icon", src: `/static/icons/${f.icon}-24.png`, alt: "", width: 24, height: 24 }) : h("span"),
       h("span", { class: "stage" }, f.stage),
       h("span", { class: "funnel-track" }, h("span", { class: `funnel-bar${f.count ? "" : " zero"}`, style: `width:${width}%` })),
       h("span", { class: "count" }, f.count.toLocaleString()));
-  }), h("p", { class: "muted funnel-note" }, closedLine()),
+  }), h("p", { class: "muted funnel-note" },
+    (state.closed || []).length ? h("img", { class: "stage-icon", src: "/static/icons/tarnished-24.png", alt: "", width: 24, height: 24 }) : null,
+    closedLine()),
   h("p", { class: "muted funnel-note" }, "Each job counts once, at the stage it's at now. Bars use a square-root scale so small stages stay visible."));
 }
 
@@ -1053,6 +1057,8 @@ function renderRuns() {
     }
   }
   fill($("runs"), lines.flatMap((line, index) => (index ? [h("br"), line] : [line])));
+  // The mark beside the title throws sparks while anything runs, and only glints now and then otherwise.
+  $("mark").classList.toggle("working", running);
   // While something is running, look again soon so its progress and its results show up.
   clearTimeout(runWatch);
   if (running) runWatch = setTimeout(refresh, 5000);

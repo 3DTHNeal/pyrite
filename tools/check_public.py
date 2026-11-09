@@ -49,7 +49,8 @@ FORBIDDEN_PATH = re.compile(
 # Binary files can't be read reliably, so only these places may hold them, and only the kinds read below: a .docx's
 # text, a PDF's pages and a PNG's metadata. A spreadsheet or an archive there would pass with its insides unread.
 BINARY_SUFFIXES = {".pdf", ".docx", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".xlsx", ".pptx", ".db", ".sqlite", ".sqlite3"}
-BINARY_ALLOWED = re.compile(r"^(example/applications/|docs/screenshots/)")
+BINARY_ALLOWED = re.compile(r"^(example/applications/|docs/screenshots/|docs/images/|tools/pyrite/static/icons/)")
+BINARY_PLACES = "example/applications/, docs/screenshots/, docs/images/ and tools/pyrite/static/icons/"
 BINARY_KINDS = {".docx", ".pdf", ".png"}
 # A zip's members are read up to this size each. A larger one, or one that won't open, is a finding, not a pass.
 MEMBER_LIMIT = 50 * 1024 * 1024
@@ -311,7 +312,7 @@ def scan_blob(path: str, blob: bytes, denylist: list[re.Pattern]) -> list[str]:
     # By content as well as by name, so a database or an archive under some other extension doesn't pass as text.
     binary = suffix in BINARY_SUFFIXES or looks_binary(blob) or blob.startswith(b"PK\x03\x04")
     if binary and not BINARY_ALLOWED.search(path):
-        found.append("binary file outside example/ and docs/screenshots/")
+        found.append(f"binary file outside {BINARY_PLACES}")
     elif binary and suffix not in BINARY_KINDS:
         found.append(f"binary file of a kind this doesn't read ({suffix or 'no extension'}): only .docx, .pdf and .png may go there")
     if is_archive(path, blob):

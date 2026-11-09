@@ -82,6 +82,8 @@ STATIC_FILES = {
     # Each Profile section's editor is its own file, and index.html loads each one by name.
     **{f"/static/profile/{path.name}": (f"profile/{path.name}", "text/javascript; charset=utf-8")
        for path in sorted((STATIC / "profile").glob("*.js"))},
+    # The mark, its two animations and the stage icons, drawn by art/icons/build.py.
+    **{f"/static/icons/{path.name}": (f"icons/{path.name}", "image/png") for path in sorted((STATIC / "icons").glob("*.png"))},
 }
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -468,14 +470,15 @@ def build_state(conn, cfg) -> dict:
     }
     # Each job once, at the stage it's at now, so a resume that went out counts as sent and no longer as ready.
     at = lambda *statuses: sum(j["status"] in statuses for j in jobs)
+    # Each stage's icon reads the search as a fire assay: panned, forged, tested, in the furnace, melting, weighed, the bead.
     funnel = [
-        {"stage": "Prospects", "count": at("new")},
-        {"stage": "Being tailored", "count": at("shortlisted", "needs_fix")},
-        {"stage": "Ready to send", "count": at("ready")},
-        {"stage": "Waiting to hear", "count": at("applied")},
-        {"stage": "Replied", "count": at("responded")},
-        {"stage": "Interviewing", "count": at("interviewing")},
-        {"stage": "Offer", "count": at("offer")},
+        {"stage": "Prospects", "icon": "pan", "count": at("new")},
+        {"stage": "Being tailored", "icon": "anvil", "count": at("shortlisted", "needs_fix")},
+        {"stage": "Ready to send", "icon": "streak", "count": at("ready")},
+        {"stage": "Waiting to hear", "icon": "furnace", "count": at("applied")},
+        {"stage": "Replied", "icon": "crucible", "count": at("responded")},
+        {"stage": "Interviewing", "icon": "balance", "count": at("interviewing")},
+        {"stage": "Offer", "icon": "cupel", "count": at("offer")},
     ]
     closed_labels = {"rejected": "rejected", "ghosted": "ghosted", "withdrawn": "withdrawn", "passed": "passed", "closed": "posting closed"}
     closed = [{"label": label, "count": at(status)} for status, label in closed_labels.items() if at(status)]

@@ -52,6 +52,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .brand { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; min-width: 0; }
 h1 { font: 700 18px/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+/* The mark is a strip of 32 px frames that CSS steps through: it glints now and then, and throws sparks while a run
+   is working. Each strip's last step lands one frame past its end, which steps() never shows, so the loop is seamless. */
+.mark {
+  --frames: 16;
+  display: inline-block; width: 32px; height: 32px; margin-right: 10px; vertical-align: -9px;
+  background: url(/static/icons/mark-idle.png) 0 0 / calc(100% * var(--frames)) 100% no-repeat;
+  image-rendering: pixelated;
+  animation: mark-play 1.76s steps(var(--frames)) infinite;
+}
+.mark.working { --frames: 30; background-image: url(/static/icons/mark-working.png); animation-duration: 2.4s; }
+@keyframes mark-play { to { background-position: calc(100% * var(--frames) / (var(--frames) - 1)) 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .mark { animation: none; }
+  .mark.working { background-position: calc(100% * 22 / 29) 0; } /* a frame mid-burst, so a run still shows */
+}
 .sweep { color: var(--ink-2); font-size: 13px; }
 .sweep .alert { color: var(--bad); font-weight: 600; }
 .runs { flex-basis: 100%; margin: 0; }
@@ -98,7 +113,9 @@ main > * { min-width: 0; }
 .empty { color: var(--ink-3); padding: 8px 2px; }
 
 .funnel { display: grid; gap: 8px; }
-.funnel-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 42px; gap: 8px; align-items: center; font-size: 13px; }
+.funnel-row { display: grid; grid-template-columns: 24px 96px minmax(0, 1fr) 42px; gap: 8px; align-items: center; font-size: 13px; }
+.stage-icon { width: 24px; height: 24px; image-rendering: pixelated; }
+.funnel-note .stage-icon { vertical-align: -7px; margin-right: 6px; }
 .funnel-row .stage { color: var(--ink-2); }
 .funnel-row .count { font: 600 13px var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
 .funnel-track { height: 12px; }

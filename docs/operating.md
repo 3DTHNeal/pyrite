@@ -88,7 +88,7 @@ git config core.hooksPath .githooks
 git config pyrite.denylist /path/to/my-job-search/profile/public-denylist.txt
 ```
 
-The check reads file contents, file and branch names, commit messages, annotated tags and the text inside `.docx` and `.pdf` files, with a document's words joined up as a reader sees them. The only binary files it allows are `.docx`, `.pdf` and `.png` under `example/applications/` and `docs/screenshots/`, and a submodule is refused, since its files are in another repository it doesn't read. Reading a PDF's pages needs poppler's `pdftotext`, which Git for Windows includes, or `pypdf`. Without either, a PDF blocks the push, since nothing would vouch for what's on its pages.
+The check reads file contents, file and branch names, commit messages, annotated tags and the text inside `.docx` and `.pdf` files, with a document's words joined up as a reader sees them. The only binary files it allows are `.docx`, `.pdf` and `.png` under `example/applications/`, `docs/screenshots/`, `docs/images/` and `tools/pyrite/static/icons/`, and a submodule is refused, since its files are in another repository it doesn't read. Reading a PDF's pages needs poppler's `pdftotext`, which Git for Windows includes, or `pypdf`. Without either, a PDF blocks the push, since nothing would vouch for what's on its pages.
 
 ## How the documents are written
 
@@ -164,6 +164,23 @@ The dashboard labels its parts in plain words. The code and these docs sometimes
 | Sources | Veins | The job boards Pyrite reads, and whether each is working |
 | Check boards now | Pan | Reading the boards and checking mail. The command is `pyrite sweep` |
 | Fact check | Assay | The checker that decides whether a draft is ready |
+
+The icons follow the same metaphor, reading each stage of **Where they stand** as a step in a fire assay:
+
+![The stage icons: a gold pan, an anvil, a streak plate, a furnace, a crucible, a balance, a cupel and a tarnished crystal](images/icon-set.png)
+
+| Icon | Stage | Why |
+|---|---|---|
+| Gold pan | Prospects | Panned from the boards and not judged yet |
+| Anvil | Being tailored | The resume and letter are being forged |
+| Streak test | Ready to send | Passed the test that tells gold from fool's gold: pyrite's streak is greenish black |
+| Furnace | Waiting to hear | In the fire, out of your hands |
+| Crucible | Replied | Something is melting |
+| Assay balance | Interviewing | Being weighed. The small gold bead outweighs the big crystal, as it would: gold is nearly four times as dense |
+| Cupel and prill | Offer | The bead of real gold left at the end of an assay |
+| Tarnished crystal | Closed | Fool's gold, set aside |
+
+The crystal beside the title glints now and then, and throws sparks while a run is going: pyrite's name comes from the Greek for fire, because it sparks when struck against steel. With reduced motion turned on in your system, it holds still. `art/icons/build.py` draws every icon, and its README says how.
 
 Two buttons at the top start a run without waiting for the schedule:
 

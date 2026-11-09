@@ -1,5 +1,7 @@
 # Pyrite
 
+![Pyrite: a pixel-art pyrite crystal beside the name](docs/images/pyrite-logo.png)
+
 [![CI](https://github.com/3DTHNeal/pyrite/actions/workflows/ci.yml/badge.svg)](https://github.com/3DTHNeal/pyrite/actions/workflows/ci.yml)
 ![Python 3.11 to 3.14](https://img.shields.io/badge/python-3.11%20%E2%80%93%203.14-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)

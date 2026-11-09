@@ -172,6 +172,14 @@ class Blobs(unittest.TestCase):
     def test_png_metadata_is_read(self):
         self.assertTrue(self.scan("docs/screenshots/a.png", self.png(b"tEXt", b"Author\0Bluebird")))
 
+    def test_icons_and_doc_images_may_be_pngs_but_nothing_else_binary(self):
+        for folder in ("tools/pyrite/static/icons/", "docs/images/"):
+            with self.subTest(folder):
+                self.assertEqual(self.scan(folder + "mark.png", self.png(b"IDAT", b"bluebird")), [])
+                self.assertTrue(self.scan(folder + "mark.png", self.png(b"tEXt", b"Author\0Bluebird")))
+                self.assertTrue(any("of a kind this doesn't read" in f for f in self.scan(folder + "favicon.ico", b"\0\0\1\0")))
+        self.assertTrue(any("binary file outside" in f for f in self.scan("tools/pyrite/static/mark.png", self.png(b"IDAT", b""))))
+
     def test_compressed_png_metadata_is_read(self):
         import zlib
         self.assertTrue(self.scan("docs/screenshots/a.png", self.png(b"zTXt", b"Author\0\0" + zlib.compress(b"Bluebird"))))
