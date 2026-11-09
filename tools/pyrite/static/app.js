@@ -302,8 +302,10 @@ function renderOrders() {
     title: "Rebuilds the documents and runs the assay again. Takes up to a minute each.", onclick: () => recheckAll(ids) }, recheckProgress || label);
   // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
   const items = state.orders.map((o) => h("li", {},
-    // A job opens its drawer, and a setup item opens the tab that fixes it, where there is one.
-    h("button", { class: "order", type: "button", title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.split("/")[0].slice(1)} tab` : null,
+    // A job opens its drawer, and a setup item opens the Profile section or tab that fixes it. One with nowhere to
+    // go is fixed in a file, so it's text, not a button that does nothing.
+    h(o.job_id || o.tab ? "button" : "div", { class: "order", type: o.job_id || o.tab ? "button" : null,
+      title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.split("/")[0].slice(1)} tab` : null,
       onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : o.tab ? showTab(o.tab, true) : null) },
       h("span", { class: kindClass(o.kind) }, o.kind),
       h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),

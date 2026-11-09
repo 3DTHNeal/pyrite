@@ -279,6 +279,26 @@ class Workspace(unittest.TestCase):
                     store.load_config()
                 self.assertIn(named, str(caught.exception))
 
+    def test_a_role_written_in_the_wrong_form_is_named(self):
+        # Each of these read as a role until a posting matched it. One with no name then failed, and a pattern
+        # written without its brackets was read a letter at a time, which kept nearly every posting.
+        for text, named in (('[[track]]\ntitles = ["data engineer"]\n', "[[track]] number 1 has no name"),
+                            ('[[track]]\nname = "Data"\ntitle = "data engineer"\n',
+                             'title under the [[track]] named Data is "data engineer", which needs to be a list in '
+                             'brackets, such as title = ["data engineer"]'),
+                            ('[[track]]\nname = "Data"\ntitles = [1]\n', "titles under the [[track]] named Data"),
+                            ('[track]\nname = "Data"\n', "two pairs of brackets"),
+                            ('[location]\nlocal = "Oregon"\n', 'local under [location] is "Oregon"'),
+                            ('[scoring]\nexclude_titles = "intern"\n', "exclude_titles under [scoring]")):
+            with self.subTest(named):
+                self.config(text)
+                with self.assertRaises(store.ConfigError) as caught:
+                    store.load_config()
+                self.assertIn(named, str(caught.exception))
+        # One title in plain words may go without its brackets, as one place may.
+        self.assertEqual(store.config_problems({"track": [{"name": "Data", "titles": "data engineer", "title": ["\\bETL\\b"]}],
+                                                "location": {"places": "Springfield, IL", "local": []}}), [])
+
 
 class NewWorkspace(unittest.TestCase):
     """A workspace made the way docs/setup.md says, by copying example/profile/, and what's left to change in it."""
@@ -547,6 +567,13 @@ class SetupGuard(Base):
             orders = server.build_state(self.conn, CFG)["orders"]
             self.assertEqual((orders[0]["kind"], orders[0]["job_id"], orders[0]["text"]), ("Finish setup", None, left[0]["what"]))
             self.assertEqual(orders[0]["tab"], "facts")  # Clicking it opens the tab that fixes it.
+        # One that names a Profile section opens that section, whether or not it names a tab too.
+        left = [{"what": "No roles.", "fix": "Add one.", "step": "roles"},
+                {"what": "Still the example's.", "fix": "Replace it.", "step": "achievements", "tab": "facts"},
+                {"what": "A pattern is wrong.", "fix": "Fix it."}]
+        with mock.patch.object(doctor, "workspace_todos", return_value=left):
+            orders = server.build_state(self.conn, CFG)["orders"]
+            self.assertEqual([order["tab"] for order in orders[:3]], ["profile/roles", "profile/achievements", None])
             with mock.patch.object(server, "IS_EXAMPLE", True):
                 self.assertEqual(server._setup_orders(CFG), [])
 
@@ -826,6 +853,33 @@ class Init(unittest.TestCase):
                 mock.patch.object(tasks, "_facts_still_example", return_value=False):
             self.assertIn("still blank", tasks.not_ready(tasks.CLAUDE))
             self.assertIsNone(tasks.not_ready(tasks.SWEEP))
+
+    def test_the_claude_runs_wait_for_achievements_and_a_master_resume(self):
+        # A contact line and an employer make facts.md no longer blank, with nothing yet to write a draft from.
+        self.init("--name", "Sam Doe", "--blank")
+        facts = self.folder / "profile" / "facts.md"
+        started = facts.read_text(encoding="utf-8").replace("## Contact\n", "## Contact\nSpringfield, IL · sam@doe.example\n") \
+            .replace("## Timeline\n", "## Timeline\n- **Initech,** Engineer, Remote, Jan 2020 – Present\n")
+        facts.write_text(started, encoding="utf-8")
+        with mock.patch.object(tasks, "ROOT", self.folder), mock.patch.object(tasks, "IS_EXAMPLE", False), \
+                mock.patch.object(tasks, "_facts_still_example", return_value=False):
+            self.assertNotIn("profile/facts.md", doctor.still_blank(self.folder))
+            self.assertIn("no achievements yet", tasks.not_ready(tasks.CLAUDE))
+            self.assertIn("no achievements yet", tasks.not_ready(tasks.TAILOR))
+            self.assertIsNone(tasks.not_ready(tasks.SWEEP))
+            todo = next(todo for todo in WORKSPACE_TODOS(self.folder, self.cfg()) if "no achievements" in todo["what"])
+            self.assertEqual(todo["step"], "achievements")
+            # With a fact to write from, the blank master resume is what's left.
+            facts.write_text(started.replace("## Achievements\n", "## Achievements\n- Cut build time from 40 to 9 minutes.\n"),
+                             encoding="utf-8")
+            self.assertIn("profile/resume.md is still blank", tasks.not_ready(tasks.CLAUDE))
+            self.assertFalse(any("no achievements" in todo["what"] for todo in WORKSPACE_TODOS(self.folder, self.cfg())))
+            resume = self.folder / "profile" / "resume.md"
+            resume.write_text(resume.read_text(encoding="utf-8").replace(
+                "## Experience\n", "## Experience\n### Initech\n#### Engineer | Remote | Jan 2020 – Present\n- Built it.\n"),
+                encoding="utf-8")
+            self.assertNotIn("profile/resume.md", doctor.still_blank(self.folder))
+            self.assertIsNone(tasks.not_ready(tasks.CLAUDE))
 
     # ---- --git ----
 

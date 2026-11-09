@@ -457,7 +457,9 @@ def _setup_orders(cfg: dict) -> list[dict]:
     """What a new workspace still has to change, first on the to-do list. The demo is the example on purpose, so it has none."""
     if IS_EXAMPLE:
         return []
-    return [{"rank": 0, "kind": "Finish setup", "job_id": None, "text": todo["what"], "detail": todo["fix"], "tab": todo.get("tab")}
+    # Each opens the Profile section that fixes it, where there is one, and otherwise the tab that does.
+    return [{"rank": 0, "kind": "Finish setup", "job_id": None, "text": todo["what"], "detail": todo["fix"],
+             "tab": f"profile/{todo['step']}" if todo.get("step") in profile.STEP_IDS else todo.get("tab")}
             for todo in doctor.workspace_todos(ROOT, cfg)]
 
 

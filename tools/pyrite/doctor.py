@@ -13,7 +13,7 @@ import tomllib
 from contextlib import closing
 from pathlib import Path
 
-from . import discover, inbox, score
+from . import discover, factsdoc, inbox, score
 from .checks import listed_terms, uncommented, unenforced_claims
 from .claude_code import find_claude, signed_in
 from .store import DB_PATH, EXAMPLE_ROOT
@@ -139,6 +139,28 @@ def still_blank(root: Path) -> list[str]:
     return blank
 
 
+def not_written_yet(root: Path, cfg: dict) -> dict | None:
+    """What a fact bank that's been started still lacks before a draft can be written from it, as a to-do, or None.
+    A contact line or one employer makes facts.md no longer blank, but with no achievements Claude has nothing to
+    write, and with a blank master resume every draft's employers and dates are blocked. Either way a run would
+    spend usage on drafts that can't pass. A file that's still blank or the example's is named elsewhere."""
+    waiting = still_example(root) + still_blank(root)
+    text = _text(root / "profile" / "facts.md")
+    if text is None or "profile/facts.md" in waiting:
+        return None
+    doc = factsdoc.Doc(uncommented(text))
+    if not any(item.level == 0 for section in doc.sections() if section.kind == "facts" for item in doc.items(section)):
+        return {"what": "profile/facts.md has no achievements yet, so Claude has nothing to write a resume from.",
+                "fix": "Add what you did and what came of it, one fact to a line, under Achievements on the Profile tab or "
+                       "in the file. Drafts may only claim what's there.", "step": "achievements"}
+    heading = str(cfg.get("guard", {}).get("heading_source", "") or "")
+    if heading and heading in waiting and heading in BLANK_FILES:
+        return {"what": f"{heading} is still blank, so every draft's employers, titles and dates would be blocked.",
+                "fix": "Fill in Master resume on the Profile tab, or have `pyrite import-resume <file>` draft it from the "
+                       ".docx, PDF or .txt one you have.", "step": "masters"}
+    return None
+
+
 def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up.
 
@@ -168,7 +190,8 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     blank = still_blank(root)
     if blank:
         names = [blank[0], *(Path(rel).name for rel in blank[1:])]
-        step = BLANK_FILES[blank[0]]
+        # The first of them with a Profile section of its own, since run-notes.md has none.
+        step = next((BLANK_FILES[rel] for rel in blank if BLANK_FILES[rel]), None)
         todos.append({"what": f"{_and(names)} {'is' if len(blank) == 1 else 'are'} still blank.",
                       "fix": "Fill in each, starting with facts.md, whose comments say what goes where. Claude writes from these "
                              f"files, and the assay checks against them. For the resume and letter, {FORMAT_DOCS[0].lower()}{FORMAT_DOCS[1:]}"
@@ -179,6 +202,10 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         mine = _text(root / rel)
         if mine is not None and mine == _text(EXAMPLE_ROOT / rel):
             todos.append({"what": f"{rel} is still the fictional example's.", "fix": fix})
+    unwritten = not_written_yet(root, cfg)
+    # A blank master resume is named with the blank files above, so only the fact bank's own gap is added here.
+    if unwritten and unwritten["step"] == "achievements":
+        todos.append(unwritten)
     if not (root / "profile" / "facts.md").exists():
         todos.append({"what": "profile/facts.md is missing.",
                       "fix": "It's the fact bank every resume is checked against. Copy the example's and make it yours.",

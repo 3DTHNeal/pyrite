@@ -217,6 +217,24 @@ class Steps(unittest.TestCase):
         self.assertIn("## Experience\n### Initech | Dec 2026 – Present\n#### Staff Engineer | Remote | Dec 2026 – Present\n",
                       lf(result, "resume"))
 
+    def test_an_employer_the_resume_already_names_isnt_added_to_it_twice(self):
+        # As after `import-resume`: the master resume has the employer and its bullets, and the Timeline doesn't yet.
+        resume = profile.read("resume").replace("\r\n", "\n").replace(
+            "## Experience\n", "## Experience\n### Initech\n#### Staff Engineer | Remote | Dec 2026 – Present\n- Shipped the thing\n"
+                               "#### Engineer | Jan 2025 – Nov 2026\n", 1)
+        (self.root / "profile" / "resume.md").write_bytes(resume.encode())
+        self.view = {**profile.view(), **steps.view()}
+        employers = [{"line": None, "name": "Initech", "roles": [
+            {"title": "Staff Engineer", "place": "Remote", "start": "Dec 2026", "end": ""},
+            {"title": "Engineer", "place": "Austin, TX", "start": "Jan 2025", "end": "Nov 2026"},
+            {"title": "Intern", "place": "", "start": "Jun 2024", "end": "Dec 2024"}]}, *self.employers()]
+        result = self.draft("history", {"employers": employers})
+        self.assertIn("- **Initech, Jun 2024 – Present**\n", lf(result, "facts"))
+        after = lf(result, "resume")
+        self.assertEqual(after.count("### Initech"), 1, after)
+        self.assertIn("## Experience\n### Initech\n#### Staff Engineer | Remote | Dec 2026 – Present\n- Shipped the thing\n"
+                      "#### Engineer | Austin, TX | Jan 2025 – Nov 2026\n#### Intern | Jun 2024 – Dec 2024\n", after)
+
     def test_a_removed_role_takes_its_resume_heading_and_bullets(self):
         employers = self.employers()
         del employers[0]["roles"][2]

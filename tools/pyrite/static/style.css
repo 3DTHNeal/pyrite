@@ -166,6 +166,9 @@ main > * { min-width: 0; }
 .order-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .order { width: 100%; display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 12px; align-items: start; text-align: left; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .order:hover { background: var(--surface-2); }
+/* A setup item fixed in a file has nowhere to open, so it reads as text. */
+div.order { cursor: default; }
+div.order:hover { background: transparent; }
 /* Each kind of to-do is a tag in its tone, so a column of them reads at a glance. */
 .kind { --tone: var(--ink-3); }
 .order .kind { justify-self: start; max-width: 100%; font: 650 11px/1.5 var(--mono); letter-spacing: .02em; padding: 1px 7px; margin-top: 1px; border-radius: 4px;
