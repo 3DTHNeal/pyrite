@@ -14,7 +14,7 @@ from pathlib import Path
 from . import checks, claude_code
 from .claude_code import ClaudeFailed, find_claude
 from .cli import BOARD_FIELDS, apply_triage, ensure_folder, finish_job, queue
-from .store import ROOT, get_job, log_event, now
+from .store import ROOT, get_job, log_event, now, shorten
 
 FITS = ("strong", "good", "stretch", "skip")
 # A first draft and two fixes, as the instructions for a hand-run session allow.
@@ -30,7 +30,8 @@ Follow the model letter: same header, today's date, 220 to 320 words in three or
 Word a gap so the sentence plainly denies it: "I have not worked under that standard", or "the posting lists it as a plus, and I have not done it". The checker blocks a sentence that names an unsupported claim without such a denial, and warns above 350 words.
 
 """
-REASON_LIMIT = 400
+# The whole reason is kept, and cards and tables shorten it for themselves. This only stops a runaway reply.
+REASON_LIMIT = 2000
 VERDICT = re.compile(r"\{[^{}]*\}")
 UNSAFE_TEXT = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
 
@@ -49,15 +50,8 @@ def parse_verdict(message: str) -> tuple[str, str] | None:
             continue
         fit, reason = data.get("fit"), data.get("reason")
         if fit in FITS and isinstance(reason, str) and reason.strip():
-            found = (fit, _shorten(UNSAFE_TEXT.sub(" ", reason).strip()))
+            found = (fit, shorten(UNSAFE_TEXT.sub(" ", reason).strip(), REASON_LIMIT))
     return found
-
-
-def _shorten(text: str, limit: int = REASON_LIMIT) -> str:
-    """A reason that fits a card, cut at the end of a word rather than through one."""
-    if len(text) <= limit:
-        return text
-    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 def triage_prompt(job) -> str:

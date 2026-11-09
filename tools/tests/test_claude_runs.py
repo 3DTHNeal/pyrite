@@ -637,6 +637,14 @@ class RunClaudeNow(ClaudeRun):
             with self.subTest(reply):
                 self.assertIsNone(daily.parse_verdict(reply))
 
+    def test_a_long_reason_is_kept_whole(self):
+        # The gap that decided the fit often comes last, so the database keeps it all and only a card shortens it.
+        reason = "Strong on firmware and fleet tooling. " * 12 + "The gap: your record shows program rather than product management."
+        self.assertEqual(daily.parse_verdict(json.dumps({"fit": "stretch", "reason": reason})), ("stretch", reason.strip()))
+        runaway = daily.parse_verdict(json.dumps({"fit": "good", "reason": "word " * 1000}))[1]
+        self.assertLessEqual(len(runaway), daily.REASON_LIMIT + 1)
+        self.assertTrue(runaway.endswith("word…"))
+
 
 class RunsYouStart(Base):
     """The Sweep now and Run Claude now buttons, and the commands behind them."""

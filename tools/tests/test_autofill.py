@@ -989,6 +989,28 @@ class Gate(ClaudeRun):
         self.assertEqual((sent / "resume.md").read_text(encoding="utf-8"), self.draft)
         self.assertEqual(self.detail()["changed_after_sending"], ["resume.md"])
 
+    def test_got_it_quiets_changes_after_sending_until_the_files_change_again(self):
+        self.assertTrue(cli.finish_job(self.conn, CFG, self.job)["ok"])
+        server.apply_action(self.conn, self.job, {"action": "status", "status": "applied"}, CFG)
+        with self.assertRaisesRegex(ValueError, "nothing to acknowledge"):
+            server.apply_action(self.conn, self.job, {"action": "acknowledge_changes"}, CFG)
+        (self.folder / "resume.md").write_text(self.draft + "\n- Kept as a model.\n", encoding="utf-8")
+        server.apply_action(self.conn, self.job, {"action": "acknowledge_changes"}, CFG)
+        detail = self.detail()
+        self.assertEqual((detail["changed_after_sending"], detail["acknowledged_changes"]), ([], ["resume.md"]))
+        self.assertIn("resume.md", next(e for e in detail["events"] if e["kind"] == "sent_changes_acknowledged")["detail"])
+        # Saying so twice changes nothing, and the sent copy is still the record.
+        server.apply_action(self.conn, self.job, {"action": "acknowledge_changes"}, CFG)
+        self.assertEqual(sum(e["kind"] == "sent_changes_acknowledged" for e in self.detail()["events"]), 1)
+        self.assertEqual((self.folder / store.SENT_FOLDER / "resume.md").read_text(encoding="utf-8"), self.draft)
+        # A change after that shows again.
+        (self.folder / "resume.md").write_text(self.draft + "\n- Reworked again.\n", encoding="utf-8")
+        detail = self.detail()
+        self.assertEqual((detail["changed_after_sending"], detail["acknowledged_changes"]), (["resume.md"], []))
+        # Put back as it was sent, there's nothing to flag or acknowledge.
+        (self.folder / "resume.md").write_text(self.draft, encoding="utf-8")
+        self.assertEqual((self.detail()["changed_after_sending"], self.detail()["acknowledged_changes"]), ([], []))
+
     def test_checking_again_clears_the_flag_or_blocks_the_draft(self):
         cli.finish_job(self.conn, CFG, self.job)
         (self.folder / "resume.md").write_text(self.draft + "\n- Wrote more.\n", encoding="utf-8")

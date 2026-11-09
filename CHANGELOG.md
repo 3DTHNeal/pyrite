@@ -30,6 +30,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - **Not rechecked** on a listing the latest full pan didn't see, because its board failed, left the watch list or didn't answer. It may be down.
 - **Possible ghost** also covers a posting that calls itself an evergreen or pipeline role, and a listing with no date that a pan first found 90 days ago or more.
 - Mail scam warnings catch task scams (paid "jobs" rating apps or products), a check sent to buy equipment, and interviews over a chat.
+- The job panel shows the job's number, such as **Job 56**, which the `pyrite` commands take. While it's open the address ends in `#job-56`, so a bookmark or a link in a note opens that job, and closing it puts back the tab you were on.
+- **Got it** on a job whose folder changed after sending, for a folder you reworked on purpose. It stops the warning for the files as they are now, and the warning comes back if they change again. The sent copies stay the record.
 - On a terminal, `pyrite discover`, `rescore`, `queue`, `job`, `check`, `finish`, `fill` and `usage` say what they found in a few lines of words, such as how many postings a pan read, how many were new and why the rest were filtered out. `--json` prints the JSON as before, and so does any run whose output goes to a file or another program, so the daily run, scheduled pans and scripts see no change. `pyrite sources` takes `--json` too.
 
 ### Changed
@@ -65,6 +67,11 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - The browser tab's title shows how many things are on the to-do list, and the dashboard catches up as soon as you come back to its tab instead of on the next minute.
 - `/` jumps to the Prospects search. Enter in the Add a posting form adds it.
 - Closing the job panel puts focus back on the card or row that opened it.
+- A fit reason is kept whole. Cards, the to-do list and the Closed table show its start, and the job panel shows all of it. Before, it was cut at 400 characters when it was saved, which often lost the gap that decided the fit. Reasons an early version cut at 300 characters, through a word, now end with an ellipsis.
+- The Settings tab shows the points a city or industry without its own gets, as `10 (default)`, and updates it as you change the default. **Matches now** says how many points each city adds.
+- Prospects shows pay as `$256k–$361k` instead of the posting's `$255,850.00-361,200.00 USD`, with `/hr` for hourly pay and the currency for other dollars. The posting's own words are in the tooltip, and pay it can't read is shown as written.
+- Prospects search also matches the location.
+- The header gives the board check one line, not a second one when you started it yourself, and says when mail couldn't be checked apart from the boards that failed.
 - Workday autofill takes the one entry that starts with, or contains, the sheet's wording when a list has none with that wording exactly, such as `Supply Chain & Logistics Management` for a field of study of `Supply Chain and Logistics`, and lists it under picks to check. Entries that only share words with it, such as `Electronic and Electrical Engineering` for `Electrical and Computer Engineering Technology`, are suggested, never picked. The entries a field left for you lists are each in quotes, so `'Business Administration, Management'` reads as one entry, not two.
 
 ### Fixed
@@ -97,6 +104,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - A passed draft shows as changed since checked when `facts.md`, another approved source or the `[guard]` rules change after it passed, and reopening it no longer puts it back to ready. Passes from before this keep their verdict.
 - Workday autofill types role text only from a draft the assay passed as it is now. A job never checked, one whose last check failed, or one whose `resume.md`, other checked files, fact bank or `[guard]` rules changed since the pass is refused, and the dashboard's Fill Workday form button says why. A worker started before such a change stops and logs why.
 - A fill sheet made from a draft the assay hasn't passed, or whose pass no longer covers it, is still written, but it says at the top that its role text hasn't passed the assay and why, and so do the job's history and `pyrite fill`. `pyrite fill <folder>` says no pass was looked up.
+- Prospects says `1 posting`, not `1 postings`.
+- At about 1000px wide, Prospects' **Tailor** and **Pass** stay in view at the right edge instead of scrolling off it.
 
 ## [0.1.0] - 2026-11-09
 
