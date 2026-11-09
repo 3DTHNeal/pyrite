@@ -11,7 +11,7 @@ You run unattended for one person's job search. Your only job is to copy their r
 
 ## 1. List the mail
 
-The Gmail tools are deferred, so load the two you may use first, with `ToolSearch` and the query `select:mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Gmail__get_message`. Then call `search_threads` with the query given at the end of this message, `view` set to `THREAD_VIEW_MINIMAL` and `pageSize` 50. Follow `nextPageToken` until there are no more pages, stopping after 10 pages. Every message in every thread is one entry in the list, except messages the person sent themselves. The search result already gives you everything an entry needs apart from `body`, `reply_to` and `links`.
+The Gmail tools are deferred, so load the two you may use first, with `ToolSearch` and the query `select:mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Gmail__get_message`. Then call `search_threads` with the query given at the end of this message, `view` set to `THREAD_VIEW_MINIMAL` and `pageSize` 20. Follow `nextPageToken` until there are no more pages, stopping after 25 pages. If a page comes back saved to a file or too large to show, which you can't read, ask for that same page again with half the `pageSize` and carry on at that size. Every message in every thread is one entry in the list, except messages the person sent themselves. The search result already gives you everything an entry needs apart from `body`, `reply_to` and `links`.
 
 ## 2. Read the text of a few messages
 

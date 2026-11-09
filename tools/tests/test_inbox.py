@@ -1,6 +1,7 @@
 """Reply detection over IMAP and the Gmail connector, and the scam rules. Read-only throughout."""
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -723,6 +724,15 @@ class MailScan(MailBase):
         known = text.rsplit("Senders whose text you never read", 1)[1]
         for domain in ("greenhouse.io", "myworkday.com", "linkedin.com", "hooli-mail.example"):
             self.assertIn(domain, known)
+
+    def test_a_page_of_results_stays_small_enough_to_come_back_inline(self):
+        # Claude Code saves a tool result over about 50 KB to a file, which this run can't read. A 50-thread page measured
+        # 51.8 KB, and every check failed until pages shrank, so a page stays well under that, with a way down if one isn't.
+        text = mailcheck.INSTRUCTIONS.read_text(encoding="utf-8")
+        found = re.search(r"`pageSize` (\d+)", text)
+        assert found, "The instructions no longer give a pageSize."
+        self.assertLessEqual(int(found.group(1)), 25)
+        self.assertIn("half the `pageSize`", text)
 
     def test_the_list_is_taken_from_the_closing_message_even_with_words_around_it(self):
         job = self.applied()
