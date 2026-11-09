@@ -675,6 +675,39 @@ def cmd_init(args):
         print(line)
 
 
+def cmd_import_resume(args):
+    """Draft profile/resume.md from the resume someone already has, read mechanically, with notes on what to check."""
+    from . import doctor, profile, resumeimport
+
+    if args.save and store.IS_EXAMPLE:
+        sys.exit(f"No workspace is set, so --save would write into the fictional example. `{INIT_EXAMPLE}` makes yours. "
+                 "Without --save, the draft is printed and nothing is written.")
+    cfg = load_config() if store.CONFIG_PATH.exists() else {}
+    name = str(cfg.get("candidate", {}).get("name", "")).strip()
+    try:
+        found = resumeimport.draft(Path(args.file), "" if store.IS_EXAMPLE else name)
+    except resumeimport.Refused as err:
+        sys.exit(str(err))
+    told = [f"Check: {note}" for note in found.notes]
+    if found.problems:
+        told.append(f"It still has {doctor._and(found.problems)}, which the assay needs. Add them before drafting from it.")
+    told.append("Every claim in it must also be in profile/facts.md, or the assay blocks drafts that use it.")
+    if not args.save:
+        print(found.text, end="")
+        print("\n".join(told), file=sys.stderr)
+        return
+    target = cfg.get("guard", {}).get("heading_source", "profile/resume.md")
+    try:
+        profile.write({"resume": found.text}, profile.versions(), f"Imported from {Path(args.file).name}", step="masters")
+    except ValueError as err:
+        sys.exit(str(err))
+    print(f"Wrote {profile.FILES['resume']}. The copy it replaced is in the Profile tab's History, where Put back restores it.")
+    if target != profile.FILES["resume"]:
+        print(f"The assay reads employer and role headings from {target}, set by heading_source under [guard], "
+              "so change those there too.")
+    print("\n".join(told))
+
+
 def cmd_demo(args):
     """Load the fictional example and serve it. tools/pyrite.py pointed this process at the example first."""
     if not store.IS_EXAMPLE:
@@ -955,7 +988,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--git", action="store_true", help="make the workspace a private git repository of its own, with a .gitignore. "
                                                       "Never adds a remote. On the workspace in use, does only this")
     p.set_defaults(func=cmd_init)
-    sub.add_parser("doctor", help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
+    p = sub.add_parser("import-resume", help="draft your master resume in Pyrite's form from a .docx, .pdf or .txt resume, "
+                                             "for you to correct. Prints it unless you --save it")
+    p.add_argument("file", help="your resume as it is now")
+    p.add_argument("--save", action="store_true", help="write it to profile/resume.md, keeping the old copy in the Profile "
+                                                       "tab's History so Put back can restore it")
+    p.set_defaults(func=cmd_import_resume)
+    sub.add_parser("doctor",help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("demo", help="serve the fictional example, without touching your own data")
     p.add_argument("--port", type=int, default=8788)

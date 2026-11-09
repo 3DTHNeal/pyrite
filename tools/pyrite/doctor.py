@@ -171,7 +171,9 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
         step = BLANK_FILES[blank[0]]
         todos.append({"what": f"{_and(names)} {'is' if len(blank) == 1 else 'are'} still blank.",
                       "fix": "Fill in each, starting with facts.md, whose comments say what goes where. Claude writes from these "
-                             f"files, and the assay checks against them. For the resume and letter, {FORMAT_DOCS[0].lower()}{FORMAT_DOCS[1:]}",
+                             f"files, and the assay checks against them. For the resume and letter, {FORMAT_DOCS[0].lower()}{FORMAT_DOCS[1:]}"
+                             + (" `pyrite import-resume <file>` drafts the master resume from the .docx, PDF or .txt one you have."
+                                if "profile/resume.md" in blank else ""),
                       **({"step": step} if step else {}), **({"tab": "facts"} if "profile/facts.md" in blank else {})})
     for rel, fix in OPTIONAL_FILES.items():
         mine = _text(root / rel)
@@ -226,6 +228,24 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     return todos
 
 
+def master_problems(text: str, kind: str, name: str = "", contact: str | None = None) -> list[str]:
+    """What a master resume or letter lacks that the assay needs, as phrases such as "no '@ ' contact line"."""
+    lines = [row.strip() for row in text.splitlines()]
+    problems = []
+    if name and f"# {name}" not in lines:
+        problems.append(f"no '# {name}' line")
+    if not any(row.startswith("@ ") for row in lines):
+        problems.append("no '@ ' contact line")
+    elif kind == "letter" and contact and contact not in lines:
+        problems.append("a contact line that differs from the resume's")
+    if kind == "resume":
+        problems += [f"no '{heading}' section" for heading in ("## Experience", "## Education")
+                     if not any(row.startswith(heading) for row in lines)]
+        if not any(row.startswith("### ") for row in lines):
+            problems.append("no '### Employer | dates' heading")
+    return problems
+
+
 def _master_todos(root: Path, cfg: dict) -> list[dict]:
     """The master resume and letter, checked for the form the assay reads. A master in another form gets past a
     look at the files and then fails every draft made from it, which is the wrong place to find out."""
@@ -240,19 +260,7 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
         text = _text(root / rel) if rel else None
         if text is None or text == _text(EXAMPLE_ROOT / rel) or rel in same:
             continue  # Missing, still the example's or still blank, and each is named already.
-        lines = [row.strip() for row in text.splitlines()]
-        problems = []
-        if name and f"# {name}" not in lines:
-            problems.append(f"no '# {name}' line")
-        if not any(row.startswith("@ ") for row in lines):
-            problems.append("no '@ ' contact line")
-        elif kind == "letter" and contact and contact not in lines:
-            problems.append("a contact line that differs from the resume's")
-        if kind == "resume":
-            problems += [f"no '{heading}' section" for heading in ("## Experience", "## Education")
-                         if not any(row.startswith(heading) for row in lines)]
-            if not any(row.startswith("### ") for row in lines):
-                problems.append("no '### Employer | dates' heading")
+        problems = master_problems(text, kind, name, contact)
         if problems:
             todos.append({"what": f"{rel} has {_and(problems)}, so no {kind} drafted from it can pass the assay.",
                           "fix": f"Every {kind} is checked against it. {FORMAT_DOCS}", "step": "masters", "severity": "bad"})

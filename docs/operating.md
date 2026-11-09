@@ -108,6 +108,16 @@ Your master resume and letter, and every draft made from them, are Markdown with
 
 The example's [resume](../example/profile/resume.md) and [letter](../example/profile/cover-letter.md) show the whole form, and `tools/build_resume.py` describes each mark. `pyrite doctor` says when a master is missing one of the lines the assay needs.
 
+### Starting from the resume you have
+
+`pyrite import-resume <file>` reads a `.docx`, a PDF or a `.txt` resume and prints it in this form, for you to correct. It reads the structure the way a parser would, with no AI: the name and contact line at the top, the section headings, each employer and its roles with their dates, and the bullets. Where a line could be read two ways, such as two names with no job-title word in either, it picks one and says which under "Check:", and a line it couldn't place is kept as it was, never dropped. Dates come out as `Jan 2020 – Present` whatever form they were in, and a role with no place of its own takes its employer's.
+
+```bash
+.venv/Scripts/python.exe tools/pyrite.py import-resume "My Resume.docx"
+```
+
+Add `--save` to write it to `profile/resume.md` instead. The copy it replaces goes in the Profile tab's History, where **Put back** restores it. Then check the headings and bullets against the original, and put each claim in `facts.md`: the assay blocks a draft that says anything your sources don't. A PDF needs poppler's `pdftotext`, which Git for Windows includes. A scanned PDF has no text to read, and an old `.doc` needs saving as `.docx` first.
+
 ## A new application by hand
 
 1. Add the posting with `pyrite add`, or the dashboard's **Add a posting**, then make its folder with `pyrite folder <id>`. That saves the posting and starts `resume.md` and `cover-letter.md` from your masters.
