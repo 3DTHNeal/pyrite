@@ -281,7 +281,7 @@ class Workspace(unittest.TestCase):
 
 
 class NewWorkspace(unittest.TestCase):
-    """A workspace made the way docs/operating.md says, by copying example/profile/, and what's left to change in it."""
+    """A workspace made the way docs/setup.md says, by copying example/profile/, and what's left to change in it."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

@@ -55,6 +55,17 @@ function daysAgo(days) {
 }
 
 const pill = (tone, label, why) => h("span", { class: `pill ${tone}`, title: why }, label);
+
+// Each status's icon from the fire assay, as the funnel names them. Every one is drawn at 24 and 48 px by art/icons/build.py.
+const STAGE_ICONS = {
+  new: "pan", shortlisted: "anvil", needs_fix: "anvil", ready: "streak", applied: "furnace", responded: "crucible",
+  interviewing: "balance", offer: "cupel", rejected: "tarnished", ghosted: "tarnished", withdrawn: "tarnished", passed: "tarnished", closed: "tarnished",
+};
+// Decoration only: the words beside it always say the same, so it has no alt text.
+const stageIcon = (name, size = 24, extra = "") => (name
+  ? h("img", { class: `stage-icon${extra ? ` ${extra}` : ""}`, src: `/static/icons/${name}-${size}.png`, alt: "", width: size, height: size }) : null);
+// A view with nothing in it: the icon of what would be here, and a line saying why it's empty.
+const emptyState = (icon, text, tag = "div", attrs = {}) => h(tag, { ...attrs, class: "empty-state" }, stageIcon(icon, 48), h("span", {}, text));
 const capitalized = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // Long text cut to fit a card or a table cell, at the end of a word. The job panel always shows all of it.
@@ -278,7 +289,7 @@ function renderOrders() {
     o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
     o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null));
   const all = recheck.length > 1 ? h("li", { class: "order-batch" }, checkButton(recheck, `Check all ${recheck.length} again`)) : null;
-  fill($("orders"), items.length ? [all, ...items] : h("li", { class: "empty" }, "Nothing needs you right now."));
+  fill($("orders"), items.length ? [all, ...items] : emptyState("mark", "Nothing needs you right now.", "li"));
 }
 
 function renderFunnel() {
@@ -286,12 +297,12 @@ function renderFunnel() {
   fill($("funnel"), state.funnel.map((f) => {
     const width = f.count ? Math.max(1, Math.sqrt(f.count / max) * 100) : 0;
     // An older server sends no icon, so its cell stays empty and the columns still line up.
-    return h("div", { class: "funnel-row", title: `${f.stage}: ${f.count}` },
-      f.icon ? h("img", { class: "stage-icon", src: `/static/icons/${f.icon}-24.png`, alt: "", width: 24, height: 24 }) : h("span"),
+    return h("div", { class: `funnel-row${f.count ? "" : " none"}`, title: `${f.stage}: ${f.count}` },
+      stageIcon(f.icon) || h("span"),
       h("span", { class: "stage" }, f.stage),
       h("span", { class: "funnel-track" }, h("span", { class: `funnel-bar${f.count ? "" : " zero"}`, style: `width:${width}%` })),
       h("span", { class: "count" }, f.count.toLocaleString()));
-  }), h("p", { class: "muted funnel-note" },
+  }), h("p", { class: "muted funnel-note funnel-closed" },
     (state.closed || []).length ? h("img", { class: "stage-icon", src: "/static/icons/tarnished-24.png", alt: "", width: 24, height: 24 }) : null,
     closedLine()),
   h("p", { class: "muted funnel-note" }, "Each job counts once, at the stage it's at now. Bars use a square-root scale so small stages stay visible."));
@@ -420,7 +431,7 @@ function renderBoard() {
     const busy = Boolean(task && task.state === "running");
     // An empty column shrinks to its heading, so the columns with work in them get the room.
     return h("div", { class: `column${jobs.length || busy ? "" : " empty"}` },
-      h("h3", {}, col.title, h("span", {}, jobs.length)),
+      h("h3", {}, stageIcon(STAGE_ICONS[col.statuses[0]]), h("span", { class: "column-title" }, col.title), h("span", { class: "column-count" }, jobs.length)),
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
       col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
         id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo || Boolean(notReady("tailor")),
@@ -524,7 +535,7 @@ function renderRadar() {
       h("td", { class: "nowrap", title: shortDate(j.first_posted_at || j.posted_at) }, daysAgo(j.age_days) || "Unknown"),
       h("td", {}, h("span", { class: "signals" }, urgentPills(j), freshnessPills(j))),
       h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small"))))
-      : h("tr", {}, h("td", { colspan: 10, class: "empty" }, "No prospects match."))));
+      : h("tr", {}, emptyState("pan", "No prospects match.", "td", { colspan: 10 }))));
 }
 
 // Compact where it can be read, and as the posting wrote it in the tooltip either way.
@@ -548,10 +559,10 @@ function renderArchive() {
   fill($("archive"),
     h("thead", {}, h("tr", {}, ["Outcome", "Company", "Title", "Applied", "Why"].map((c) => h("th", {}, c)))),
     h("tbody", {}, rows.length ? rows.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
-      h("td", {}, label[j.status]), h("td", {}, clamped(j.company)),
+      h("td", { class: "nowrap" }, label[j.status]), h("td", {}, clamped(j.company)),
       h("td", {}, h("button", { class: "linkish clamp", type: "button" }, j.title)),
       h("td", {}, j.applied_at ? shortDate(j.applied_at) : "No"), h("td", { title: (j.fit_reason || "").length > TABLE_REASON ? j.fit_reason : null }, clip(j.fit_reason, TABLE_REASON))))
-      : h("tr", {}, h("td", { colspan: 5, class: "empty" }, "Nothing closed yet."))));
+      : h("tr", {}, emptyState("tarnished", "Nothing closed yet.", "td", { colspan: 5 }))));
 }
 
 function renderSources() {
@@ -1650,7 +1661,8 @@ async function openJob(id, list) {
 
   fill($("drawer"),
     h("div", { class: "drawer-head" },
-      h("div", {}, h("h2", {}, job.title), h("p", { class: "muted" }, job.company, " · ",
+      stageIcon(STAGE_ICONS[job.status], 48, "drawer-stage"),
+      h("div", { class: "drawer-title" }, h("h2", {}, job.title), h("p", { class: "muted" }, job.company, " · ",
         h("span", { class: "job-number", title: `The number pyrite commands take, as in pyrite status ${job.id}` }, `Job ${job.id}`))),
       h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Close")),
     navBar(id),

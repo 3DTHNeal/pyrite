@@ -97,7 +97,7 @@ STEPS: tuple[dict, ...] = (
      "writes": ()},
     {"id": "schedule", "group": "Automation", "label": "Schedule and mail", "required": False, "fallback": None,
      "files": ("config",),
-     "meanwhile": "Until it's built: [run] and [inbox] in profile/search.toml. The daily runs are set up as described in docs/operating.md.",
+     "meanwhile": "Until it's built: [run] and [inbox] in profile/search.toml. The daily runs are set up as described in docs/schedule.md.",
      "why": "How much Pyrite does each morning, and where it reads replies from.",
      "writes": ("search.toml › [run] and [inbox]",)},
     {"id": "workspace", "group": "Workspace", "label": "Workspace and backup", "required": False, "fallback": None,

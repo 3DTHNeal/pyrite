@@ -1,0 +1,46 @@
+# Your profile and facts
+
+[All of the guide](README.md)
+
+## Your profile
+
+The **Profile** tab brings together everything Pyrite knows about you and your search. It's being built a section at a time, and until a section has its own editor, it says where to change that part instead: the Facts or Settings tab, which work as before, or a file in your workspace.
+
+- **Needs you** lists what setup still needs, the same findings as `pyrite doctor`, each with a button to the section that fixes it.
+- Each section shows what it holds now and when the Profile tab last changed it. **Where this goes** names the files and settings it writes.
+- **History** lists every save made on the Profile, Facts and Settings tabs, newest first. Pick a file to see what putting back its earlier copy would change, then **Put back**. A save that changed several files, such as your name in `search.toml` and the master resume, offers **Put back this whole save** too, so the files don't end up disagreeing. Putting back is a save like any other: the files as they are now are kept too, and a copy that would let drafts say more asks for a code. The latest 50 copies of each file are kept in `data/history/`.
+- A section with edits you haven't saved shows how many, with **Discard** and **Save changes**. Leaving it asks first. If a file changed on disk after the tab loaded it, the save is refused and nothing is written.
+- The address names the section, as `#profile/achievements`, so a bookmark or reload comes back to it.
+- In a section with an editor, every change is worked out by the code a save uses, before you save. **What changes in your files** shows each file's lines as they'd change, **Before you save** says anything worth knowing first, and a change that needs a code says so and why.
+
+The sections under **About you** that have editors so far:
+
+- **Name and contact** sets your name, each part of the contact line and the paper size. A change goes everywhere the name or contact line appears: `[candidate]` and `[documents]` in `search.toml`, Contact in `facts.md`, and the `# Name` and `@` lines of `profile/resume.md` and `profile/cover-letter.md`. If the assay reads the contact line from a file outside `profile/`, the section names it, since you change that one yourself.
+- **Work history** edits employers, roles, titles, places and dates, and lines such as Education. Each change is made to its own line of the Timeline in `facts.md`, so notes after the dates and the way you wrote things stay. The same change is made to the matching `###` and `####` headings in `profile/resume.md`, and an employer's dates follow its roles when they matched them before. A role is refused if `facts.md` wouldn't read it back as typed, such as a title with a comma that isn't in your master resume. **On every resume** sets `expected_on_resume`.
+- **Achievements** edits the themed sections of `facts.md` a fact at a time, keeping any lines under a fact with it, and adds sections before "Do not use". The **achievement builder** turns what you did, the before and after, and where it was measured into one fact line, and points out filler words, a percentage with no setting, and "Led" or "Managed" on a role whose title doesn't support it. Where it was measured is saved under **Wording** in `run-notes.md`, so drafts keep it. A fact that names something on Off limits is pointed out before you save.
+- **Master resume** edits `profile/resume.md` and `profile/cover-letter.md`: the headline, the text under each heading, and the letter's body. The name, contact line and headings come from the sections above and can't be typed here. Each change runs the fact check on both, and lists what only the master says, such as a number not in `facts.md`. Drafts may use those, because the master is an approved source, so it's worth checking each is true. If `heading_source` names another file, the section says so.
+- **Off limits** lists what drafts must never mention and what you haven't done. **Block it** adds a line to "Do not use" or "Unsupported" in `facts.md` and a pattern to `forbidden` or `unsupported` under `[guard]`, written to catch plurals, hyphens and spacing. A capitalized name under "Do not use" is blocked by name even with no pattern, and the section lists those. A name that your sources also state as fact can't be blocked that way, so it's named with a button to add a pattern. **Test a sentence** shows how the assay reads any sentence, including when a denial makes a claim acceptable. **Advanced** shows and edits the patterns themselves. Taking anything off asks for a code.
+- **Skills and terms** shows `approved-terms.txt` a term at a time, under the comments that group them. Taking a term off saves straight away; approving one asks for a code.
+
+Lists in `search.toml` are changed an item at a time, so the other items, their lines and any comments among them stay as they were.
+
+## Your facts
+
+The **Facts** tab shows `profile/facts.md` and `profile/approved-terms.txt`, the two files that say what a resume may claim. The fact bank is shown a section at a time. Click **Edit** on a section, change it and **Save**, or use **Add a section**. Sections named "Do not use" and "Unsupported" are marked **Approves nothing**, because the assay never treats them as a source.
+
+- A save takes effect the next time a draft is checked. Drafts that already passed aren't checked again by themselves.
+- The file from before each save is kept in the Profile tab's History, where **Put back** restores it.
+- In `approved-terms.txt`, a line starting with `#` is a comment. It approves nothing, so adding one needs no code.
+- If the file changed on disk after the tab loaded it, the save is refused and nothing is written.
+- To block a term by name, it also has to be listed under `[guard]` in `search.toml`. That can't be done from the dashboard.
+
+The dashboard has no login, so anyone who can open it can change these two files. It only listens on this machine unless you add names under `allowed_hosts`, written as a list such as `['workstation']`. Anything else there is ignored, and `pyrite doctor` says so. The demo's facts can't be changed.
+
+### Confirming with a code
+
+A save that would let drafts say more than before asks for a code first. On the Facts tab that's adding a line to `approved-terms.txt`, or taking an item off "Do not use" or "Unsupported". Pyrite sends a six-digit code to this computer's notifications, naming the change, and the tab asks for it. Type it in and **Confirm**, and the change is saved. Saves that only add a block, or change facts, go straight through.
+
+- A code works once, for the change it names, for 2 minutes. Five wrong tries end it and nothing is saved. **Send a new code** replaces it.
+- No notification, or Focus Assist hid it? `pyrite code` in a terminal on this computer prints the code waiting and what it's for.
+- The server decides what needs a code, by comparing the files before and after, so the page can't skip it. It's not a password: anyone who can see this screen can read the code. It stops a change made from another device, or by something driving the browser, without the person at this computer seeing it named.
+- Notifications come from each system's built-in route, with nothing to install: Windows PowerShell's toast, AppleScript on macOS, and `notify-send` on Linux.

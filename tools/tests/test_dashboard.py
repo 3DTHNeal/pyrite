@@ -402,6 +402,15 @@ class Icons(Base):
         wanted = set(re.findall(r"/static/icons/[\w.-]+\.(?:png|ico)|/favicon\.ico", text))
         wanted |= {f"/static/icons/{f['icon']}-24.png" for f in server.build_state(self.conn, CFG)["funnel"]}
         self.assertIn("/static/icons/tarnished-24.png", wanted)  # the closed line's, named in app.js
+        self.assertIn("/static/icons/wordmark.png", wanted)  # the masthead's, named in index.html
+        # app.js builds the rest from names: each status's icon at both sizes, and each empty view's at 48 px.
+        script = (static / "app.js").read_text(encoding="utf-8")
+        stages = set(re.findall(r'\w+: "(\w+)"', re.search(r"const STAGE_ICONS = \{(.*?)\};", script, re.S).group(1)))
+        self.assertEqual(stages, {"pan", "anvil", "streak", "furnace", "crucible", "balance", "cupel", "tarnished"})
+        wanted |= {f"/static/icons/{name}-{size}.png" for name in stages for size in (24, 48)}
+        empties = set(re.findall(r'emptyState\("(\w+)"', script))
+        self.assertTrue(empties)
+        wanted |= {f"/static/icons/{name}-48.png" for name in empties}
         self.assertEqual(sorted(p for p in wanted if p not in server.STATIC_FILES), [])
         self.assertTrue(all((static / server.STATIC_FILES[p][0]).is_file() for p in wanted))
 
