@@ -12,7 +12,8 @@ const profileSteps = {};
 // A section's editor. def.render(ctx) returns { main, aside } as DOM nodes, aside optional. ctx.data is the profile as
 // the server read it, ctx.step that section's entry in the server's list, and ctx.editable is false in the demo.
 // ctx.change(changes, count, extra) reports the edited files as { key: whole new text } and how many edits that is, which
-// the footer shows and saves; a count of 0 means nothing to save. `extra` goes with the save, such as which gaps it answers. After a save or Discard the section is drawn again.
+// the footer shows and saves; a count of 0 means nothing to save. `extra` goes with the save, such as which gaps it
+// answers. After a save or Discard the section is drawn again.
 // ctx.memo is the section's own object for its form: it lasts while there are unsaved edits, so drawing the section
 // again keeps them, and starts empty after a save or Discard.
 function profileStep(id, def) {
@@ -115,7 +116,7 @@ function profileShow(at) {
   profileAt = target;
   if (!profilePending) loadProfile();
   else renderProfile();
-  if (moved) window.scrollTo(0, document.querySelector(".tabs").offsetTop);
+  if (moved) window.scrollTo(0, 0);
   return profileAt;
 }
 
