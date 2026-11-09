@@ -104,10 +104,10 @@ class Dashboard(Base):
 class Outreach(Base):
     """Reaching out after applying: logged as an event, due on the to-do list a day or so in, and the follow-up keyed to it."""
 
-    def applied(self, days_ago: int, **kw) -> int:
+    def applied(self, days_ago: int, hours: int = 1, **kw) -> int:
         job = self.add(**kw)
         store.set_status(self.conn, job, "applied", follow_up_days=7)
-        applied = datetime.now(UTC) - timedelta(days=days_ago, hours=1)
+        applied = datetime.now(UTC) - timedelta(days=days_ago, hours=hours)
         # The follow-up is a week after the day the application went in, as the code works it out. Counted from today
         # instead, the hour taken off moved it a day in the first hour after midnight, and the outreach tests failed.
         follow_up = applied.astimezone().date() + timedelta(days=7)
@@ -127,7 +127,9 @@ class Outreach(Base):
         self.assertNotIn(late, self.reach_out_orders())
 
     def test_one_item_for_all_of_them_led_by_the_one_closing_first(self):
-        newer = [self.applied(1, source_id=str(n), company=f"Co{n}") for n in range(5)]
+        # An hour apart, earliest first. Applied in the same second they tie, and the order among them is then the order
+        # they were added in, which changed whenever the clock's second turned over partway through adding them.
+        newer = [self.applied(1, hours=5 - n, source_id=str(n), company=f"Co{n}") for n in range(5)]
         oldest = self.applied(3, source_id="old", company="Oldco")
         orders = [o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Reach out"]
         self.assertEqual([o["job_id"] for o in orders], [oldest])
