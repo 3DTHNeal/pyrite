@@ -72,7 +72,9 @@ class Builtin(unittest.TestCase):
         for text in ("github_pat_" + "A1b2" * 10, "OPENAI_API_KEY=sk-proj-" + "a1B2" * 8, "AIza" + "x1Y2z3" * 5 + "abcde",
                      "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc", "https://hooks.slack.com/services/T000/B000/" + "x" * 24,
                      "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "password = 'Hunter2Hunter2!'",
-                     "IMAP_PASSWORD=qwer tyui opas dfgh", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"):
+                     "IMAP_PASSWORD=qwer tyui opas dfgh",
+                     # Joined at run time, so gitleaks doesn't take the sample token for a real one.
+                     "eyJhbGciOiJIUzI1NiJ9" + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0" + ".dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"):
             with self.subTest(text[:20]):
                 self.assertFound(text, "credential")
         # Code that passes a secret along, a type, and the usual stand-ins aren't secrets.
