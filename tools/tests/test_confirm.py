@@ -31,9 +31,11 @@ class Workspace(unittest.TestCase):
         self.root = Path(tmp.name)
         shutil.copytree(EXAMPLE_PROFILE, self.root / "profile")
         self.sent: list[str] = []
+        self.titles: list[str] = []
         self.delivered = True
 
         def fake_send(title, body):
+            self.titles.append(title)
             self.sent.append(body)
             return self.delivered
 
@@ -50,8 +52,10 @@ class Workspace(unittest.TestCase):
         self.addCleanup(confirm._asked.clear)
 
     def code(self) -> str:
-        """The code from the last notification."""
-        return self.sent[-1][:7].replace(" ", "")
+        """The code from the last notification, which its title carries."""
+        found = re.fullmatch(r"Pyrite code: (\d{3}) (\d{3})", self.titles[-1])
+        assert found, self.titles[-1]
+        return found[1] + found[2]
 
     def config_with(self, table, key, value, literal=True):
         return tomledit.set_value(profile.read("config"), table, key, value, literal=literal)
@@ -143,7 +147,12 @@ class Codes(Workspace):
 
     def test_the_notification_names_the_change_and_the_right_code_works_once(self):
         request_id = self.ask()
-        self.assertRegex(self.sent[0], r"^\d{3} \d{3}  This code will approve “Kubernetes” for every draft\. It expires in 2 minutes")
+        # The title carries the code. The text says where to type it and what it confirms, and that closing decides
+        # nothing, since the notification itself has no way to accept or refuse.
+        self.assertRegex(self.titles[0], r"^Pyrite code: \d{3} \d{3}$")
+        self.assertEqual(self.sent[0], "Type it into the Pyrite dashboard, where it's asking for a code, to approve "
+                                       "“Kubernetes” for every draft. It works once and expires in 2 minutes. "
+                                       "Didn't ask for it? Close this, and nothing changes.")
         self.assertEqual(confirm.waiting()["code"], self.code())
         confirm.require(self.change, self.current, self.based_on, request_id, self.code())
         self.assertIsNone(confirm.waiting())
@@ -212,6 +221,12 @@ class Codes(Workspace):
             cli.main(["code"])
         self.assertIn(f"{self.code()[:3]} {self.code()[3:]}", out.getvalue())
         self.assertIn("approve “Kubernetes”", out.getvalue())
+        self.assertIn("Type it into the dashboard", out.getvalue())
+
+    def test_a_change_with_several_parts_names_the_first_and_counts_the_rest(self):
+        self.ask({"terms": self.terms + "Kubernetes\nRust\nZigbee\n"})
+        self.assertIn("to approve “Kubernetes” for every draft, and make 2 more changes to what drafts may say. "
+                      "It works once", self.sent[0])
 
     def test_pyrite_code_with_nothing_waiting(self):
         with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -228,6 +243,16 @@ class Notification(unittest.TestCase):
         self.assertNotIn(self.BODY, " ".join(command))
         self.assertEqual(env["PYRITE_NOTIFY_BODY"], self.BODY)
         self.assertIn("-EncodedCommand", command)
+
+    def test_on_windows_the_one_button_closes_the_toast_and_says_so(self):
+        # A reminder toast stays up until closed only if it has a button, so there's one, and it's labelled Close:
+        # Dismiss read as turning the change down, and closing the notice decides nothing.
+        with mock.patch.object(notify.sys, "platform", "win32"), mock.patch.object(notify.shutil, "which", return_value="powershell.exe"):
+            _, env = notify._command("Pyrite", "x")
+        self.assertEqual(env["PYRITE_NOTIFY_CLOSE"], "Close")
+        self.assertIn("scenario='reminder'", notify.WINDOWS_SCRIPT)
+        self.assertIn("content='$close' arguments='dismiss' activationType='system'", notify.WINDOWS_SCRIPT)
+        self.assertNotIn("Dismiss", notify.WINDOWS_SCRIPT)
 
     def test_elsewhere_the_text_is_an_argument_after_the_options_end(self):
         with mock.patch.object(notify.sys, "platform", "linux"), mock.patch.object(notify.shutil, "which", return_value="/usr/bin/notify-send"):

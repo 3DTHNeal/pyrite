@@ -51,7 +51,13 @@ The dashboard has no login, so anyone who can open it can change these two files
 
 ### Confirming with a code
 
-A save that would let drafts say more than before asks for a code first. On the Facts tab that's adding a line to `approved-terms.txt`, or taking an item off "Do not use" or "Unsupported". Pyrite sends a six-digit code to this computer's notifications, naming the change, and the tab asks for it. Type it in and **Confirm**, and the change is saved. Saves that only add a block, or change facts, go straight through.
+A save that would let drafts say more than before asks for a code first. On the Facts tab that's adding a line to `approved-terms.txt`, or taking an item off "Do not use" or "Unsupported". Saves that only add a block, or change facts, go straight through.
+
+1. Save as usual. Instead of saving, the tab shows a box saying what the change would let drafts do, with a space for **Code from the notification**.
+2. A notification titled **Pyrite code: 123 456** appears in the corner of the screen. It says to type the code into the dashboard and names what it confirms. On Windows it's labelled Windows PowerShell, the app Pyrite uses to show it, and it stays up until you close it. If it's gone, Windows key + N shows it again.
+3. Type the code into the box on the dashboard and choose **Confirm**. The change is saved.
+
+The notification can't accept or refuse anything itself: its **Close** button only closes it. Nothing is saved until the code is confirmed on the dashboard, and **Cancel** there puts the form back.
 
 - A code works once, for the change it names, for 2 minutes. Five wrong tries end it and nothing is saved. **Send a new code** replaces it.
 - No notification, or Focus Assist hid it? `pyrite code` in a terminal on this computer prints the code waiting and what it's for.

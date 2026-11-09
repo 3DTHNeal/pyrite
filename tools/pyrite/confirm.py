@@ -145,10 +145,25 @@ def _code_file() -> Path:
     return store.ROOT / "data" / "confirm-code.json"
 
 
-def sentence(summary: list[str]) -> str:
-    first = f"This code will {summary[0]}"
+def _purpose(summary: list[str]) -> str:
+    """What the code confirms, as a phrase that finishes "to ..." or "This code will ..."."""
     more = len(summary) - 1
-    return first + (f", and make {more} more change{'s' if more > 1 else ''} to what drafts may say." if more else ".")
+    return summary[0] + (f", and make {more} more change{'s' if more > 1 else ''} to what drafts may say" if more else "")
+
+
+def sentence(summary: list[str]) -> str:
+    return f"This code will {_purpose(summary)}."
+
+
+def message(code: str, summary: list[str]) -> tuple[str, str]:
+    """The notification's title and text. The title carries the code, since it's the line every system shows in full,
+    and the text says where it goes. On Windows the notification is labelled Windows PowerShell, the app that shows it,
+    so both name Pyrite."""
+    title = f"Pyrite code: {code[:3]} {code[3:]}"
+    body = (f"Type it into the Pyrite dashboard, where it's asking for a code, to {_purpose(summary)}. "
+            f"It works once and expires in {LIFETIME_SECONDS // 60} minutes. "
+            "Didn't ask for it? Close this, and nothing changes.")
+    return title, body
 
 
 def _clear() -> None:
@@ -173,8 +188,7 @@ def _issue(summary: list[str], fingerprint: str) -> dict:
     path.write_text(json.dumps({"code": code, "summary": summary, "expires": _pending["expires"]}), encoding="utf-8")
     if os.name != "nt":
         path.chmod(0o600)
-    sent = notify.send("Pyrite", f"{code[:3]} {code[3:]}  {sentence(summary)} It expires in 2 minutes. "
-                                 "If you didn't ask for this, ignore it.")
+    sent = notify.send(*message(code, summary))
     return {"needs_code": True, "request_id": _pending["id"], "changes": summary, "sent": sent,
             "expires_in": LIFETIME_SECONDS}
 
