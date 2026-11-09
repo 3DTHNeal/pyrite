@@ -401,8 +401,8 @@ class Icons(Base):
         text = "".join((static / name).read_text(encoding="utf-8") for name in ("index.html", "style.css", "app.js"))
         wanted = set(re.findall(r"/static/icons/[\w.-]+\.(?:png|ico)|/favicon\.ico", text))
         wanted |= {f"/static/icons/{f['icon']}-24.png" for f in server.build_state(self.conn, CFG)["funnel"]}
-        self.assertIn("/static/icons/tarnished-24.png", wanted)  # the closed line's, named in app.js
-        self.assertIn("/static/icons/wordmark.png", wanted)  # the masthead's, named in index.html
+        self.assertIn("/static/icons/tarnished-24.png", wanted)  # Closed in the rail, named in index.html
+        self.assertIn("/static/icons/wordmark.png", wanted)  # the rail's, named in index.html
         # app.js builds the rest from names: each status's icon at both sizes, and each empty view's at 48 px.
         script = (static / "app.js").read_text(encoding="utf-8")
         stages = set(re.findall(r'\w+: "(\w+)"', re.search(r"const STAGE_ICONS = \{(.*?)\};", script, re.S).group(1)))

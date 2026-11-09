@@ -115,7 +115,7 @@ function profileShow(at) {
   profileAt = target;
   if (!profilePending) loadProfile();
   else renderProfile();
-  if (moved) window.scrollTo(0, document.querySelector(".tabs").offsetTop);
+  if (moved) window.scrollTo(0, 0);
   return profileAt;
 }
 
