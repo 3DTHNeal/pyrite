@@ -13,7 +13,7 @@ CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 # How many new postings `discover` names before it points at `pyrite queue`.
 NAMED = 10
 REJECTED = {"title": "by title", "location": "by location", "score": "below the score floor", "not_open": "not openings",
-            "scam": "with a scam's tells"}
+            "scam": "with a scam's tells", "expired": "past their deadline", "pay": "paying under your floor"}
 
 
 def plain(text) -> str:
@@ -53,7 +53,7 @@ def discover(stats: dict, new_jobs: list[dict]) -> str:
     lines = [line + "."]
     moved = [f"{plural(stats[key], what)} {verb}" for key, what, verb in (
         ("closed", "posting", "came down"), ("reposted", "posting", "reposted"), ("redated", "posting", "re-dated"),
-        ("ghosted", "application", "marked ghosted"),
+        ("ghosted", "application", "marked ghosted"), ("expired", "prospect", "passed on after a deadline went by"),
     ) if stats.get(key)]
     if moved:
         lines.append(_sentence(", ".join(moved)))

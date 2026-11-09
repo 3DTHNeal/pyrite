@@ -7,11 +7,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, cast
 
-from . import quality, sources
+from . import deadline, pay, quality, sources
 from . import score as scoring
 from .store import (
     ACTIVE,
     REPLY_DETECTED,
+    ROOT,
     SCORING_VERSION,
     STATUSES,
     ConfigError,
@@ -40,6 +41,10 @@ TITLE_WORDS = {"sr": "senior", "jr": "junior", "mgr": "manager", "engr": "engine
 DEFAULT_GHOST_AFTER_DOWN_DAYS = 14
 # How a ghosted status set by the sweep starts, so a posting that comes back can undo it without touching your own calls.
 AUTO_GHOSTED = "The posting came down"
+# How a pass set because a posting's deadline went by starts, so Undo pass sticks: the sweep passes on a job once.
+AUTO_PASSED = "Passed automatically: its deadline"
+# Jobs a passed deadline can still pass on: anything not yet sent.
+NOT_SENT = ("new", "shortlisted", "needs_fix", "ready")
 # How the sweep notes putting a closed prospect back, so a rescore can tell that from a status you set.
 BACK_UP = "The posting is back up"
 # Events Pyrite logs on a prospect by itself, which say nothing about whether you've acted on it. "seen" is the
@@ -217,7 +222,8 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
 
     deadline = time.monotonic() + max_minutes * 60
     stats = {"partial": bool(only), "sources": len(items), "failed": 0, "postings": 0, "new": 0,
-             "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0}, "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
+             "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0, "expired": 0, "pay": 0},
+             "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
     if rescored:
         stats["rescored"] = rescored
 
@@ -243,6 +249,7 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
                 _save_result(conn, {**result, "error": f"Couldn't be saved. {type(err).__name__}: {err}"[:300]}, cfg, started, stats)
 
     stats["ghosted"] = len(settle_gone(conn, cfg))
+    stats["expired"] = len(settle_expired(conn))
     conn.execute(
         "UPDATE runs SET finished_at = ?, stats = ? WHERE id = ?",
         (now(), json.dumps(stats), run_id),
@@ -281,6 +288,35 @@ def settle_gone(conn, cfg: dict) -> list[int]:
         settled.append(job["id"])
     conn.commit()
     return settled
+
+
+def settle_expired(conn, today: date | None = None) -> list[int]:
+    """Pass on each job not yet sent whose firm deadline has gone by. A floor ("at least until") doesn't count, and a job
+    you put back with Undo pass after the sweep passed on it is left alone from then on."""
+    today = today or date.today()
+    marks = ",".join("?" * len(NOT_SENT))
+    passed = []
+    for job in conn.execute(f"SELECT * FROM jobs WHERE status IN ({marks}) AND applied_at IS NULL", NOT_SENT).fetchall():
+        info = deadline.for_job(job["description"] or "", ROOT / job["app_folder"] if job["app_folder"] else None, today)
+        if not deadline.expired(info):
+            continue
+        if conn.execute("SELECT 1 FROM events WHERE job_id = ? AND kind = 'passed' AND detail LIKE ?",
+                        (job["id"], AUTO_PASSED + "%")).fetchone():
+            continue
+        set_status(conn, job["id"], "passed",
+                   f"{AUTO_PASSED}, {deadline.label(info['deadline'])}, has gone by. Undo the pass if it's still taking applications.")
+        passed.append(job["id"])
+    conn.commit()
+    return passed
+
+
+def gate(description: str, comp: str, cfg: dict, today: date | None = None, dated: bool = True) -> str:
+    """Why a posting that passed the filters still isn't worth storing: "expired" when its own firm deadline has gone by,
+    "pay" when its whole range is under your [pay] floor, or nothing. `dated` False leaves the deadline out, for a rescore,
+    which mustn't drop a job for a date: the sweep passes on those instead, so their record stays."""
+    if dated and deadline.expired(deadline.for_job(description, None, today or date.today())):
+        return "expired"
+    return "pay" if pay.below_floor(comp, cfg) else ""
 
 
 def _ghosted_by_sweep(conn, job_id: int) -> bool:
@@ -580,7 +616,8 @@ def rescore(conn, cfg=None) -> dict:
     ).fetchall()
     for row in rows:
         verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"])
-        reason = quality.rejection(row["title"], row["description"] or "") if verdict.keep else verdict.reason
+        reason = (quality.rejection(row["title"], row["description"] or "")
+                  or gate(row["description"] or "", row["comp"] or "", cfg, dated=False)) if verdict.keep else verdict.reason
         if not reason:
             conn.execute(
                 "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",
@@ -637,8 +674,10 @@ def _ingest(conn, posting, cfg, stats, ts, key, started, baseline):
         return
 
     verdict = scoring.evaluate(posting.title, posting.location, posting.workplace, posting.description, cfg, posting.company)
-    # A posting can pass every filter and still be no opening: a talent pool, or a scam on a board you added.
-    reason = quality.rejection(posting.title, posting.description) if verdict.keep else verdict.reason
+    # A posting can pass every filter and still be no opening: a talent pool, or a scam on a board you added. Or it can
+    # be one too late to apply for, or one paying under your floor.
+    reason = (quality.rejection(posting.title, posting.description)
+              or gate(posting.description, posting.comp, cfg)) if verdict.keep else verdict.reason
     if reason:
         stats["rejected"][reason] = stats["rejected"].get(reason, 0) + 1
         conn.execute(

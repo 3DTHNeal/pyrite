@@ -18,7 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from . import __version__, checks, claude_code, demo, discover, fill, score, store, words, workspace
+from . import __version__, checks, claude_code, demo, discover, fill, score, signals, store, words, workspace
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
 
 # The tests and anything else that read these from here still find them.
@@ -158,23 +158,31 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
     today = date.today()
     last = discover.last_full_sweep(conn)
     swept_at = last["started_at"] if last else None
-    ranked = lambda row: {**job_dict(row), **score.freshness(dict(row), cfg, today, swept_at)}
-    # Your own picks first, then the newest listings that haven't been reposted.
-    # Never a job you've sent, whatever its status says: a run would rewrite the folder that's the record of it.
+    context = signals.context(conn, cfg, today)
+
+    def ranked(row) -> dict:
+        folder = store.ROOT / row["app_folder"] if row["app_folder"] else None
+        job = {**job_dict(row), **score.freshness(dict(row), cfg, today, swept_at)}
+        return signals.apply(job, signals.read(dict(row), cfg, context, folder))
+
+    # Your own picks first, then any whose deadline leaves just enough time to tailor, then the best of the rest.
+    # One whose firm deadline has passed waits for the sweep to pass on it, unless you picked it. Never a job you've
+    # sent, whatever its status says: a run would rewrite the folder that's the record of it.
+    current = lambda job: job["priority"] or not job["deadline_expired"]
     triage = sorted(
-        (ranked(r) for r in conn.execute("SELECT * FROM jobs WHERE status = 'new' AND applied_at IS NULL")),
-        key=lambda j: (-j["priority"], -j["rank"]),
+        filter(current, map(ranked, conn.execute("SELECT * FROM jobs WHERE status = 'new' AND applied_at IS NULL"))),
+        key=lambda j: (-j["priority"], not j["decide_soon"], -j["rank"]),
     )[:limit or run_cfg["triage_per_day"]]
     fit_order = {"strong": 0, "good": 1}
     # A draft that keeps failing the fact checker stops taking a place in the line until you ask for it again.
     tries, fix_limit = store.fix_attempts(conn), run_cfg.get("fix_attempts", store.DEFAULT_FIX_ATTEMPTS)
     stuck = [r["id"] for r in conn.execute("SELECT id FROM jobs WHERE status = 'needs_fix'") if tries.get(r["id"], 0) >= fix_limit]
     tailor = sorted(
-        (ranked(r) for r in conn.execute(
+        (job for job in map(ranked, conn.execute(
             "SELECT * FROM jobs WHERE status IN ('shortlisted', 'needs_fix') AND applied_at IS NULL AND (priority > 0 OR score >= ?)",
             (run_cfg["tailor_min_score"],),
-        ) if r["id"] not in stuck),
-        key=lambda j: (-j["priority"], fit_order.get(j["fit"], 2), -j["rank"]),
+        )) if job["id"] not in stuck and current(job)),
+        key=lambda j: (-j["priority"], not j["decide_soon"], fit_order.get(j["fit"], 2), -j["rank"]),
     )[:limit or run_cfg["tailor_per_day"]]
     failing = [dict(r) for r in conn.execute(
         "SELECT company, source_key, last_error FROM source_status WHERE last_error != ''"
@@ -187,7 +195,8 @@ def cmd_queue(args, conn):
     """What the daily run should work on, best first."""
     found = queue(conn, load_config(), args.limit)
     keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "promoted", "age_days", "reposts", "redates",
-            "is_new", "ghost_risk", "ghost_reason", "unconfirmed", "scam_signs", "track", "flags", "fit", "priority", "status", "comp", "url")
+            "is_new", "ghost_risk", "ghost_reason", "unconfirmed", "scam_signs", "track", "flags", "fit", "priority", "status", "comp", "url",
+            "deadline", "days_to_deadline", "decide_soon", "pay_low", "pay_high", "pay_signs", "rare", "rare_reason", "impossible_asks")
     trim = lambda job: {k: job[k] for k in keep}
     last = found["last"]
     data = {
@@ -435,6 +444,38 @@ def cmd_outlook(args, conn):
     points = sum(len(s["points"]) for s in report["sections"])
     print(f"Kept {points} points from {len(report['sources'])} sources. Dropped {report['dropped']['points']} points and "
           f"{report['dropped']['sources']} sources that this run's searches never came across.")
+
+
+@_with_db
+def cmd_skills(args, conn):
+    """List when the skills Pyrite knows became usable, or look up ones it doesn't on the web."""
+    from . import skillage
+    from .claude_code import ClaudeFailed
+
+    cfg = load_config()
+    phrases = [" ".join(phrase.lower().split()) for phrase in args.phrases]
+    if args.research and not phrases:
+        waiting = queue(conn, cfg, limit=1000)["to_triage"]
+        ids = [job["id"] for job in waiting]
+        marks = ",".join("?" * len(ids))
+        texts = [row[0] or "" for row in conn.execute(f"SELECT description FROM jobs WHERE id IN ({marks})", ids)] if ids else []
+        phrases = skillage.to_research(texts)
+        if not phrases:
+            print("Every skill the waiting postings ask years of is already known or was looked up before.")
+            return
+    if phrases:
+        if store.IS_EXAMPLE:
+            sys.exit("The demo doesn't run Claude. Point PYRITE_HOME at your own workspace to look skills up.")
+        try:
+            counts = skillage.research(conn, cfg, phrases)
+        except ClaudeFailed as err:
+            sys.exit(str(err))
+        print(f"Looked up {len(phrases)}: {counts['dated']} dated, {counts['general']} too general to date, "
+              f"{counts['unknown']} not found. Kept in {skillage.learned_path()}.")
+        return
+    today = date.today()
+    for skill in sorted(skillage.known(), key=lambda s: s.since, reverse=True):
+        print(f"{skill.since:%Y-%m}  {skillage.existed(skill, today):4.1f} years  {words.plain(skill.name)}")
 
 
 @_with_db
@@ -1007,6 +1048,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name", help="the industry's name, as under [[promote.industry]]")
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_outlook)
+
+    p = sub.add_parser("skills", help="list how long the skills postings ask years of have existed, or have Claude look new ones up on the web")
+    p.add_argument("phrases", nargs="*", help="skills to look up, as postings write them")
+    p.add_argument("--research", action="store_true", help="look up the unknown skills in the postings waiting to be judged")
+    p.set_defaults(func=cmd_skills)
 
     p = sub.add_parser("usage", help="show what the Claude runs started from here have used")
     _json_flag(p)

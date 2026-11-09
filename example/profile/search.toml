@@ -33,6 +33,25 @@ follow_up_days = 7   # nudge this long after applying
 quiet_days = 30      # flag as probably ghosted after this long
 ghost_after_down_days = 14  # a sent job whose posting has been down this long, with nothing heard, counts as ghosted; 0 turns it off
 fix_attempts = 6     # failed assays before the daily run stops retrying a draft, until you ask for it again
+decide_days = 5      # a deadline this close puts "tailor it or pass" on the to-do list, and the run judges and tailors it first
+# A posting whose own firm deadline has passed is passed on by the next pan, and a new one isn't stored at all.
+# "Accepted at least until" is a floor, not a deadline: past it, the job shows as closing any day instead.
+
+# What you'd take, as a year's pay in `currency`. Hourly, weekly and monthly ranges are turned into a year's.
+# A range whose top is under `floor` is too low to bother with: the pan drops it. One starting at `target` or above
+# ranks higher. Either can be left out. Every range is also compared with what similar roles you've seen pay, and one
+# far above or below that is marked, since it often means the job is a level away from its title.
+[pay]
+# floor = 120000
+# target = 170000
+currency = "USD"
+points = 5           # priority for meeting the target, or lost for paying under the going rate
+
+# How long the skills a posting asks years of have existed, so "8+ years of AI agents" reads as an ask nobody could
+# meet, not as your gap. Pyrite knows the common ones. With research on, the daily run has Claude look up the rest
+# on the web, keeping only dated answers with a source it found. `pyrite skills` lists what's known.
+[skills]
+research = false
 
 # Where the Industries tab looks up official employment numbers, from the BLS Quarterly Census of
 # Employment and Wages. Use the names the BLS uses: a state's full name, and a metro area as in
@@ -44,7 +63,7 @@ metro = "Madison, WI"
 # country = "United States"
 # model = "claude-sonnet-5-5"  # which model researches the industry outlooks
 
-# Priority = filter score + age points + promotion points - repost penalty. It only decides
+# Priority = filter score + age points + promotion points + pay and rarity points - repost penalty. It only decides
 # the order you and the daily run see things in. The filter score still decides what's kept and tailored.
 [freshness]
 new_days = 7                 # posted this recently and never reposted counts as New
@@ -59,6 +78,10 @@ came_back_after_days = 2     # a listing gone for less than this was probably a 
 ghost_age_days = 90
 ghost_repost_count = 2       # reposts and re-dates together
 ghost_age_if_reposted = 45   # a shorter limit once it has been reposted or re-dated
+# A local role in a track Pyrite has seen at most rare_max others of nearby in 90 days is rare: there may not be
+# another soon. Remote roles never are. It waits until Pyrite has been watching for 30 days.
+rare_points = 5
+rare_max = 2
 
 # Cities and industries to see first. These add to Priority only, so they take effect the
 # next time the dashboard refreshes, with no rescore. They can't rescue a posting the filters
