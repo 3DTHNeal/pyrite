@@ -56,7 +56,7 @@ It also refuses the disguises that would slip a word past a pattern: invisible c
 
 No model is involved in any of those verdicts, so there's nothing to persuade. The rule for the AI is the same as for a person: if the check fails, fix the draft, never the check.
 
-It has limits that I don't paper over. It works from patterns, so it can't catch a true fact twisted into a false impression, or a real number attached to the wrong claim. That's why a human reads every draft.
+It has limits that I don't paper over. It works from patterns, so it can't catch a true fact twisted into a false impression, or a real number attached to the wrong claim. In a cover letter, a skill or title that isn't in the fact bank only draws a warning, since a letter talks about the role in its own words. That's why a human reads every draft.
 
 ## How it works
 

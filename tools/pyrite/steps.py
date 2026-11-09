@@ -1205,14 +1205,14 @@ def _assay(texts: dict, cfg: dict, key: str, kind: str) -> dict:
     source = _reader(texts)
     blocked = checks.blocked_patterns(checked, source)
     approved = list(guard["approved_sources"])
-    every = "\n".join(checks.claimable(source(rel)) for rel in approved)
+    every = "\n".join(checks.source_body(rel, source(rel)) for rel in approved)
     errors, warnings = checks.check_text(texts[key], kind, checked, every, blocked=blocked)
     if kind == "resume" and guard.get("heading_source") == own:
         more, also = checks.check_resume_structure(texts[key], checked)
         errors, warnings = errors + more, warnings + also
     only = []
     if own in approved:
-        others = "\n".join(checks.claimable(source(rel)) for rel in approved if rel != own)
+        others = "\n".join(checks.source_body(rel, source(rel)) for rel in approved if rel != own)
         found, _ = checks.check_text(texts[key], kind, checked, others, blocked=blocked)
         only = [error.split(". Remove them")[0] for error in found if error not in errors and " not in " in error]
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}

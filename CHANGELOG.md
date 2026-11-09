@@ -78,6 +78,18 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- The assay no longer counts the digits of your phone number or zip code as measured numbers, so "a team of 10" can't pass on the strength of a phone number with 010 in it.
+- The assay no longer takes praise for a denial: "Never failed an X audit", "not a single X finding", "...and I couldn't have done it alone", "...and I never regretted it" are claims of X.
+- A name under `forbidden` that's a plain word, such as `Bluebird`, is also blocked split by a space or a hyphen ("blue bird", "Sky-Lift") and as a plural. The example blocks "hives" as well as "hive".
+- A name alone on a line under "Do not use", such as "- Bluebird" or "- Osprey Systems (a customer)", is blocked by name. Before, the first word of every line there was taken for a label.
+- A role moved under a different employer, and a line written like a role heading in bold or plain text, are checked against your master resume.
+- The assay catches links with any ending (alexrivera.pro, alex@rivera.studio), and no longer blocks a domain-shaped name your sources write, such as an employer called Booking.com or a skill called Socket.IO.
+- Unfilled placeholders in more forms are caught: `___%`, `{company_name}`, `<Company Name>`, FIXME.
+- Multiples in digits (8x), "seven-figure", changes in percentage points and numbers like .83 are checked against the fact bank.
+- A letter's date line may be written any common way: 15 November 2026, Nov. 15, 2026, November 15th, 2026 or 2026-11-15.
+- A `.txt` paste-box copy of the resume or letter, or a new `.docx` or `.pdf`, changed or added after the assay passed shows as changed since checked.
+- Lines starting with `#` in `approved-terms.txt` approve nothing, as the Facts tab already treated them. Before, a term on such a line was approved without a code.
+- A draft that isn't saved as UTF-8 gets a clear error from the assay instead of a crash, and a very long sentence no longer takes minutes to check.
 - Refresh resume and Interview prep no longer depend on Claude Code honoring an edit rule for one file, which headless runs on one Windows machine refused. Claude gets no tools, hands the document back in its closing message, and Pyrite writes it. An answer with no document in it is asked for again, then fails with the reason on the dashboard instead of looking like a run that changed nothing.
 - The pre-push hook works in a `git worktree` that has no `.venv` of its own: it uses the main checkout's venv, then `python3` or `python` if one is 3.11 or newer, and skips the Microsoft Store's placeholder. With none of those it says how to point it at a Python with `git config pyrite.python`, instead of failing on the Store's message.
 - `pyrite check` on the folder of a job with a sent copy no longer says to rebuild documents from an older drafter. It says which drafter the sent documents came from, since what was sent is the record and rebuilding would only make the folder differ from it.

@@ -15,6 +15,7 @@ from support import BAD_DRAFT, BRIEF, CFG, CONFIDENTIAL, LETTER, LETTER_ROLE, MO
 
 from pyrite import checks, store
 
+MASTER = (store.ROOT / "profile" / "resume.md").read_text(encoding="utf-8")
 
 class FactChecker(unittest.TestCase):
     def test_reviewed_documents_pass(self):
@@ -462,6 +463,103 @@ class Evasion(unittest.TestCase):
         self.assertEqual(checks._set_aside("Meta and Metadata at Meta's office", "Meta"), "  and Metadata at  's office")
         self.assertEqual(checks._set_aside("Anything", ""), "Anything")
 
+    def test_contact_details_approve_no_numbers(self):
+        # The example's phone number is (555) 010-0142. None of its parts is a measurement.
+        for line in ("- Managed a team of 10 engineers.", "- Shipped firmware to 555 robots.", "- Cut boot time on 142 robots.",
+                     "- Improved bench throughput 10x."):
+            with self.subTest(line):
+                self.assertBlocked(line)
+        self.assertNotIn("555", checks.without_contact(SOURCES))
+        self.assertIn("1,400", checks.without_contact(SOURCES))
+
+    def test_praise_in_any_tense_is_no_denial(self):
+        for line in ("- Led ISO 26262 certification for the fleet, and I could not have done it alone.",
+                     "- Led ISO 26262 certification for the fleet, and I have not forgotten it.",
+                     "- Led ISO 26262 certification for the fleet, and I never regretted it.",
+                     "- Reproduced field failures in simulation, and I never tired of it.",
+                     "- Led ISO 26262 certification for the fleet; I couldn't have done it alone."):
+            with self.subTest(line):
+                self.assertBlocked(line, "unsupported claim")
+        self.assertEqual(resume_errors(RESUME + "\n- I do not have ISO 26262 experience.\n"), [])
+
+    def test_a_negative_that_praises_the_record_denies_nothing(self):
+        for line in ("- Never failed an ISO 26262 audit.", "- Not a single ISO 26262 finding went unresolved.",
+                     "- Shipped firmware without a single ISO 26262 nonconformance.", "- Didn't miss an ISO 26262 deadline."):
+            with self.subTest(line):
+                self.assertBlocked(line, "unsupported claim")
+
+    def test_a_forbidden_name_split_or_hyphenated_is_still_blocked(self):
+        for line in ("- Delivered the blue bird controller ahead of schedule.", "- Wrote firmware for the Sky-Lift robot.",
+                     "- Built tooling for the hives.", "- Shipped two Bluebirds."):
+            with self.subTest(line):
+                self.assertBlocked(line, "confidential term")
+        errors, _ = checks.check_text(LETTER.rstrip() + "\n\nI delivered the Blue Bird controller.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
+        self.assertTrue(any("confidential term" in e for e in errors), errors)
+        self.assertEqual(checks._flexible(r"\bhives?\b"), r"\bhives?\b")  # A pattern is taken as written.
+
+    def test_a_name_alone_on_a_do_not_use_line_is_blocked(self):
+        listed = "## Do not use\n- Nightjar\n- Kestrel, the arm controller\n- Osprey Systems (a customer)\n- Customer names\n- Project Heron\n"
+        self.assertEqual(checks.unguarded_terms(listed, []), ["Nightjar", "Kestrel", "Osprey", "Systems", "Heron"])
+
+    def test_a_role_cannot_move_under_another_employer(self):
+        role = "#### Principal Firmware Engineer | Madison, WI | Jan 2023 – Oct 2026"
+        self.assertIn(role, MASTER)
+        lines = [row for row in MASTER.splitlines() if row != role]
+        moved = "\n".join(lines).replace("### Lakeshore Instruments | Aug 2012 – Jun 2017",
+                                         f"### Lakeshore Instruments | Aug 2012 – Jun 2017\n{role}\n- Led the firmware team.")
+        errors, _ = checks.check_resume_structure(moved, CFG)
+        self.assertTrue(any("sits under" in e and "Lakeshore" in e for e in errors), errors)
+        self.assertEqual(checks.check_resume_structure(MASTER, CFG)[0], [])
+
+    def test_a_role_written_as_bold_text_is_held_to_the_record(self):
+        line = "**Director, Firmware Engineering** | Madison, WI | Jan 2023 – Oct 2026"
+        errors, _ = checks.check_resume_structure(RESUME + f"\n{line}\n", CFG)
+        self.assertTrue(any("differ from your record" in e for e in errors), errors)
+        self.assertBlocked("Head of firmware for the whole company.", "not in your approved sources")
+
+    def test_blanks_and_placeholders_in_any_form_are_unfilled(self):
+        self.assertBlocked("- Improved throughput by ___%.", "placeholder")
+        for line in ("I would bring this to {company_name}.", "I would bring this to <Company Name>.", "FIXME: add a number"):
+            with self.subTest(line):
+                errors, _ = checks.check_text(LETTER.rstrip() + f"\n\n{line}\n", "letter", CFG, SOURCES, *LETTER_ROLE)
+                self.assertTrue(any("placeholder" in e for e in errors), errors)
+
+    def test_a_domain_with_any_ending_is_a_link_unless_your_sources_write_it(self):
+        for line in ("- Portfolio and demos at alexrivera.pro", "- Demos at alex-rivera.design.", "- Write to alex@rivera.studio."):
+            with self.subTest(line):
+                self.assertBlocked(line, "link or domain")
+        own = checks._own_links("- Interned at Booking.com\n- Telemetry over Socket.IO and ASP.NET\n")
+        for line in ("I interned at Booking.com.", "Telemetry over Socket.IO.", "Dashboards in ASP.NET."):
+            with self.subTest(line):
+                self.assertIsNone(checks._link(line, own))
+        for fine in ("Built dashboards in Node.js/React.", "Ph.D. and B.S. holders, e.g. the team.", "Ran it at 2.5 Hz.", "deploy.sh"):
+            with self.subTest(fine):
+                self.assertIsNone(checks._link(fine, set()))
+
+    def test_multiples_and_points_in_digits_are_measurements(self):
+        for line, reason in (("- Improved bench throughput 8x.", "claims a multiple"), ("- Owned a seven-figure firmware budget.", "multiple"),
+                             ("- Raised fleet availability by 60 percentage points.", "percentages"),
+                             ("- Cut boot time by .83 seconds.", "numbers")):
+            with self.subTest(line):
+                self.assertBlocked(line, reason)
+
+    def test_a_letter_date_may_be_written_any_common_way(self):
+        for date in ("15 November 2026", "Nov. 15, 2026", "November 15th, 2026", "2026-11-15", "15th of November 2026"):
+            with self.subTest(date):
+                self.assertIn("November 2, 2026", LETTER)
+                errors, _ = checks.check_text(LETTER.replace("November 2, 2026", date), "letter", CFG, SOURCES, *LETTER_ROLE)
+                self.assertEqual(errors, [])
+
+    def test_a_long_sentence_is_checked_in_reasonable_time(self):
+        import time
+        start = time.monotonic()
+        resume_errors(RESUME + "\n- " + "I have not worked under ISO 26262 and " * 1500 + "that is all.\n")
+        self.assertLess(time.monotonic() - start, 10)
+
+    def test_comment_lines_in_a_plain_text_source_approve_nothing(self):
+        self.assertNotIn("Zigbee", checks.source_body("profile/approved-terms.txt", "CAN\n# Zigbee LoRaWAN\n"))
+        self.assertIn("# Fact bank", checks.source_body("profile/facts.md", "# Fact bank\n- Python\n"))
+
     def test_do_not_use_and_unsupported_approve_nothing_at_any_heading_level(self):
         bank = ("# Facts\n## Record\n- Shipped 3 launches\n### Do not use\n- Project Nightjar, 900 units\n#### Customers\n- Globex\n"
                 "### Skills\n- Python\n# Unsupported claims\n- Kubernetes at 4000 nodes\n")
@@ -475,6 +573,31 @@ class Evasion(unittest.TestCase):
 
 
 class PassRecord(unittest.TestCase):
+    def test_a_paste_box_text_or_a_new_document_after_a_pass_shows(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            folder = Path(tmp)
+            (folder / "resume.md").write_text("# Alex Rivera\n", encoding="utf-8")
+            paste = folder / "Alex_Rivera_Resume_Acme.txt"
+            paste.write_text("Alex Rivera\n", encoding="utf-8")
+            (folder / "autofill-log.txt").write_text("typed\n", encoding="utf-8")
+            checked = checks.fingerprints(folder)
+            self.assertEqual(sorted(checked), ["Alex_Rivera_Resume_Acme.txt", "resume.md"])
+            (folder / "autofill-log.txt").write_text("typed more\n", encoding="utf-8")
+            self.assertEqual(checks.changed_since(folder, checked), [])
+            paste.write_text("Alex Rivera\nLed a team of 40.\n", encoding="utf-8")
+            (folder / "Alex_Rivera_Resume_Acme_v2.docx").write_bytes(b"PK")
+            self.assertEqual(checks.changed_since(folder, checked), ["Alex_Rivera_Resume_Acme.txt", "Alex_Rivera_Resume_Acme_v2.docx"])
+            # A pass recorded before .txt files were covered isn't held to them.
+            self.assertEqual(checks.changed_since(folder, {"resume.md": checked["resume.md"]}), ["Alex_Rivera_Resume_Acme_v2.docx"])
+
+    def test_a_draft_that_is_not_utf8_is_an_error_not_a_crash(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            folder = Path(tmp)
+            (folder / "resume.md").write_bytes("# Alex Rivera\n- Café\n".encode("cp1252"))
+            report = checks.check_application(folder, CFG, "Acme", "Engineer")
+            self.assertFalse(report["ok"])
+            self.assertIn("isn't saved as UTF-8", report["errors"][0])
+
     def test_a_change_to_the_facts_or_rules_shows_after_a_pass(self):
         recorded = checks.source_fingerprints(CFG)
         self.assertEqual(checks.sources_changed(CFG, recorded), [])

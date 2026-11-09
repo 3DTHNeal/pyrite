@@ -169,7 +169,7 @@ flags = [
 # is for what a name alone won't catch, such as a lowercase term or a name your facts also state.
 # The "Unsupported" section is read only through `unsupported`: each line there needs a pattern.
 [guard]
-forbidden = ['Bluebird', 'Falconer', '\bhive\b', 'SkyLift']
+forbidden = ['Bluebird', 'Falconer', '\bhives?\b', 'SkyLift']
 # Blocked unless the sentence denies it: with one of `disclaimers` before the claim ("I have not
 # led..."), or in the first person after it ("...is listed as a plus, and I have not done it").
 # A negative that only happens to follow, as in "led it with no delays", denies nothing.

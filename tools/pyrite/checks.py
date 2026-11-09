@@ -16,33 +16,47 @@ from pathlib import Path
 from .store import ROOT, SENT_FOLDER, sent_copies
 
 # A date alone on its line is a letter's date, which may be any day. A date inside a sentence is a claim like any other.
+# Written any common way: November 15, 2026, Nov. 15th, 2026, 15 November 2026 or 2026-11-15.
+_MONTH = (r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?"
+          r"|Nov(?:ember)?|Dec(?:ember)?)\.?")
+_DAY = r"\d{1,2}(?:st|nd|rd|th)?"
 DATE_LINE = re.compile(
-    r"(?m)^[ \t]*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}[ \t]*$"
+    rf"(?m)^[ \t]*(?:{_MONTH}\s+{_DAY},?\s+\d{{4}}|{_DAY}\s+(?:of\s+)?{_MONTH},?\s+\d{{4}}|\d{{4}}-\d{{2}}-\d{{2}})[ \t]*$"
 )
 # A number keeps its scale: $3M isn't the 3 the fact bank measured, and 212K tests aren't 212. Each reads as its value,
 # so 1.5M and 1,500,000 are the same number. A lowercase m is left alone, since 30m is as often minutes as millions.
+# A number may start at its decimal point, as in .83 seconds.
 NUMBER = re.compile(
-    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s?(thousand|million|billion|trillion)\b|(K|k|M|MM|B|bn|BN)\b)?"
+    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?|\.\d+)(?:\s?(thousand|million|billion|trillion)\b|(K|k|M|MM|B|bn|BN)\b)?"
 )
 SCALE = {"thousand": 3, "k": 3, "million": 6, "m": 6, "mm": 6, "billion": 9, "b": 9, "bn": 9, "trillion": 12}
-# A percentage spelled out is still a percentage.
-PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent\b|per\s?cent\b|pct\b)", re.I)
+# A percentage spelled out is still a percentage, and so is a change in percentage points.
+PERCENT = re.compile(
+    r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent(?:age)?(?:\s+points?)?\b|per\s?cent\b|pct\b|pp\b|p\.p\.)", re.I
+)
 # Multiples and orders of magnitude claimed in words are measurements too.
 MULTIPLE = re.compile(
     r"\b(?:doubled|tripled|quadrupled|halved|(?:two|three|four|five|six|seven|eight|nine|ten|hundred|thousand)[- ]?fold|"
-    r"(?:double|triple)[- ]digits?|order[s]? of magnitude)\b",
+    r"(?:double|triple)[- ]digits?|(?:five|six|seven|eight|nine|ten)[- ]figures?|order[s]? of magnitude)\b",
     re.I,
 )
-# Domains people link from a resume, link shorteners and chat handles included, and anything shaped like domain/path.
-# File types a skill list names, such as Node.js/React, aren't domains.
-LINK_TLDS = "com|io|ai|org|net|co|dev|app|me|ly|gg|so|sh|to|tv|cc|gl|xyz|info|biz|us|uk|ca|de|eu|link|site|page|online|tech|blog|bio|fm|im"
-URLISH = re.compile(
-    rf"https?://|www\.|\b[\w-]+\.(?:{LINK_TLDS})\b|\b[\w-]{{2,}}\.(?!(?:js|ts|py|md|rb|go|rs|cs|cpp|java|kt|net)\b)[a-z]{{2,}}/[\w-]",
-    re.I,
-)
+# A multiple in digits, such as 8x or 2.5×. It's a measurement of its own, whatever counts the fact bank holds.
+NUMERIC_MULTIPLE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s?[x×](?!\w)", re.I)
+# A web address or a path on a site, which is never a skill. File types a skill list names, such as Node.js/React,
+# aren't sites.
+FILE_TYPES = "js|jsx|ts|tsx|py|md|rb|go|rs|cs|cpp|hpp|java|kt|css|html|json|ya?ml|toml|sh|txt|csv|pdf|docx|xlsx|exe|dll"
+URLISH = re.compile(rf"https?://|www\.|\b[\w-]{{2,}}\.(?!(?:{FILE_TYPES}|net)\b)[a-z]{{2,}}/[\w-]", re.I)
+# Anything shaped like a domain, whatever its ending: there are too many endings to list, and .pro or .studio links as
+# well as .com. One your own sources write, such as an employer called Booking.com or a skill called Socket.IO, is yours.
+DOMAIN = re.compile(rf"(?<![\w@.-])((?:[A-Za-z0-9][\w-]*\.)+(?!(?:{FILE_TYPES})\b)[A-Za-z]{{2,24}})(?![\w-]|\.[A-Za-z0-9])")
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # Markdown emphasis can split a word in two that renders whole: **Blue****bird**, or _40_. Underscores inside a word stay.
 EMPHASIS = re.compile(r"\*+|(?<!\w)_+|_+(?!\w)")
-PLACEHOLDER = re.compile(r"\[[^\]]*\]|\{\{|\bTODO\b|\bTBD\b|\bXXX\b|<[a-z_ ]+>")
+PLACEHOLDER = re.compile(
+    r"\[[^\]]*\]|\{\{|\{[^{}\n]{0,40}\}|\bTODO\b|\bTBD\b|\bFIXME\b|\bX{2,}\b|<[A-Za-z_ ]+>"
+)
+# A blank to fill in, such as ___%. Looked for before emphasis markers are taken out, since those are underscores too.
+BLANK = re.compile(r"_{3,}")
 WORD = re.compile(r"[A-Za-z][A-Za-z0-9+#]*(?:[-/.][A-Za-z0-9+#]+)*\+*")
 SENTENCE = re.compile(r"(?<=[.!?])\s+|\n")
 # Sections of a fact bank that list what must not be claimed, at any heading level. Their words and numbers approve
@@ -58,8 +72,15 @@ ASIDE = re.compile(r"\([^)]*\)|\"[^\"]*\"|“[^”]*”")
 LISTED_SENTENCE = re.compile(r"(?:[^.!?;]|[.!?;](?=\S))+")
 EXCLUDED_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use|unsupported)\b", re.I)
 DO_NOT_USE_SECTION = re.compile(r"\W*(?:do[- ]?not[- ]use|don['’]t[- ]use)\b", re.I)
-# A negative only disclaims what follows it in the same clause. "Not only" is no negative at all.
-NOT_A_NEGATIVE = re.compile(r"\b(?:not|no)\s+(?:only|just|merely|less|fewer)\b", re.I)
+# Your contact details hold numbers, a phone number and a zip code, that are about how to reach you. They count as
+# nothing a draft can claim: a phone number of (555) 010-0142 doesn't make a team of 10 true.
+CONTACT_SECTION = re.compile(r"\W*contact\b", re.I)
+# A negative only disclaims what follows it in the same clause. "Not only" is no negative at all, and neither is one
+# that praises the record: "never failed an X audit", "not a single X finding", "without a single X nonconformance".
+NOT_A_NEGATIVE = re.compile(
+    r"(?:\b(?:not|no|never|without)|n['’]t)\s+(?:only|just|merely|less|fewer|a\s+single|fail\w*|miss\w*|lost|los[ei]\w*)\b",
+    re.I,
+)
 # Punctuation and joining words start a new clause, so "With no added headcount, cut defects by 83%" denies nothing.
 # So does a new subject: in "With no budget I led X" the negative is about the budget, not X.
 CLAUSE_BREAK = re.compile(
@@ -77,12 +98,16 @@ FIRST_PERSON_DENIAL = re.compile(
 # A first-person denial after the claim counts only when it points back at it: "...and I have not done it", "...I haven't."
 # "Led X, and I never missed a deadline" denies the deadline, not X.
 REFERS_BACK = re.compile(r"(?:\s+[\w'’]+){0,4}?\s+(?:it|that|this|them|one|so|either|any|yet)\b|\W*$", re.I)
-# Some negatives that point back are praise, not denial: "I led X, and I could not be prouder of it", "...never missed one".
+# Some negatives that point back are praise, not denial: "I led X, and I could not be prouder of it", "...never missed one",
+# "...never regretted it", and anything in the would-have form: "I couldn't have done it alone".
 PRAISE = re.compile(
-    r"\b(?:be|prouder|happier|better|more|enough|wait|forget|regret|change|stop|miss|missed|say|imagine|believe|recommend|"
-    r"overstate|thank|trade|resist|want|ask|love|enjoy|enjoyed|loved)\b",
+    r"\b(?:be|prouder|happier|better|more|enough|wait|forg[eo]t\w*|regret\w*|chang\w*|stop\w*|miss\w*|say|imagine|believe|"
+    r"recommend|overstate|thank|trade|resist|want|ask|lov\w*|enjoy\w*|tire[ds]?|tiring|have\s+(?:been|done|\w+ed|\w+en))\b",
     re.I,
 )
+# How far either side of a claim the denial check reads. A denial sits within a few words of what it denies, and reading
+# the whole sentence for every claim in it takes time that grows with the square of its length.
+DENIAL_WINDOW = 300
 # A claim the sentence puts in the posting's mouth isn't yours: "Your posting lists X as a plus, and I have not worked under Y".
 ATTRIBUTED = re.compile(
     r"\b(?:posting|role|job|position|description|you|your)\b[^.;]{0,60}?"
@@ -118,6 +143,18 @@ LOOKALIKES = str.maketrans(
 PLAIN_LATIN = str.maketrans({"ı": "i", "ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ħ": "h", "Ħ": "H"})
 EM_DASH = "—"
 LETTER_WORDS_MAX = 350  # a letter longer than this is the one readers say they stop reading
+# Titles that open a line as a claim: "Head of firmware for the company." The first word of a sentence is otherwise
+# taken as capitalized only because it comes first.
+TITLE_WORDS = {"director", "head", "chief", "president", "vice"}
+# A line shaped like a role heading, "Title | place | dates", printed as plain or bold text instead of as a heading.
+ROLE_LINE = re.compile(r"^[^#@|][^|]*\|[^|]*\|.*\b(?:19|20)\d\d\b")
+# Words that open an instruction or a description under "Do not use" rather than name something: "Say Northbridge, not
+# the codename", "Project Kestrel", "Customer Globex".
+NOT_A_NAME = {"say", "use", "write", "call", "describe", "mention", "refer", "avoid", "never", "do", "don't", "keep",
+              "prefer", "omit", "replace", "no", "not", "only", "any", "all", "the", "a", "an", "our", "my", "project",
+              "projects", "codename", "codenames", "code", "product", "products", "program", "programs", "team",
+              "customer", "customers", "client", "clients", "partner", "partners", "model", "models", "robot", "internal",
+              "unreleased", "confidential", "secret", "names", "name"}
 ORDINARY_CAPS = {
     "january", "february", "march", "april", "may", "june", "july", "august", "september",
     "october", "november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep",
@@ -157,6 +194,20 @@ def claimable(text: str) -> str:
     return _split_sections(uncommented(text), EXCLUDED_SECTION)[0]
 
 
+def source_body(rel: str, text: str) -> str:
+    """What an approved source states, as the assay reads it. In a plain-text source such as approved-terms.txt a line
+    starting with # is a comment, as the Facts tab and its code check read it, so it approves nothing."""
+    if rel.lower().endswith(".txt"):
+        text = "\n".join(row for row in text.splitlines() if not row.lstrip().startswith("#"))
+    return claimable(text)
+
+
+def without_contact(text: str) -> str:
+    """Sources without their contact details: the Contact section of a fact bank and each "@ " contact line."""
+    text = _split_sections(text, CONTACT_SECTION)[0]
+    return "\n".join(row for row in text.splitlines() if not row.lstrip().startswith("@ "))
+
+
 def do_not_use(text: str) -> str:
     """What a fact bank lists under "Do not use", subsections included, without its comments."""
     return _split_sections(uncommented(text), DO_NOT_USE_SECTION)[1]
@@ -180,22 +231,39 @@ def term_pattern(term: str) -> str:
 def unguarded_terms(facts: str, forbidden: list[str], own_name: str = "") -> list[str]:
     """Capitalized terms under "Do not use" in a fact bank that no pattern in [guard] forbidden matches.
 
-    Only words that could be a secret name count. The first word of each sentence is skipped, since it's usually a
-    label such as "Internal names:" or an instruction such as "Say". Asides in parentheses and quoted wording are
-    skipped, since they explain the rule rather than name something. The words of your own name are skipped too:
-    forbidding them would fail every draft."""
+    Only words that could be a secret name count. The first word of each sentence is skipped when it's a label such as
+    "Internal names:", an instruction such as "Say", or opens a description such as "Customer names". It counts when it
+    stands alone, as in "- Bluebird", is followed by a comma, as in "- Falconer, the robot arm", or starts a run of
+    capitalized words, as in "- Acme Corp". Asides in parentheses and quoted wording are skipped, since they explain the
+    rule rather than name something. The words of your own name are skipped too: forbidding them would fail every draft."""
     mine = {word.lower() for word in re.findall(r"\w+", own_name)}
     found: list[str] = []
     for row in do_not_use(facts).splitlines():
-        line = row.strip().lstrip("-*").strip()
+        heading = HEADING.match(row)
+        line = heading.group(2).strip() if heading else row.strip().lstrip("-*").strip()
         spans = [match.span() for pattern in forbidden for match in re.finditer(pattern, line, re.I)]
         masked = ASIDE.sub(lambda aside: " " * len(aside.group(0)), line)
         for sentence in LISTED_SENTENCE.finditer(masked):
-            for term in list(CAPITALIZED.finditer(masked, sentence.start(), sentence.end()))[1:]:
+            terms = list(CAPITALIZED.finditer(masked, sentence.start(), sentence.end()))
+            # A subsection's heading, such as "#### Customers", says what's listed under it.
+            if terms and (heading or not _names_something(masked[sentence.start():terms[0].start()], terms[0],
+                                                          masked[terms[0].end():sentence.end()])):
+                terms = terms[1:]
+            for term in terms:
                 covered = any(start < term.end() and term.start() < end for start, end in spans)
                 if not covered and term.group(0).lower() not in mine and term.group(0) not in found:
                     found.append(term.group(0))
     return found
+
+
+def _names_something(before: str, first: re.Match, rest: str) -> bool:
+    """Whether the first capitalized word of a "Do not use" sentence is a name rather than a label or an instruction."""
+    if before.strip():
+        return True  # Capitalized in mid-sentence, as in "the Hive".
+    if first.group(0).lower() in NOT_A_NAME or first.group(0).lower() in ORDINARY_CAPS:
+        return False
+    rest = rest.rstrip(" .")
+    return not rest.strip() or rest.startswith(",") or bool(re.match(r"\s+[A-Z]", rest))
 
 
 def _source_text(rel: str) -> str:
@@ -218,7 +286,7 @@ def listed_terms(cfg: dict, read: Callable[[str], str] | None = None) -> tuple[l
     forbidden = list(guard.get("forbidden", []))
     own_name = str(cfg.get("candidate", {}).get("name", ""))
     texts = {rel: (read or _source_text)(rel) for rel in dict.fromkeys(guard.get("approved_sources", []))}
-    stated = "\n".join(claimable(text) for text in texts.values())
+    stated = "\n".join(source_body(rel, text) for rel, text in texts.items())
     blocked: list[tuple[str, str, str]] = []
     shared: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -238,8 +306,17 @@ def listed_terms(cfg: dict, read: Callable[[str], str] | None = None) -> tuple[l
 def blocked_patterns(cfg: dict, read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
     """Every pattern a draft must not match, each with where it comes from: "" for forbidden under [guard], or the
     file whose "Do not use" section names it."""
-    return ([(pattern, "") for pattern in cfg.get("guard", {}).get("forbidden", [])]
+    return ([(_flexible(pattern), "") for pattern in cfg.get("guard", {}).get("forbidden", [])]
             + [(pattern, rel) for _term, pattern, rel in listed_terms(cfg, read)[0]])
+
+
+def _flexible(pattern: str) -> str:
+    """A forbidden pattern that's a plain name, such as Bluebird, also blocks it split by a space or a hyphen, as in
+    "blue bird" or "Sky-Lift", and as a plural. A pattern with any regular-expression syntax is taken as written."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{3,}", pattern):
+        return pattern
+    body = r"[\s-]?".join(re.escape(ch) for ch in pattern)
+    return rf"\b{body}{'s?' if pattern[-1].isalpha() and pattern[-1].lower() != 's' else ''}\b"
 
 
 def with_listed(guard: dict, cfg: dict, read: Callable[[str], str] | None = None) -> dict:
@@ -263,7 +340,7 @@ def _read_sources(cfg: dict) -> str:
     for rel in cfg["guard"]["approved_sources"]:
         path = ROOT / rel
         if path.exists():
-            parts.append(claimable(path.read_text(encoding="utf-8")))
+            parts.append(source_body(rel, path.read_text(encoding="utf-8")))
     return "\n".join(parts)
 
 
@@ -312,7 +389,9 @@ def _number_errors(label: str, body: str, known: str, vocab: set[str], where: st
     spelled = sorted(_spelled(body) - vocab)
     if spelled:
         errors.append(f"{label} spells out numbers {where}: {', '.join(spelled)}. Write numbers as digits, as measured.")
-    multiples = sorted({m.group(0).lower() for m in MULTIPLE.finditer(body)} - _phrases(MULTIPLE, known))
+    multiples = sorted(({m.group(0).lower() for m in MULTIPLE.finditer(body)} - _phrases(MULTIPLE, known))
+                       | {f"{_value(m.group(1))}x" for m in NUMERIC_MULTIPLE.finditer(body)}
+                       - {f"{_value(m.group(1))}x" for m in NUMERIC_MULTIPLE.finditer(known)})
     if multiples:
         errors.append(f"{label} claims a multiple {where}: {', '.join(multiples)}. Give the measured number instead.")
     return errors
@@ -339,6 +418,26 @@ def _pages(pdf: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _own_links(sources: str) -> set[str]:
+    """The domains and addresses your own sources write, in lowercase: an employer such as Booking.com, a skill such as
+    Socket.IO, your own email."""
+    return {m.group(0).lower() for m in EMAIL.finditer(sources)} | {m.group(1).lower() for m in DOMAIN.finditer(sources)}
+
+
+def _link(line: str, own: set[str]) -> str | None:
+    """The first web address, domain or email in a line that your sources don't write, or None."""
+    found = URLISH.search(line)
+    if found:
+        return found.group(0)
+    for email in EMAIL.finditer(line):
+        if email.group(0).lower() not in own:
+            return email.group(0)
+    for domain in DOMAIN.finditer(EMAIL.sub(" ", line)):
+        if domain.group(1).lower() not in own:
+            return domain.group(1)
+    return None
+
+
 def _clean_markup(line: str) -> str:
     return re.sub(r"^(#{1,4} |@ |~ |- )", "", line).replace("**", "")
 
@@ -353,8 +452,8 @@ def _novel_terms(text: str, vocab: set[str], allowed: set[str]) -> list[str]:
     for sentence in SENTENCE.split(text):
         words = WORD.findall(sentence)
         for index, word in enumerate(words):
-            # The first word of a sentence is capitalized anyway, so there only an acronym or CamelCase stands out.
-            if not (_is_acronym_or_camel(word) or (index and word[0].isupper())):
+            # The first word of a sentence is capitalized anyway, so there only an acronym, CamelCase or a title stands out.
+            if not (_is_acronym_or_camel(word) or (word[0].isupper() and (index or word.lower() in TITLE_WORDS))):
                 continue
             low = word.lower().strip("+")
             if low in vocab or low in allowed or low in ORDINARY_CAPS:
@@ -387,6 +486,11 @@ def _borrowed_terms(text: str, posting: str, vocab: set[str], allowed: set[str],
         if word[0].isupper() and word.lower().strip("+") in wanted and word not in borrowed:
             borrowed.append(word)
     return borrowed
+
+
+def _either_side(sentence: str, match: re.Match) -> tuple[str, str]:
+    """The words before and after a claim that could deny it."""
+    return sentence[max(0, match.start() - DENIAL_WINDOW):match.start()], sentence[match.end():match.end() + DENIAL_WINDOW]
 
 
 def _disclaimed(before: str, after: str, disclaimers: list) -> bool:
@@ -465,7 +569,7 @@ def _unsupported(text: str, guard: dict, label: str) -> tuple[list[str], list[st
         claimed = False
         # Every mention counts, not just the first: "I have not worked under X, but led X audits" claims X.
         for match in (m for pattern in guard["unsupported"] for m in re.finditer(pattern, sentence, re.I)):
-            if _disclaimed(sentence[:match.start()], sentence[match.end():], guard["disclaimers"]):
+            if _disclaimed(*_either_side(sentence, match), guard["disclaimers"]):
                 disclaimed.append(match.group(0))
             else:
                 claimed = True
@@ -491,7 +595,7 @@ def explain(sentence: str, guard: dict) -> dict:
             for m in re.finditer(pattern, part, re.I):
                 if m.end() == m.start():
                     continue
-                denied = _disclaimed(part[:m.start()], part[m.end():], guard.get("disclaimers", []))
+                denied = _disclaimed(*_either_side(part, m), guard.get("disclaimers", []))
                 hits.append({"start": at + m.start(), "end": at + m.end(), "kind": "denied" if denied else "claim",
                              "pattern": pattern})
         at += len(part)
@@ -510,6 +614,9 @@ def check_text(
     blocked = blocked_patterns(cfg) if blocked is None else blocked
     label = "Resume" if kind == "resume" else "Cover letter"
     errors += _disguises(text, label)
+    blank = next((row.strip() for row in text.splitlines() if BLANK.search(row)), None)
+    if blank:
+        errors.append(f"{label} has an unfilled placeholder: {blank[:120]!r}")
     # The draft and everything it's compared with are read the same way.
     text, sources, company, title, posting = (_matchable(part) for part in (text, sources, company, title, posting))
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -544,18 +651,19 @@ def check_text(
     for span in disclaimed:
         body = body.replace(span, " ")
 
+    own = _own_links(sources)
     for line in lines:
         if line == contact_line:
             continue
-        if URLISH.search(line):
+        if _link(line, own):
             errors.append(f"{label} contains a link or domain that isn't yours: {line[:120]!r}")
         placeholder = PLACEHOLDER.search(line)
         if placeholder:
             errors.append(f"{label} has an unfilled placeholder: {placeholder.group(0)!r}")
 
-    # Numbers stay as measured.
+    # Numbers stay as measured. Your phone number and zip code measure nothing.
     vocab = _vocabulary(sources)
-    errors += _number_errors(label, body, sources, vocab, "not in the fact bank")
+    errors += _number_errors(label, body, without_contact(sources), vocab, "not in the fact bank")
 
     # Specialist terms need a source. A resume can't name a skill you've never claimed, and a title
     # from a job board is no source: on a resume only the exact title was set aside above. A letter
@@ -623,14 +731,15 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
     body = _set_aside(_set_aside(text, company), title)
     for span in disclaimed:
         body = body.replace(span, " ")
+    own = _own_links(sources)
     for line in (line.strip() for line in body.splitlines()):
-        if URLISH.search(line):
+        if _link(line, own):
             errors.append(f"Brief contains a link or web address: {line[:120]!r}")
         placeholder = PLACEHOLDER.search(line)
         if placeholder:
             errors.append(f"Brief has an unfilled placeholder: {placeholder.group(0)!r}")
 
-    known = sources + "\n" + posting
+    known = without_contact(sources) + "\n" + posting
     errors += _number_errors("Brief", body, known, _vocabulary(known), "that aren't in the fact bank or the posting")
 
     # A term from the posting alone is a requirement, not something you can claim.
@@ -663,6 +772,19 @@ def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
         errors.append(f"Employer, title or dates differ from your record: {heading!r}")
     for heading in sorted(approved - present):
         warnings.append(f"Left out of the timeline: {heading.lstrip('# ')}")
+    # The builder prints each role with the employer above it, so a role moved under another employer is a false claim
+    # even though both headings are on record.
+    record = _employers(reference)
+    for role, employer in _employers(text).items():
+        if role in approved and role in record and employer != record[role]:
+            errors.append(f"{role.lstrip('# ')!r} sits under {(employer or 'no employer').lstrip('# ')!r}, but your record "
+                          f"has it under {(record[role] or 'no employer').lstrip('# ')!r}.")
+    # A line shaped like a role heading, written as plain or bold text, reads as one on the page.
+    on_record = {_role_key(row) for row in reference.splitlines() if row.strip()}
+    for row in text.splitlines():
+        line = row.strip()
+        if not line.startswith("#") and ROLE_LINE.match(line.replace("*", "")) and _role_key(line) not in on_record:
+            errors.append(f"Employer, title or dates differ from your record: {line!r}")
     for needed in ("## Experience", "## Education"):
         if not any(row.strip().startswith(needed) for row in text.splitlines()):
             errors.append(f"Resume is missing the {needed[3:]} section.")
@@ -670,6 +792,26 @@ def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
         if item["text"] not in text:
             warnings.append(f"{item['label']} isn't on this resume.")
     return errors, warnings
+
+
+def _employers(doc: str) -> dict[str, str | None]:
+    """Each "####" role heading in a resume, and the "###" employer heading above it, as the builder pairs them."""
+    employer: str | None = None
+    pairs: dict[str, str | None] = {}
+    for row in doc.splitlines():
+        line = row.strip()
+        if line.startswith("## "):
+            employer = None
+        elif line.startswith("### "):
+            employer = line
+        elif line.startswith("#### "):
+            pairs.setdefault(line, employer)
+    return pairs
+
+
+def _role_key(line: str) -> str:
+    """A line as a role heading reads, whether it's written as a heading, bold or plain text."""
+    return re.sub(r"\s+", " ", line.replace("*", "").lstrip("#").strip())
 
 
 def drafter_versions(folder: Path) -> dict[str, str]:
@@ -688,9 +830,14 @@ def drafter_versions(folder: Path) -> dict[str, str]:
     return versions
 
 
+def _built(path: Path) -> bool:
+    """Whether a file is a document built from the drafts: a .docx, .pdf, or the .txt the fill sheet points paste boxes at."""
+    return path.suffix in (".pdf", ".docx") or (path.suffix == ".txt" and ("_Resume_" in path.name or "_Cover_Letter_" in path.name))
+
+
 def fingerprints(folder: Path) -> dict[str, str]:
     """A hash of each file a passing check covered: the two sources and the documents built from them."""
-    covered = [p for p in sorted(folder.iterdir()) if p.name in ("resume.md", "cover-letter.md") or p.suffix in (".pdf", ".docx")]
+    covered = [p for p in sorted(folder.iterdir()) if p.is_file() and (p.name in ("resume.md", "cover-letter.md") or _built(p))]
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in covered}
 
 
@@ -720,8 +867,12 @@ def sources_changed(cfg: dict, recorded: dict | None) -> list[str]:
 
 
 def changed_since(folder: Path, checked: dict) -> list[str]:
-    """Which of the files that passed have changed or gone since, plus a cover letter added afterwards."""
-    names = set(checked) | {"cover-letter.md"}
+    """Which of the files that passed have changed or gone since, plus a cover letter or a built document added
+    afterwards. A pass recorded before the paste-box .txt files were covered says nothing about them."""
+    covers_txt = any(name.endswith(".txt") for name in checked)
+    added = {p.name for p in folder.iterdir() if p.is_file() and _built(p) and (covers_txt or p.suffix != ".txt")} \
+        if folder.is_dir() else set()
+    names = set(checked) | {"cover-letter.md"} | added
     now: dict[str, str | None] = {}
     for name in names:
         try:
@@ -781,7 +932,19 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
     resume_path = folder / "resume.md"
     if not resume_path.exists():
         return {"ok": False, "errors": ["resume.md is missing."], "warnings": [], "overlap": None}
-    resume = resume_path.read_text(encoding="utf-8")
+    drafts: dict[str, str] = {}
+    for name in ("resume.md", "cover-letter.md"):
+        path = folder / name
+        if name == "cover-letter.md" and not path.exists():
+            continue
+        try:
+            drafts[name] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return {"ok": False, "errors": [f"{name} isn't saved as UTF-8 text. Save it as UTF-8 and check again."],
+                    "warnings": [], "overlap": None}
+        except OSError as exc:
+            return {"ok": False, "errors": [f"Couldn't read {name}: {exc.strerror or exc}."], "warnings": [], "overlap": None}
+    resume = drafts["resume.md"]
     new_errors, new_warnings = check_text(resume, "resume", cfg, sources, company, title, posting=posting)
     errors += new_errors
     warnings += new_warnings
@@ -789,10 +952,8 @@ def check_application(folder: Path, cfg: dict, company: str, title: str, descrip
     errors += new_errors
     warnings += new_warnings
 
-    letter_path = folder / "cover-letter.md"
-    if letter_path.exists():
-        new_errors, new_warnings = check_text(
-            letter_path.read_text(encoding="utf-8"), "letter", cfg, sources, company, title, posting=posting)
+    if "cover-letter.md" in drafts:
+        new_errors, new_warnings = check_text(drafts["cover-letter.md"], "letter", cfg, sources, company, title, posting=posting)
         errors += new_errors
         warnings += new_warnings
 
