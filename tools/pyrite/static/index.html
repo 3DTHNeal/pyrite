@@ -12,50 +12,65 @@
 <body>
 <!-- Hidden by style.css. Without the server the stylesheet can't load, so only then does this show. -->
 <p class="not-served">This is only the dashboard's template, so it can't load any data. <a href="http://127.0.0.1:8787/">Open Pyrite at http://127.0.0.1:8787</a></p>
-<header class="masthead">
-  <div class="brand">
-    <h1><span id="mark" class="mark" aria-hidden="true"></span><img class="wordmark" src="/static/icons/wordmark.png" alt="Pyrite" width="102" height="24"></h1>
-    <p id="demo-tag" class="demo-tag" hidden>Demo: a fictional candidate and made-up companies</p>
-    <p id="sweep" class="sweep" aria-live="polite">Loading…</p>
-    <p id="runs" class="sweep runs" aria-live="polite"></p>
+<div class="shell">
+<!-- The rail names every view, with a count where one helps, so the page needs no key numbers or tab bar above the work. -->
+<nav class="rail" aria-label="Views">
+  <h1 class="brand"><span id="mark" class="mark" aria-hidden="true"></span><img class="wordmark" src="/static/icons/wordmark.png" alt="Pyrite" width="102" height="24"></h1>
+  <div class="rail-nav">
+    <button type="button" data-tab="todo"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 9.5 3.8 3h8.4L14 9.5V13H2z"/><path d="M2 9.5h3.5l1 1.5h3l1-1.5H14"/></svg></span><span class="rail-label">To do</span><span id="count-todo" class="rail-count"></span></button>
+    <button type="button" data-tab="pipeline"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="3.4" height="11" rx="1"/><rect x="6.3" y="2.5" width="3.4" height="7" rx="1"/><rect x="10.6" y="2.5" width="3.4" height="9" rx="1"/></svg></span><span class="rail-label">Pipeline</span></button>
+    <div id="rail-stages" class="rail-stages"></div>
+    <button type="button" data-tab="radar"><span class="rail-icon"><img src="/static/icons/pan-24.png" alt="" width="24" height="24"></span><span class="rail-label">Prospects</span><span id="count-radar" class="rail-count"></span></button>
+    <button type="button" data-tab="archive"><span class="rail-icon"><img src="/static/icons/tarnished-24.png" alt="" width="24" height="24"></span><span class="rail-label">Closed</span><span id="count-archive" class="rail-count"></span></button>
+    <button type="button" data-tab="industries"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 14V7l3.5 2.2V7L9 9.2V4h5v10z"/></svg></span><span class="rail-label">Industries</span></button>
+    <p class="rail-group">Setup</p>
+    <button type="button" data-tab="profile"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.5" r="2.7"/><path d="M2.8 14c.6-2.8 2.7-4.3 5.2-4.3s4.6 1.5 5.2 4.3"/></svg></span><span class="rail-label">Profile</span></button>
+    <button type="button" data-tab="facts"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h6l3 3v9H4z"/><path d="m6.3 8.8 1.4 1.4 2.8-2.8"/></svg></span><span class="rail-label">Facts</span></button>
+    <button type="button" data-tab="sources"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.8"/><path d="M2.2 8h11.6M8 2.2c1.8 1.9 1.8 9.7 0 11.6M8 2.2c-1.8 1.9-1.8 9.7 0 11.6"/></svg></span><span class="rail-label">Sources</span><span id="count-sources" class="rail-count"></span></button>
+    <button type="button" data-tab="settings"><span class="rail-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6 5 5M11 11l1.4 1.4M3.6 12.4 5 11M11 5l1.4-1.4"/></svg></span><span class="rail-label">Settings</span></button>
   </div>
-  <div class="masthead-actions">
+</nav>
+
+<div class="main-col">
+<!-- One line of status in place of the paragraphs that used to sit under the name. The whole story, and the run
+     buttons, open from it. -->
+<header class="topbar">
+  <p id="demo-tag" class="demo-tag" hidden>Demo: a fictional candidate and made-up companies</p>
+  <div class="status-wrap">
+    <button id="status" class="status" type="button" aria-expanded="false" aria-controls="status-pop">
+      <img id="status-icon" class="stage-icon" src="/static/icons/pan-24.png" alt="" width="24" height="24"><span id="status-text" aria-live="polite">Loading…</span>
+    </button>
+    <div id="status-pop" class="status-pop" hidden>
+      <p id="sweep" class="sweep"></p>
+      <p id="runs" class="sweep runs"></p>
+      <div class="row">
+        <button id="run-sweep" class="btn" type="button" title="Read the job boards and check mail now. No AI.">Check boards now</button>
+        <button id="run-claude" class="btn" type="button" title="Judge new postings and tailor the best now. Uses your Claude plan.">Run Claude now</button>
+      </div>
+    </div>
+  </div>
+  <div class="topbar-actions">
     <button id="update-open" class="btn update" type="button" hidden>Update available</button>
-    <button id="run-sweep" class="btn" type="button" title="Read the job boards and check mail now. No AI.">Check boards now</button>
-    <button id="run-claude" class="btn" type="button" title="Judge new postings and tailor the best now. Uses your Claude plan.">Run Claude now</button>
     <button id="add-open" class="btn primary" type="button">Add a posting</button>
   </div>
 </header>
 
 <main>
-  <section id="kpis" class="kpis" aria-label="Key numbers"></section>
-
-  <section class="command">
+  <section id="view-todo" class="view">
+    <div class="view-head"><h2>To do</h2><p id="kpis" class="stat-line" aria-label="Key numbers"></p></div>
     <div class="panel orders">
-      <h2>To do</h2>
       <div id="briefing" class="briefing"></div>
       <ol id="orders" class="order-list"></ol>
     </div>
-    <div class="panel funnel-panel">
-      <h2>Where they stand</h2>
-      <div id="funnel" class="funnel"></div>
-    </div>
   </section>
 
-  <nav class="tabs" role="tablist" aria-label="Views">
-    <button role="tab" data-tab="pipeline" aria-selected="true">Pipeline</button>
-    <button role="tab" data-tab="radar" aria-selected="false">Prospects</button>
-    <button role="tab" data-tab="industries" aria-selected="false">Industries</button>
-    <button role="tab" data-tab="archive" aria-selected="false">Closed</button>
-    <button role="tab" data-tab="sources" aria-selected="false">Sources</button>
-    <button role="tab" data-tab="profile" aria-selected="false">Profile</button>
-    <button role="tab" data-tab="facts" aria-selected="false">Facts</button>
-    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
-  </nav>
-
-  <section id="view-pipeline" class="view"><div id="board" class="board"></div></section>
+  <section id="view-pipeline" class="view" hidden>
+    <div class="view-head"><h2>Pipeline</h2></div>
+    <div id="board" class="board"></div>
+  </section>
 
   <section id="view-radar" class="view" hidden>
+    <div class="view-head"><h2>Prospects</h2></div>
     <div class="filters">
       <input id="radar-search" type="search" placeholder="Search company, title or place" aria-label="Search postings" title="Shortcut: /">
       <select id="radar-track" aria-label="Filter by track"></select>
@@ -86,15 +101,18 @@
   </section>
 
   <section id="view-industries" class="view industries-tab" hidden>
+    <div class="view-head"><h2>Industries</h2></div>
     <div id="industries-view"></div>
     <p id="industries-error" class="error" role="alert"></p>
   </section>
 
   <section id="view-archive" class="view" hidden>
+    <div class="view-head"><h2>Closed</h2></div>
     <div class="table-wrap"><table id="archive" class="grid"></table></div>
   </section>
 
   <section id="view-sources" class="view" hidden>
+    <div class="view-head"><h2>Sources</h2></div>
     <div class="panel manual">
       <h2>Check these by hand</h2>
       <p class="muted">These have no public feed, so the board check can't see them.</p>
@@ -115,15 +133,19 @@
   </section>
 
   <section id="view-facts" class="view facts-tab" hidden>
+    <div class="view-head"><h2>Facts</h2></div>
     <div id="facts-view"></div>
     <p id="facts-error" class="error" role="alert"></p>
   </section>
 
   <section id="view-settings" class="view settings" hidden>
+    <div class="view-head"><h2>Settings</h2></div>
     <div id="settings-form"></div>
     <p id="settings-error" class="error" role="alert"></p>
   </section>
 </main>
+</div>
+</div>
 
 <aside id="drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-label="Job details" tabindex="-1"></aside>
 <div id="scrim" class="scrim" hidden></div>

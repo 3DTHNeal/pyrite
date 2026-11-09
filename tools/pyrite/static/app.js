@@ -226,20 +226,19 @@ function renderSweep() {
 const sweepShownAbove = (task) => Boolean(task.state === "done" && state.last_run && state.last_run.finished_at
   && toDate(state.last_run.finished_at).getTime() >= toDate(task.started_at).getTime());
 
+// The key numbers, on one line beside To do. Each one's detail is in its tooltip.
 function renderKpis() {
   const s = state.stats;
-  const tile = (value, label, sub, hot) => h("div", { class: `kpi${hot ? " hot" : ""}` },
-    h("span", { class: "value" }, value), h("span", { class: "label" }, label), h("span", { class: "sub" }, sub));
+  const stat = (value, label, sub, hot) => h("span", { class: `stat${hot ? " hot" : ""}`, title: sub }, h("b", {}, value), label);
   fill($("kpis"),
-    tile(s.ready, "Ready to send", "Passed the fact check", s.ready > 0),
-    tile(s.applied, "Applied", `${s.applied_week} in the last 7 days`),
-    tile(s.awaiting, "Awaiting reply", s.follow_ups ? `${s.follow_ups} follow-up${s.follow_ups > 1 ? "s" : ""} due` : "No follow-ups due", s.follow_ups > 0),
+    stat(s.ready, "ready to send", "Passed the fact check", s.ready > 0),
+    stat(s.applied, "applied", `${s.applied_week} in the last 7 days`),
+    stat(s.awaiting, "awaiting reply", s.follow_ups ? `${s.follow_ups} follow-up${s.follow_ups > 1 ? "s" : ""} due` : "No follow-ups due", s.follow_ups > 0),
     // Replies only: a rejection is counted beside it, not inside it, so the rate isn't flattering.
-    tile(s.reply_rate === null || s.reply_rate === undefined ? "–" : `${s.reply_rate}%`, "Reply rate",
+    stat(s.reply_rate === null || s.reply_rate === undefined ? "–" : `${s.reply_rate}%`, "reply rate",
       s.applied ? [`${s.replied} of ${s.applied} replied`, s.rejected ? `${s.rejected} rejected` : "", s.ghosted ? `${s.ghosted} ghosted` : "",
         s.median_days_to_reply !== null ? `median ${s.median_days_to_reply}d` : ""].filter(Boolean).join(", ") : "Nothing sent yet"),
-    tile(s.interviews, "Interviews", "Reached interview stage"),
-    tile(s.to_triage, "Prospects", `${s.fresh} new, ${s.possible_ghosts} possible ghost${s.possible_ghosts === 1 ? "" : "s"}`, s.fresh > 0));
+    stat(s.interviews, s.interviews === 1 ? "interview" : "interviews", "Reached interview stage"));
 }
 
 // The report names jobs as they stood when it was written. Once you've applied or passed since, fold it away and say so.
@@ -292,20 +291,55 @@ function renderOrders() {
   fill($("orders"), items.length ? [all, ...items] : emptyState("mark", "Nothing needs you right now.", "li"));
 }
 
-function renderFunnel() {
-  const max = Math.max(1, ...state.funnel.map((f) => f.count));
-  fill($("funnel"), state.funnel.map((f) => {
-    const width = f.count ? Math.max(1, Math.sqrt(f.count / max) * 100) : 0;
-    // An older server sends no icon, so its cell stays empty and the columns still line up.
-    return h("div", { class: `funnel-row${f.count ? "" : " none"}`, title: `${f.stage}: ${f.count}` },
-      stageIcon(f.icon) || h("span"),
-      h("span", { class: "stage" }, f.stage),
-      h("span", { class: "funnel-track" }, h("span", { class: `funnel-bar${f.count ? "" : " zero"}`, style: `width:${width}%` })),
-      h("span", { class: "count" }, f.count.toLocaleString()));
-  }), h("p", { class: "muted funnel-note funnel-closed" },
-    (state.closed || []).length ? h("img", { class: "stage-icon", src: "/static/icons/tarnished-24.png", alt: "", width: 24, height: 24 }) : null,
-    closedLine()),
-  h("p", { class: "muted funnel-note" }, "Each job counts once, at the stage it's at now. Bars use a square-root scale so small stages stay visible."));
+// The rail's counts, and each pipeline stage under Pipeline with how many jobs are at it now, each counted once. A
+// stage opens the board at its column.
+function renderRail() {
+  const count = (id, value, tone = "", why = null) => {
+    const el = $(id);
+    el.textContent = value ? value.toLocaleString() : "";
+    el.className = `rail-count${tone ? ` ${tone}` : ""}`;
+    el.title = why || "";
+  };
+  count("count-todo", state.orders.length, "hot", "Things that need you");
+  count("count-radar", state.stats.to_triage, "", `${state.stats.fresh} new, ${plural(state.stats.possible_ghosts, "possible ghost")}`);
+  const closed = (state.closed || []).reduce((sum, c) => sum + c.count, 0);
+  count("count-archive", closed, "", closedLine());
+  const failing = state.sources.filter((s) => s.last_error).length;
+  count("count-sources", failing, failing ? "bad" : "", failing ? `${plural(failing, "source")} failing` : null);
+  // The funnel's first stage is Prospects, which has its own place in the rail. The rest line up with the board's columns.
+  const stages = state.funnel.filter((f) => f.stage !== "Prospects");
+  fill($("rail-stages"), stages.map((f, index) => h("button", {
+    class: `rail-stage${f.count ? "" : " none"}`, type: "button", title: `${f.stage}: ${f.count}`,
+    onclick: () => { showTab("pipeline"); showColumn(index); } },
+  stageIcon(f.icon), h("span", { class: "rail-label" }, f.stage), h("span", { class: "rail-count" }, f.count.toLocaleString()))));
+}
+
+function showColumn(index) {
+  const column = document.querySelector(`#board .column[data-column="${index}"]`);
+  if (column) column.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// The top bar's one line of status: what's running, else when the boards were last read and how many things are wrong.
+// The paragraphs it sums up, and the run buttons, open from it.
+function renderStatus(error = "") {
+  const tasks = state ? state.tasks || {} : {};
+  const busy = Object.keys(RUNS).find((kind) => tasks[kind] && tasks[kind].state === "running");
+  const problems = $("status-pop").querySelectorAll(".alert").length + (error ? 1 : 0);
+  const run = state && state.last_run;
+  let text;
+  if (error) text = error;
+  else if (busy) text = RUNS[busy].busy;
+  else text = run ? `Boards checked ${ago(run.finished_at)}` : "Boards not checked yet";
+  if (!error && !busy && problems) text += ` · ${plural(problems, "problem")}`;
+  $("status-text").textContent = text;
+  $("status-icon").src = `/static/icons/${busy === "sweep" ? "pan" : busy ? "anvil" : problems ? "tarnished" : "pan"}-24.png`;
+  $("status").classList.toggle("problem", Boolean(problems) && !busy);
+  $("status").title = problems ? "Something needs a look. Click for the details." : "Click for the details and the run buttons.";
+}
+
+function toggleStatus(open = $("status-pop").hidden) {
+  $("status-pop").hidden = !open;
+  $("status").setAttribute("aria-expanded", String(open));
 }
 
 // Jobs that left the pipeline, so the stages above don't hide where the rest went.
@@ -430,7 +464,7 @@ function renderBoard() {
     const task = (state.tasks || {}).tailor;
     const busy = Boolean(task && task.state === "running");
     // An empty column shrinks to its heading, so the columns with work in them get the room.
-    return h("div", { class: `column${jobs.length || busy ? "" : " empty"}` },
+    return h("div", { class: `column${jobs.length || busy ? "" : " empty"}`, "data-column": COLUMNS.indexOf(col) },
       h("h3", {}, stageIcon(STAGE_ICONS[col.statuses[0]]), h("span", { class: "column-title" }, col.title), h("span", { class: "column-count" }, jobs.length)),
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
       col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
@@ -1064,7 +1098,7 @@ function renderRuns() {
     if (busy) lines.push(h("span", {}, `${run.name}, started ${ago(task.started_at)}: ${task.detail}`));
     else if (task.state === "failed") lines.push(h("span", { class: "alert" }, `${run.name} failed ${ago(ended)}: ${task.detail}`));
     else if (Date.now() - toDate(ended).getTime() < RUN_RESULT_SHOWN_FOR) {
-      lines.push(h("span", {}, `${run.name} finished ${ago(ended)}. ${kind === "claude" ? "Its field report is below." : task.detail}`));
+      lines.push(h("span", {}, `${run.name} finished ${ago(ended)}. ${kind === "claude" ? "Its field report is on the To do page." : task.detail}`));
     }
   }
   fill($("runs"), lines.flatMap((line, index) => (index ? [h("br"), line] : [line])));
@@ -1096,9 +1130,10 @@ function render() {
   document.title = state.orders.length ? `(${state.orders.length}) Pyrite` : "Pyrite";
   renderSweep();
   renderRuns();
+  renderStatus();
   renderKpis();
   renderOrders();
-  renderFunnel();
+  renderRail();
   renderBoard();
   renderRadar();
   renderArchive();
@@ -1111,7 +1146,9 @@ async function refresh() {
     render();
   } catch (err) {
     // fetch throws a TypeError when nothing answered. Anything else is the server saying what's wrong.
-    $("sweep").textContent = err instanceof TypeError ? "Can't reach the server. Is Pyrite still running?" : err.message;
+    const said = err instanceof TypeError ? "Can't reach the server. Is Pyrite still running?" : err.message;
+    $("sweep").textContent = said;
+    renderStatus(said);
   }
 }
 
@@ -1745,7 +1782,7 @@ function drawerKeys(e) {
 
 // What the job panel covers while it's open.
 function pageBehind() {
-  return [document.querySelector("header.masthead"), document.querySelector("main")].filter(Boolean);
+  return [document.querySelector(".rail"), document.querySelector(".topbar"), document.querySelector("main")].filter(Boolean);
 }
 
 function closeDrawer() {
@@ -1964,7 +2001,8 @@ function renderIndustries() {
 
 // ---- Wiring ----
 
-const tabs = [...document.querySelectorAll(".tabs button")];
+// The views are named in the rail. Each is still called a tab in the code and the address, as it was.
+const tabs = [...document.querySelectorAll(".rail-nav button[data-tab]")];
 
 // The tab you're on is in the address, so a reload or a bookmark comes back to it. On the Profile tab so is the
 // section, as #profile/achievements.
@@ -1972,9 +2010,11 @@ function showTab(name, focus = false) {
   const [base, ...rest] = String(name || "").split("/");
   const tab = tabs.find((t) => t.dataset.tab === base) || tabs[0];
   tabs.forEach((b) => {
-    b.setAttribute("aria-selected", String(b === tab));
-    b.tabIndex = b === tab ? 0 : -1;
+    if (b === tab) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
   });
+  // A new view starts at its top, as a new page would.
+  if (document.querySelector(`#view-${tab.dataset.tab}[hidden]`)) window.scrollTo(0, 0);
   document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== `view-${tab.dataset.tab}`; });
   if (focus) tab.focus();
   const section = tab.dataset.tab === "profile" ? profileShow(rest.join("/")) : "";
@@ -1992,19 +2032,22 @@ const tabTarget = (tab) => (tab.dataset.tab === "profile" && profileAt ? `profil
 
 // The address of the tab on show, as showTab writes it, for when a job's panel closes over it.
 function tabAddress() {
-  const tab = tabs.find((t) => t.getAttribute("aria-selected") === "true") || tabs[0];
+  const tab = tabs.find((t) => t.getAttribute("aria-current") === "page") || tabs[0];
   return tab === tabs[0] ? "" : `#${tabTarget(tab)}`;
 }
 tabs.forEach((tab) => tab.addEventListener("click", () => showTab(tabTarget(tab))));
-// Arrow keys, Home and End move along the tabs, as in any other tab list.
-document.querySelector(".tabs").addEventListener("keydown", (e) => {
+// The arrow keys move up and down the rail, or along it where a narrow screen lays it across the top.
+document.querySelector(".rail-nav").addEventListener("keydown", (e) => {
   const at = tabs.indexOf(document.activeElement);
   if (at < 0) return;
-  const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+  const to = { ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
   if (to === undefined) return;
   e.preventDefault();
-  showTab(tabTarget(tabs[(to + tabs.length) % tabs.length]), true);
+  tabs[(to + tabs.length) % tabs.length].focus();
 });
+$("status").addEventListener("click", () => toggleStatus());
+// The status details close on Escape or a click anywhere else, as a menu would.
+document.addEventListener("click", (e) => { if (!$("status-pop").hidden && !e.target.closest(".status-wrap")) toggleStatus(false); });
 // #job-56 opens job 56's panel over the tab you're on. Anything else is a tab.
 const jobInAddress = () => Number((location.hash.match(/^#job-(\d+)$/) || [])[1]) || null;
 
@@ -2027,7 +2070,10 @@ document.addEventListener("keydown", (e) => {
   // A dialog on top handles its own keys, Escape included.
   if (document.querySelector("dialog[open]")) return;
   if (e.key === "Escape" && openJobId) closeDrawer();
-  else if (e.key === "/" && !openJobId && !e.ctrlKey && !e.metaKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+  else if (e.key === "Escape" && !$("status-pop").hidden) {
+    toggleStatus(false);
+    $("status").focus();
+  } else if (e.key === "/" && !openJobId && !e.ctrlKey && !e.metaKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
     e.preventDefault();
     showTab("radar");
     $("radar-search").focus();
