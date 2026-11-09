@@ -38,6 +38,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Changed
 
+- The systemd sweep unit runs `pyrite sweep`, the same sweep as the dashboard's button, so a timed sweep and one you start can't overlap.
 - A place under `places` that ends in a US state matches the state written out or first: "Madison, WI" also matches "Madison, Wisconsin" and "US-WI-Madison". Periods and parentheses count as spaces, so "St. Louis" matches "St Louis".
 - A `**Deadline:**` line in a job's notes.md now wins over the date read from the posting.
 - The example search.toml ties Madison to Wisconsin, and its `agent`, `field` and `store` patterns no longer catch "Insurance Agent", "Field Robotics" or "Object Store".
@@ -85,6 +86,15 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Fixed
 
+- `pyrite status <id> new` or `shortlisted` is refused for a job you've applied to, since it put a sent application back in line for the daily run, which could rewrite its folder. `pyrite status <id> applied` reopens it, as the dashboard's Reopen does, and the run's queue, triage and tailoring skip any job you've sent, whatever its status says.
+- `pyrite fill` writes no fill sheet for a job you've applied to, or into a folder with a copy of what was sent, as the dashboard already didn't.
+- `--json` prints one JSON document: `pyrite job` puts the fenced posting in an `untrusted_posting` field, `pyrite discover` lists new job ids in `new_ids`, and `pyrite finish` writes the built file names to stderr.
+- `pyrite where` piped to a script on Windows writes the path in the console's code page, so Windows PowerShell 5.1 reads a folder name with an accent correctly.
+- A relative path in `.pyrite-home` is read from that file's folder, and lines starting with `#` there are notes. A relative `PYRITE_HOME` is read once, from where you started Pyrite, and the dashboard `pyrite open` starts uses the same workspace.
+- `pyrite init` says when `.pyrite-home` or `PYRITE_HOME` already names the folder, rather than telling you to put it there, and says so in a line, with nothing left half-made, when it's given a file or a folder it can't write.
+- A port outside 1–65535, a `queue --limit` below 1, a damaged or read-only `data/pyrite.db`, and a run number that isn't there each get a line instead of a traceback. `pyrite <command> --help` works before the workspace is made.
+- "Applied on" gives the day you applied where you are, not the UTC date.
+- Application folder names keep accented letters as plain ones: "Acmé" makes `acme`, not `acm`.
 - Text hidden in a Lever, Ashby or Workday posting stays hidden when the posting also shows a tag such as "&lt;script&gt;". Only Greenhouse's escaped descriptions are unescaped now.
 - More ways of hiding text in a posting are caught: transparent text, text the color of its own background, near-zero opacity or font size, `scale(0)`, and `<font color="white">`.
 - A job you added yourself and closed out no longer takes a new posting with the same title. The new opening comes in as its own job.
@@ -163,6 +173,8 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Security
 
+- Pyrite refuses a workspace inside its own repository, where applications and the database could be committed to a public repository, and a folder that isn't a workspace, which used to get an empty database. `pyrite init` says how to make one.
+- PRIVACY.md now lists the Industries tab's downloads from the Bureau of Labor Statistics and its outlook research run, which sends the industry, your area and the employers you follow to Claude with web search.
 - The Gmail mail check denies every Gmail tool that sends, drafts, labels, trashes or marks mail, so even a workspace `.claude/settings.json` can't allow one. It is told only the companies you've applied to and those under `[inbox.domains]`, fenced as data, not every company a job board listed.
 - Drafting runs can never edit or write `profile/`, `data/`, `.claude/` or `CLAUDE.md`, whatever the workspace's settings allow. If anything in `profile/` changes while a draft is written, the draft is put back and the run stops.
 - Runs that can read files can't read a Workday fill sheet, autofill log, `workday-paste.md` or `public-denylist.txt` anywhere in the workspace, or the workspace's `.claude/` settings.
