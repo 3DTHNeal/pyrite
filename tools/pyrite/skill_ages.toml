@@ -12,8 +12,8 @@
 [[skill]]
 name = "large language models"
 match = 'llms?|large language models?|gpt-3|gpt-4|foundation models?'
-since = "2019-02"
-basis = "OpenAI released the first GPT-2 model in February 2019, and GPT-3's API followed in June 2020"
+since = "2018-06"
+basis = "OpenAI published GPT-1, with its code and weights, in June 2018, and Google open-sourced BERT that October"
 
 [[skill]]
 name = "prompt engineering"

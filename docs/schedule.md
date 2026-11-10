@@ -39,6 +39,6 @@ Either way, the code holds two lines by itself. Only `pyrite finish` can mark a 
 
 The **Sources** tab shows what the Claude runs Pyrite started have used: runs, time, tokens and cost, for the last 7 days and all time. `pyrite usage` prints the same numbers.
 
-- **Counted:** every Claude run Pyrite starts, including runs that failed: the daily run's judging and tailoring (`pyrite run`, **Run Claude now** and **Tailor these now**), Refresh resume, Interview prep, and checking mail through the Gmail connector.
+- **Counted:** every Claude run Pyrite starts, including runs that failed: the daily run's judging and tailoring (`pyrite run`, **Run Claude now** and **Tailor these now**), Refresh resume, Interview prep, checking mail through the Gmail connector, industry outlooks and skill-age research. An industry outlook none of whose points cited a page Claude found counts as failed.
 - **Not counted:** a Claude Code session of your own, such as the older way of running the daily run from `tools/pyrite/daily_run.md`, since Pyrite doesn't start it.
-- **Cost** is Claude Code's own estimate at API prices. On a Claude plan it isn't a bill.
+- **Cost** is Claude Code's own estimate at API prices. On a Claude plan it isn't a bill. Claude Code reports it only when a run ends, so a run stopped for running out of time has no cost: its tokens are counted from the messages it printed, and the cost shows with a **+**, since it leaves that run out.

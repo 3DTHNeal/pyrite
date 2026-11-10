@@ -146,7 +146,8 @@ def parse(text: str, folder: str = "") -> list[Gap]:
         if not name:
             continue
         whole = re.sub(r"\s+", " ", f"{name}. {rest}".replace("**", "")).strip()
-        gaps.append(Gap(folder, number, name, whole, _kind(whole), tokens(name)))
+        # A name that's only a category, such as "Domain", names no requirement, so the words after it say which.
+        gaps.append(Gap(folder, number, name, whole, _kind(whole), tokens(name) or tokens(rest)))
     return gaps
 
 
@@ -184,8 +185,8 @@ def group(gaps: list[Gap]) -> list[Group]:
     gap it matches, so the result is the same each time for the same notes."""
     groups: list[Group] = []
     for gap in gaps:
-        home = next((g for g in groups if any(same(gap.tokens, other.tokens) if gap.tokens else
-                                              gap.name.lower() == other.name.lower() for other in g.gaps)), None)
+        # A gap with no words to match by stands alone: two gaps called "Domain" can be about anything.
+        home = next((g for g in groups if any(same(gap.tokens, other.tokens) for other in g.gaps)), None)
         if home is None:
             groups.append(home := Group("", ""))
         home.gaps.append(gap)

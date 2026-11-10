@@ -22,9 +22,19 @@ from typing import Any, cast
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) job-search-pyrite/1.0"
 TIMEOUT = 60  # Per socket read, so slow but steady downloads still finish.
+_DOLLARS = r"(?<![A-Za-z])(?:US|CA|C|AU|A|NZ|S|MX|HK|R)?\$\s?"
+_FIGURE = r"\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?"
+# What a range says after it, kept so pay.parse can read it: the currency, then the period it's paid by.
+_PAID = (r"(?:\s*(?:USD|CAD|AUD|NZD|SGD|MXN|HKD|BRL)\b)?"
+         r"(?i:\s*(?:/\s*(?:yr|year|hr|hour|mo|month|wk|week|day)\b|(?:per|an|a)\s+(?:year|annum|hour|month|week|day)\b"
+         r"|annually|hourly|monthly|weekly|daily))?")
 COMP = re.compile(
-    r"(?:US)?\$\s?\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?\s*(?:-|–|—|to)\s*(?:US)?\$?\s?\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?(?:\s*(?:USD|per year|annually))?"
+    rf"(?i:between)\s+{_DOLLARS}{_FIGURE}\s+and\s+(?:{_DOLLARS})?{_FIGURE}{_PAID}"
+    rf"|{_DOLLARS}{_FIGURE}\s*(?:-|–|—|to)\s*(?:{_DOLLARS})?{_FIGURE}{_PAID}"
 )
+# A range for something other than base pay, named just before it on its line or just after it.
+_NOT_BASE = re.compile(r"\b(?:sign[\s-]*on|signing|bonus|relocation|stipend|commission|allowance)", re.I)
+_BASE = re.compile(r"\b(?:base|salary|pay|compensation|wage)\b", re.I)
 # The words a pay band's label and a title share when they mean the same level.
 LEVEL_WORDS = {"intern", "junior", "associate", "mid", "senior", "staff", "principal", "lead", "distinguished", "fellow",
                "manager", "director", "head", "vp", "ii", "iii", "iv"}
@@ -176,19 +186,29 @@ def _level_words(text: str) -> set[str]:
 def find_comp(text: str, title: str = "") -> str:
     """The pay range in a posting's text. Where it lists a band per level ("Senior: $141,380 - $194,390", then
     "Staff: $163,270 - $224,500"), the band whose label names the title's level, else the first range."""
-    matches = list(COMP.finditer(text or ""))
-    if not matches:
+    text = text or ""
+    found = list(COMP.finditer(text))
+    labels = []
+    for i, match in enumerate(found):
+        # A band's label is what comes before it on its line, back to the band before it.
+        start = max(text.rfind("\n", 0, match.start()) + 1, found[i - 1].end() if i else 0)
+        labels.append(text[start:match.start()])
+    def other_pay(match, label: str) -> bool:
+        """A sign-on bonus or a stipend, named right after the range or in its own clause before it."""
+        clause = re.split(r"[,;.]\s", label)[-1]
+        return bool(_NOT_BASE.match(text[match.end():match.end() + 20].lstrip(" :-–—("))
+                    or (_NOT_BASE.search(clause) and not _BASE.search(clause)))
+
+    kept = [(match, label) for match, label in zip(found, labels, strict=True) if not other_pay(match, label)]
+    if not kept:
         return ""
     wanted = _level_words(title)
-    fits = []
-    for i, match in enumerate(matches):
-        # A band's label is what comes before it on its line, back to the band before it.
-        start = max(text.rfind("\n", 0, match.start()) + 1, matches[i - 1].end() if i else 0)
-        label = _level_words(text[start:match.start()])
-        fits.append((len(label & wanted), -len(label - wanted)))
+    fits = [(len(_level_words(label) & wanted), -len(_level_words(label) - wanted)) for _, label in kept]
     # max keeps the first of equals. With no label naming the title's level, the first range, as it always was.
-    best = max(range(len(matches)), key=fits.__getitem__)
-    return re.sub(r"\s+", " ", matches[best if fits[best][0] else 0].group(0)).strip()
+    best = max(range(len(kept)), key=fits.__getitem__)
+    words = re.sub(r"\s+", " ", kept[best if fits[best][0] else 0][0].group(0)).strip()
+    # "between $132,000 and $198,000" is written as the range it is.
+    return re.sub(r"^between\s+(.*?)\s+and\s+", r"\1 - ", words, flags=re.I)
 
 
 def _request(url: str, payload: dict[str, Any] | None = None, retries: int = 3) -> dict[str, Any] | list[Any]:
@@ -237,6 +257,17 @@ def greenhouse_detail(board: str, company: str, job_id: str) -> Posting:
     )
 
 
+def _lever_pay(salary: dict[str, Any]) -> str:
+    """Lever's salaryRange as text pay.parse reads, keeping its currency and how often it's paid, as
+    {"currency": "CAD", "interval": "per-hour-wage", "min": 40, "max": 50}."""
+    if not (salary.get("min") and salary.get("max")):
+        return ""
+    interval = str(salary.get("interval") or "").lower()
+    per = next((word for word in ("hour", "day", "week", "month") if word in interval), "year")
+    currency = str(salary.get("currency") or "USD").upper()
+    return f"${salary['min']:,} - ${salary['max']:,} {currency} per {per}"
+
+
 def fetch_lever(board: str, company: str) -> list[Posting]:
     key = f"lever:{board}"
     data = cast(list[dict[str, Any]], _request(f"https://api.lever.co/v0/postings/{board}?mode=json"))
@@ -254,10 +285,7 @@ def fetch_lever(board: str, company: str) -> list[Posting]:
             sections,
             html_to_text(job.get("additional", "")) or plain_text(job.get("additionalPlain", "")),
         ]))
-        salary = job.get("salaryRange") or {}
-        comp = ""
-        if salary.get("min") and salary.get("max"):
-            comp = f"${salary['min']:,} - ${salary['max']:,}"
+        comp = _lever_pay(job.get("salaryRange") or {})
         created = job.get("createdAt")
         posted = datetime.fromtimestamp(created / 1000, UTC).isoformat() if created else None
         postings.append(Posting(

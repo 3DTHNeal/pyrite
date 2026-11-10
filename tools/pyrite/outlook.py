@@ -343,19 +343,22 @@ def ask_web(conn, claude: str, kind: str, text: str, model: str, minutes: int) -
     try:
         out = claude_code.run_process(command(claude, model), input=text, cwd=ROOT, timeout=minutes * 60)
     except subprocess.TimeoutExpired as err:
-        claude_code.record(conn, None, kind, {}, time.monotonic() - began, ok=False)
+        claude_code.record(conn, None, kind, claude_code.cut_short(err.stdout), time.monotonic() - began, ok=False)
         raise ClaudeFailed(f"Claude hadn't finished after {minutes} minutes.") from err
     except OSError as err:
         raise ClaudeFailed(f"Couldn't run Claude Code: {err}") from err
     answer, result, seen = read_stream(out.stdout or "")
     failed = bool(out.returncode or result.get("is_error") or not result)
-    claude_code.record(conn, None, kind, result, time.monotonic() - began, ok=not failed)
+    run_id = claude_code.record(conn, None, kind, result, time.monotonic() - began, ok=not failed)
     if failed:
         message = answer or (out.stderr or "").strip()
         if "not logged in" in message.lower():
             raise ClaudeFailed(sign_in_help(claude))
         raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
-    return answer, seen
+    # Remembers its run, so a run whose answer turns out to be no use can be counted as failed.
+    kept = claude_code.Answer(answer)
+    kept.run_id = run_id
+    return kept, seen
 
 
 def cited(url: str, seen: Iterable[str]) -> bool:
@@ -393,6 +396,7 @@ def run(conn, cfg: dict[str, Any], name: str, claude: str | None = None) -> dict
         answer, seen = ask_web(conn, claude, KIND, text, model, TIME_LIMIT_MINUTES)
         sections, kept, dropped = vet(answer, seen)
         if not sections:
+            claude_code.mark_failed(conn, answer)
             raise ClaudeFailed("None of the outlook cited a page Claude had actually found, so none of it was kept.")
         report = {"generated_at": now(), "model": model, "area": places, "sections": sections, "sources": kept, "dropped": dropped}
         finish(name, True, "Done", report)

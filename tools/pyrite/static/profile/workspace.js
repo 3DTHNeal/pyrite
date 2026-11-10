@@ -2,7 +2,8 @@
 // Workspace and backup: the private folder in use, how it was chosen, and how data/pyrite.db is kept. The database is the
 // one file in it that can't be made again, so this section can copy it into data/backups. Nothing else is saved.
 
-const profileSize = (bytes) => (bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`);
+// 999,600 bytes would round to 1000 KB, so megabytes start where the rounding reaches them.
+const profileSize = (bytes) => (bytes >= 999.5e3 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`);
 const profileDay = (iso) => new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 profileStep("workspace", {

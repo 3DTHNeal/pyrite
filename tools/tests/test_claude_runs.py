@@ -513,6 +513,23 @@ class ClaudeUsage(ClaudeRun):
         used = claude_code.usage(self.conn)["all"]
         self.assertEqual((used["runs"], used["input_tokens"], used["output_tokens"], used["cost_usd"]), (1, 0, 0, 0))
 
+    def test_a_run_stopped_for_time_counts_what_it_had_used(self):
+        # Two messages, the first printed twice since it had two parts, then the run was stopped before its result.
+        stream = "\n".join(json.dumps(event) for event in (
+            {"type": "system", "subtype": "init"},
+            {"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 10, "cache_read_input_tokens": 1000, "output_tokens": 50}}},
+            {"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 10, "cache_read_input_tokens": 1000, "output_tokens": 80}}},
+            {"type": "assistant", "message": {"id": "m2", "usage": {"input_tokens": 5, "cache_creation_input_tokens": 200, "output_tokens": 20}}},
+        ))
+        stopped = subprocess.TimeoutExpired(["claude"], 60)
+        stopped.stdout = stream
+        with mock.patch.object(claude_code, "run_process", side_effect=stopped):
+            with self.assertRaises(claude_code.ClaudeFailed):
+                claude_code.ask(self.conn, self.job, "mail", ["claude"], "", Path("."), 600, 10)
+        used = claude_code.usage(self.conn)["all"]
+        self.assertEqual((used["failed"], used["input_tokens"], used["output_tokens"], used["cost_usd"], used["uncosted"]), (1, 1215, 100, 0, 1))
+        self.assertEqual(claude_code.cut_short('{"type": "result"}'), {})  # json output says nothing until it ends.
+
     def test_older_runs_count_toward_all_time_only(self):
         claude_code.record(self.conn, self.job, "prep", self.REPORT, 120, True)
         self.conn.execute("UPDATE claude_runs SET ts = '2026-01-01T00:00:00+00:00'")

@@ -241,7 +241,9 @@ function renderKpis() {
   const s = state.stats;
   const stat = (value, label, sub, hot) => h("span", { class: `stat${hot ? " hot" : ""}`, title: sub }, h("b", {}, value), label);
   fill($("kpis"),
-    stat(s.ready, "ready to send", "Passed the fact check", s.ready > 0),
+    stat(s.ready, "ready to send", ["Passed the fact check, with the posting still up",
+      s.ready_recheck ? `${s.ready_recheck} to check again, as ${s.ready_recheck === 1 ? "its" : "their"} files changed since` : "",
+      s.ready_closed ? `${s.ready_closed} more whose posting came down` : ""].filter(Boolean).join(". ") + ".", s.ready > 0),
     stat(s.applied, "applied", `${s.applied_week} in the last 7 days`),
     stat(s.awaiting, "awaiting reply", s.follow_ups ? `${s.follow_ups} follow-up${s.follow_ups > 1 ? "s" : ""} due` : "No follow-ups due", s.follow_ups > 0),
     // Replies only: a rejection is counted beside it, not inside it, so the rate isn't flattering.
@@ -652,15 +654,20 @@ function renderSources() {
 
 function renderUsage() {
   const usage = state.usage;
-  const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+  // 999,600 rounds to 1000k, so the cut to millions is where the rounding would reach it.
+  const tokens = (n) => (n >= 999.5e3 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+  // A run stopped before Claude Code reported its cost isn't in the cost, so the cost is a floor.
+  const cost = (t) => t.uncosted
+    ? h("span", { title: `${plural(t.uncosted, "run")} stopped before Claude Code reported a cost, so this leaves ${t.uncosted === 1 ? "it" : "them"} out.` }, `$${t.cost_usd.toFixed(2)}+`)
+    : `$${t.cost_usd.toFixed(2)}`;
   const row = (label, t) => h("tr", {},
     h("td", {}, label),
     h("td", { class: "num" }, t.failed ? `${t.runs} (${t.failed} failed)` : t.runs),
     h("td", { class: "num" }, `${t.minutes} min`),
     h("td", { class: "num" }, tokens(t.input_tokens)),
     h("td", { class: "num" }, tokens(t.output_tokens)),
-    h("td", { class: "num" }, `$${t.cost_usd.toFixed(2)}`));
-  const counted = "Every Claude run Pyrite starts is counted: the daily run, Refresh resume, Interview prep and checking mail. A Claude Code session of your own isn't.";
+    h("td", { class: "num" }, cost(t)));
+  const counted = "Every Claude run Pyrite starts is counted: the daily run, judging postings, Refresh resume, Interview prep, checking mail, industry outlooks and skill ages. A Claude Code session of your own isn't.";
   $("usage-summary").textContent = usage.all.runs
     ? `${counted} Cost is Claude Code's own estimate at API prices, which isn't a bill if you're on a Claude plan.`
     : `No Claude runs have been started from here yet. ${counted}`;

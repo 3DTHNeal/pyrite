@@ -59,6 +59,23 @@ class Lifecycle(Base):
 
 
 class Dashboard(Base):
+    def test_ready_to_send_counts_only_what_can_go(self):
+        ts = store.now()
+        self.add(source_id="1", status="ready")
+        self.add(source_id="2", status="ready", posting_closed_at=ts)
+        state = server.build_state(self.conn, CFG)
+        self.assertEqual((state["stats"]["ready"], state["stats"]["ready_closed"]), (1, 1))
+        # The funnel still has every job at its stage, so its stages add up to every job.
+        self.assertEqual(next(f["count"] for f in state["funnel"] if f["stage"] == "Ready to send"), 2)
+
+    def test_a_board_no_longer_watched_leaves_the_sources_list(self):
+        ts = store.now()
+        for key in ("greenhouse:anthropic", "workday:dropped", "inbox:gmail"):
+            self.conn.execute("INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count) VALUES (?, ?, ?, ?, '', 1)",
+                              (key, key, ts, ts))
+        listed = [row["source_key"] for row in server.build_state(self.conn, CFG)["sources"]]
+        self.assertEqual(sorted(listed), ["greenhouse:anthropic", "inbox:gmail"])
+
     def test_numbers_and_orders_put_new_listings_first(self):
         today = date.today()
         posted = lambda days: (today - timedelta(days=days)).isoformat()
@@ -131,7 +148,7 @@ class Dashboard(Base):
 
     def test_a_posting_you_add_gets_its_pay_from_its_text(self):
         job = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Pays $120,000 - $150,000 a year.")
-        self.assertEqual(store.get_job(self.conn, job)["comp"], "$120,000 - $150,000")
+        self.assertEqual(store.get_job(self.conn, job)["comp"], "$120,000 - $150,000 a year")
 
 
 class Outreach(Base):
@@ -168,6 +185,14 @@ class Outreach(Base):
         self.assertEqual([o["job_id"] for o in orders], [oldest])
         self.assertIn("5 more are due one too: Co0, Co1, Co2, Co3 and 1 more.", orders[0]["detail"])
         self.assertTrue(newer)
+
+    def test_the_names_and_the_more_add_up_to_the_count(self):
+        # Two applications at one employer are one name, so what's left over is counted in applications.
+        self.applied(3, source_id="old", company="Oldco")
+        for n, company in enumerate(["Dup", "Dup", "Co1", "Co2", "Co3", "Co4"]):
+            self.applied(1, hours=6 - n, source_id=str(n), company=company)
+        detail = next(o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Reach out")["detail"]
+        self.assertIn("6 more are due one too: Dup, Co1, Co2, Co3 and 1 more.", detail)
 
     def test_off_when_the_dashboard_says_so(self):
         self.applied(2)

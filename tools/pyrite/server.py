@@ -354,7 +354,10 @@ def _reach_out_order(waiting: list[dict[str, Any]]) -> dict[str, Any]:
               "then log it with Reached out.")
     others = [job["company"] for job in waiting[1:]]
     if others:
-        named = ", ".join(dict.fromkeys(others[:4])) + (f" and {len(others) - 4} more" if len(others) > 4 else "")
+        # Each employer named once, and "more" counts the applications at the ones not named, so it all adds up.
+        shown = list(dict.fromkeys(others))[:4]
+        rest = sum(company not in shown for company in others)
+        named = ", ".join(shown) + (f" and {rest} more" if rest else "")
         detail += f" {len(others)} more {'is' if len(others) == 1 else 'are'} due one too: {named}."
     return {"rank": 3, "kind": "Reach out", "job_id": first["id"], "text": f"{first['company']}: {first['title']}", "detail": detail}
 
@@ -388,7 +391,7 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
             orders.append({"rank": 3, "kind": "Gone quiet", "job_id": job["id"], "text": name,
                            "detail": f"No reply in {job['days_since_applied']} days. Mark it ghosted, or try one last nudge."})
         elif job["status"] in ("applied", "responded") and job["follow_up_due"]:
-            when = f"Applied {job['days_since_applied']} days ago." if job["days_since_applied"] is not None else ""
+            when = f"Applied {_days(job['days_since_applied'])} ago." if job["days_since_applied"] is not None else ""
             orders.append({"rank": 1, "kind": "Follow up", "job_id": job["id"], "text": name,
                            "detail": f"{when} {job['next_action']}".strip()})
         elif job["status"] == "applied" and not job.get("reached_out") and job["days_since_applied"] in REACH_OUT_DAYS:
@@ -513,8 +516,12 @@ def build_state(conn, cfg) -> dict[str, Any]:
     this_week = [j for j in applied if (quiet_days_since(j["applied_at"]) or 0) < 7]
     radar = [j for j in jobs if j["status"] == "new"]
 
+    sendable = [j for j in jobs if j["status"] == "ready" and not j["posting_closed_at"]]
     stats = {
-        "ready": sum(j["status"] == "ready" for j in jobs),
+        # Ready to send means it can go: a draft whose posting came down can't, though the funnel still has it there.
+        "ready": len(sendable),
+        "ready_recheck": sum(bool(j["changed_since_check"]) for j in sendable),
+        "ready_closed": sum(j["status"] == "ready" and bool(j["posting_closed_at"]) for j in jobs),
         "awaiting": sum(j["status"] == "applied" for j in jobs),
         "follow_ups": sum(j["status"] in ("applied", "responded") and j["follow_up_due"] for j in jobs),
         "applied": len(applied),
@@ -552,7 +559,11 @@ def build_state(conn, cfg) -> dict[str, Any]:
         briefing["since"] = {kind: count for kind, count in conn.execute(
             "SELECT kind, COUNT(DISTINCT job_id) FROM events WHERE ts > ? AND kind IN ('applied', 'passed') GROUP BY kind",
             (briefing["ts"],))}
-    source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")]
+    # The boards search.toml watches now, and the inbox. A board taken out of it isn't checked any more, so its last
+    # good read would otherwise stay on the list as working.
+    watched = {f"{kind}:{ident}" for kind, ident, _ in discover._watchlist(cfg)}
+    source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")
+                   if r["source_key"] in watched or r["source_key"].startswith("inbox:")]
     return {
         "jobs": jobs,
         "stats": stats,

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import deadline, pay, score, skillage
+from .sources import find_comp
 
 RARE_DAYS = 90
 RARE_WATCHED_DAYS = 30
@@ -38,6 +39,8 @@ class Context:
     local: Counter[str]
     watched_days: int | None
     decide_days: int
+    # Whether `peers` was read from every tracked job, so a job judged against it is among them and is left out.
+    counted: bool = False
 
 
 def decide_days(cfg: dict[str, Any]) -> int:
@@ -45,21 +48,30 @@ def decide_days(cfg: dict[str, Any]) -> int:
 
 
 def _recent(first_seen: str | None, today: date) -> bool:
-    return bool(first_seen) and str(first_seen)[:10] >= (today - timedelta(days=RARE_DAYS)).isoformat()
+    seen = score.parse_date(first_seen)
+    return seen is not None and seen >= today - timedelta(days=RARE_DAYS)
 
 
 def context(conn, cfg: dict[str, Any], today: date) -> Context:
-    rows = [{**dict(row), "level": score.level(row["title"], cfg)}
-            for row in conn.execute("SELECT title, track, location_kind, first_seen, comp FROM jobs")]
+    rows = [{**dict(row), "comp": comp_for(dict(row)), "level": pay.level(row["title"], cfg)}
+            for row in conn.execute("SELECT title, track, location_kind, first_seen, comp, description FROM jobs")]
     local = Counter(row["track"] for row in rows if row["location_kind"] == "local" and row["track"] and _recent(row["first_seen"], today))
     first = conn.execute("SELECT MIN(started_at) FROM runs").fetchone()[0]
     watched = (today - date.fromisoformat(first[:10])).days if first else None
-    return Context(today, pay.peers(rows, pay.settings(cfg)["currency"]), local, watched, decide_days(cfg))
+    return Context(today, pay.peers(rows, pay.settings(cfg)["currency"]), local, watched, decide_days(cfg), counted=True)
 
 
 def alone(cfg: dict[str, Any], today: date) -> Context:
-    """A context that knows nothing of the other jobs, so pay is judged against your floor and target only, and nothing is rare."""
+    """A context that knows nothing of the other jobs, so pay isn't judged against anything and nothing is rare."""
     return Context(today, {}, Counter(), None, decide_days(cfg))
+
+
+def comp_for(job: dict[str, Any]) -> str:
+    """The job's pay text. The one stored when it was found, unless reading its description now finds more: a range
+    that was missed then, or the same range with the period or currency that came after it, which older code dropped."""
+    stored = (job.get("comp") or "").strip()
+    found = find_comp(job.get("description") or "", job.get("title") or "")
+    return found if found and (not stored or found.startswith(stored)) else stored
 
 
 def rarity(job: dict[str, Any], cfg: dict[str, Any], ctx: Context) -> dict[str, Any]:
@@ -88,12 +100,14 @@ def read(job: dict[str, Any], cfg: dict[str, Any], ctx: Context, folder: Path | 
     # A note that only restates an ask nobody could meet isn't something to settle before applying.
     found["impossible_blockers"] = [b for b in found["blockers"] if skillage.only_restates(b, ctx.today)]
     found["blockers"] = [b for b in found["blockers"] if b not in found["impossible_blockers"]]
-    money = pay.judge(job.get("comp") or "", job.get("track") or "", score.level(job.get("title") or "", cfg), cfg, ctx.peers)
+    comp = comp_for(job)
+    money = pay.judge(comp, job.get("track") or "", pay.level(job.get("title") or "", cfg), cfg, ctx.peers, ctx.counted)
     rare = rarity(job, cfg, ctx)
     reasons = list(money["pay_reasons"])
     if rare["rare"]:
         reasons.append(f"Rare near you, {rare['rare_reason']} {rare['rare_points']:+d}")
-    return {**found, **skills, **money, **rare, "signal_points": money["pay_points"] + rare["rare_points"], "signal_reasons": reasons}
+    return {**found, **skills, **money, **rare, "comp": comp, "signal_points": money["pay_points"] + rare["rare_points"],
+            "signal_reasons": reasons}
 
 
 def apply(job: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
