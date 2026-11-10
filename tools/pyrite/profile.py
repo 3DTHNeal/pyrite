@@ -165,10 +165,24 @@ def _terms(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
+def _config(text: str) -> tuple[dict[str, Any] | None, str]:
+    """search.toml's settings, or None if it's missing or can't be read at all, and why Pyrite can't use them as they
+    are, or "". The tab still opens on settings it can't read, so it can say what to fix."""
+    if not text:
+        return None, ""
+    try:
+        cfg = store.parse_config(text, FILES["config"])
+    except store.ConfigError as err:
+        return None, str(err)
+    problems = store.config_problems(cfg)
+    return cfg, f"{FILES['config']}: {problems[0]}" if problems else ""
+
+
 def view() -> dict[str, Any]:
     """What the Profile tab shows: each file's version, and the parts of them it edits."""
     texts = {key: read(key) for key in FILES}
-    cfg = tomllib.loads(texts["config"]) if texts["config"] else {}
+    parsed, unusable = _config(texts["config"])
+    cfg = parsed or {}
     doc = factsdoc.Doc(texts["facts"])
     employers, labeled, unread = doc.timeline(known_titles(cfg))
     contact = doc.contact()
@@ -204,7 +218,7 @@ def view() -> dict[str, Any]:
         "sections": sections,
         "off_limits": {"forbidden": guard.get("forbidden", []), "unsupported": guard.get("unsupported", [])},
         "terms": _terms(texts["terms"]),
-        **hub(texts, cfg if texts["config"] else None, employers, sections, unread),
+        **hub(texts, parsed, employers, sections, unread, unusable),
     }
 
 
@@ -303,12 +317,19 @@ def _workspace_summary() -> tuple[bool, str]:
     return backup.is_fresh(store.ROOT), f"Last backup {made:%d %b %Y}"
 
 
-def needs(cfg: dict[str, Any] | None, unread: list[int], asked: int = 0) -> list[dict[str, Any]]:
-    """What the Profile tab asks you to look at, most important first: what setup still needs and anything the tab
-    couldn't read. Each names the section that fixes it, when one does."""
+def needs(cfg: dict[str, Any] | None, unread: list[int], asked: int = 0, unusable: str = "") -> list[dict[str, Any]]:
+    """What the Profile tab asks you to look at, most important first: the health check `pyrite doctor` runs on the
+    workspace, settings Pyrite can't use, and anything the tab couldn't read. Each names the section that fixes it,
+    when one does. `unusable` is why search.toml can't be used, and with no `cfg` it couldn't be read at all."""
     found: list[dict[str, Any]] = []
+    if unusable:
+        found.append({"severity": "bad", "title": unusable,
+                      "detail": "Pyrite reads every setting from it, so pans and the daily run stop until it's fixed. "
+                                "Fix it in a text editor, then come back here.", "step": None})
     if not store.IS_EXAMPLE:  # The demo is the example on purpose, so it has nothing left to set up.
-        for todo in [*doctor.workspace_todos(store.ROOT, cfg), *doctor.program_todos()]:
+        # Settings that can't be read would only add findings about settings that look missing.
+        todos = [] if unusable and cfg is None else doctor.workspace_todos(store.ROOT, cfg)
+        for todo in [*todos, *doctor.program_todos()]:
             step = todo.get("step") if todo.get("step") in STEP_IDS else None
             found.append({"severity": todo.get("severity", "warn"), "title": todo["what"], "detail": todo["fix"], "step": step})
     if unread:
@@ -323,10 +344,11 @@ def needs(cfg: dict[str, Any] | None, unread: list[int], asked: int = 0) -> list
     return sorted(found, key=lambda item: rank.get(item["severity"], 1))
 
 
-def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: list[dict[str, Any]], unread: list[int]) -> dict[str, Any]:
+def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: list[dict[str, Any]], unread: list[int],
+        unusable: str = "") -> dict[str, Any]:
     """Each section with its state and summary, and the list of what needs you."""
     found = gaps.view()
-    waiting = needs(cfg, unread, len(gaps.questions(found)))
+    waiting = needs(cfg, unread, len(gaps.questions(found)), unusable)
     summaries = _summaries(texts, cfg or {}, employers, sections, found)
     changed: dict[str, str] = {}
     for entry in history(limit=10_000):

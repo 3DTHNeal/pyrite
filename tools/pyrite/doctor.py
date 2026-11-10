@@ -55,7 +55,10 @@ EXAMPLE_LINES_LEFT = 3
 # section that starts each. approved-terms.txt may rightly stay empty, so it isn't named.
 BLANK_FILES = {"profile/facts.md": "basics", "profile/run-notes.md": None, "profile/resume.md": "masters",
                "profile/cover-letter.md": "masters"}
-# A line that holds nothing yet: a bullet that's only its bold label, such as "- **Who:**", or a bare = or @ marker.
+# The Profile section that edits the patterns in each table of search.toml. [promote] is set on the Settings tab, which
+# What comes first opens.
+PATTERN_STEPS = {"location": "where", "track": "roles", "scoring": "roles", "promote": "priorities"}
+# A line that holds nothing yet:a bullet that's only its bold label, such as "- **Who:**", or a bare = or @ marker.
 EMPTY_LINE = re.compile(r"[-*][ \t]+\*\*[^*]+\*\*:?|[=@]")
 
 
@@ -269,9 +272,10 @@ def workspace_todos(root: Path, cfg: dict[str, Any] | None) -> list[dict[str, An
     for problem in discover.watch_problems(cfg):
         todos.append({"what": problem, "fix": 'Until then a pan skips that company and lists it as failing. See "Adding companies" '
                                               "in docs/prospects.md.", "step": "companies"})
-    for problem in score.pattern_problems(cfg):
+    for table, problem in score.bad_patterns(cfg):
         todos.append({"what": problem, "fix": "Until it's fixed, a pan stops before reading any job board. A literal character "
-                                              "such as ( or + needs a backslash before it.", "severity": "bad"})
+                                              "such as ( or + needs a backslash before it.", "severity": "bad",
+                      "step": PATTERN_STEPS[table]})
     todos += _master_todos(root, cfg)
     todos += _unguarded_todos(root, cfg)
     todos += _unenforced_todos(root, cfg)

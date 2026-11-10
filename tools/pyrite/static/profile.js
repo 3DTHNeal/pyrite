@@ -230,12 +230,19 @@ function profileNeeds() {
     return h("li", { class: `profile-need ${item.severity}` },
       h("span", { class: "visually-hidden" }, item.severity === "bad" ? "Important: " : ""),
       h("div", {}, h("b", {}, item.title), h("small", {}, item.detail)),
-      step ? h("button", { class: `btn small${item.severity === "bad" ? " primary" : ""}`, type: "button", onclick: () => profileGo(step.id) },
-        `Open ${step.label}`) : null);
+      step ? h("button", { class: `btn small${item.severity === "bad" ? " primary" : ""}`, type: "button", onclick: () => profileOpen(step) },
+        profileOpenLabel(step)) : null);
   }) : [h("li", { class: "profile-need info" }, h("div", {}, h("b", {}, "Nothing needs you."),
     h("small", {}, "Pyrite lists things here when setup isn't finished or a file can't be read as it should.")))];
   return h("section", { class: "panel profile-needs", "aria-label": "Needs you" },
-    h("h2", {}, `Needs you · ${items.length}`), h("ul", {}, list));
+    h("h2", {}, `Needs you · ${items.length}`), h("ul", {}, list),
+    h("p", { class: "muted profile-needs-note" }, "The same health check as ", h("code", {}, "pyrite doctor"),
+      ", made again each time this tab opens."));
+}
+
+// A section set on the Settings tab for good says so, since its button leaves this tab.
+function profileOpenLabel(step) {
+  return step.settings && !profileSteps[step.id] ? `Open ${step.settings} in Settings` : `Open ${step.label}`;
 }
 
 // A section set on the Settings tab for good opens it there, as a link would. The rest open here.
