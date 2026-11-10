@@ -296,14 +296,14 @@ def _eol(text: str) -> str:
     return "\r\n" if "\r\n" in text else "\n"
 
 
-def _parse(text: str) -> dict:
+def _parse(text: str) -> dict[str, Any]:
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as err:
         raise EditError(f"The file wouldn't read as TOML afterwards ({err}), so nothing was changed.") from err
 
 
-def _place(config: dict, table: Path) -> dict:
+def _place(config: dict[str, Any], table: Path) -> dict[str, Any]:
     for part in table:
         config = config.setdefault(part, {})
         if not isinstance(config, dict):
@@ -555,7 +555,7 @@ def replace_table(text: str, table: str | Path, block: str, expected: Any = None
         new = text[:start] + block + text[end:]
     old_config, new_config = _parse(text), _parse(new)
 
-    def without(config: dict) -> dict:
+    def without(config: dict[str, Any]) -> dict[str, Any]:
         config = copy.deepcopy(config)
         _place(config, name[:-1]).pop(name[-1], None)
         return config

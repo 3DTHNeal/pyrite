@@ -332,7 +332,7 @@ def date_separator(text: str) -> str:
     return match["sep"] if match else " – "
 
 
-def _last_dates(text: str) -> re.Match | None:
+def _last_dates(text: str) -> re.Match[str] | None:
     """The last date range in the text, since a role's title or note can hold a date of its own."""
     matches = list(DATES.finditer(text))
     return matches[-1] if matches else None

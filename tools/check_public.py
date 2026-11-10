@@ -135,7 +135,7 @@ def builtin_findings(text: str) -> list[str]:
     return found
 
 
-def load_denylist(path: Path) -> list[re.Pattern]:
+def load_denylist(path: Path) -> list[re.Pattern[str]]:
     """One case-insensitive regular expression per line. Blank lines and # comments are skipped."""
     patterns = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -147,7 +147,7 @@ def load_denylist(path: Path) -> list[re.Pattern]:
     return patterns
 
 
-def denylist_findings(text: str, denylist: list[re.Pattern]) -> list[str]:
+def denylist_findings(text: str, denylist: list[re.Pattern[str]]) -> list[str]:
     return [f"denylisted term {m.group(0)!r}" for pattern in denylist for m in [pattern.search(text)] if m]
 
 
@@ -304,7 +304,7 @@ def readable_text(path: str, blob: bytes) -> str:
     return "\n".join(parts)
 
 
-def scan_blob(path: str, blob: bytes, denylist: list[re.Pattern]) -> list[str]:
+def scan_blob(path: str, blob: bytes, denylist: list[re.Pattern[str]]) -> list[str]:
     found = []
     if FORBIDDEN_PATH.search(path):
         found.append("private path")
@@ -335,7 +335,7 @@ def scan_blob(path: str, blob: bytes, denylist: list[re.Pattern]) -> list[str]:
     return found
 
 
-def ref_findings(names: list[str], denylist: list[re.Pattern]) -> list[str]:
+def ref_findings(names: list[str], denylist: list[re.Pattern[str]]) -> list[str]:
     """Branch and tag names are published with a push, like everything else."""
     text = "\n".join(names)
     return [f"branch or tag name: {finding}" for finding in builtin_findings(text) + denylist_findings(text, denylist)]
@@ -389,7 +389,7 @@ def tag_messages() -> list[str]:
     return found
 
 
-def scan_repository(denylist: list[re.Pattern]) -> list[str]:
+def scan_repository(denylist: list[re.Pattern[str]]) -> list[str]:
     found: set[str] = set()
     gitlinks: set[str] = set()
     for blob_id, paths in tree_entries(gitlinks).items():

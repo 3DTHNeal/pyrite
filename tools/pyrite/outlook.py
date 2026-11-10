@@ -45,7 +45,7 @@ def _path(name: str) -> Path:
     return folder() / f"{slug}-{hashlib.sha256(name.encode()).hexdigest()[:8]}.json"
 
 
-def _load(name: str) -> dict:
+def _load(name: str) -> dict[str, Any]:
     path = _path(name)
     try:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -53,7 +53,7 @@ def _load(name: str) -> dict:
         return {}
 
 
-def _save(name: str, record: dict) -> None:
+def _save(name: str, record: dict[str, Any]) -> None:
     path = _path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -61,7 +61,7 @@ def _save(name: str, record: dict) -> None:
     temporary.replace(path)
 
 
-def status(name: str) -> dict:
+def status(name: str) -> dict[str, Any]:
     """The latest run's state, and the last outlook that came through, which a failed redo leaves in place."""
     record = _load(name)
     state = record.get("state")
@@ -74,14 +74,14 @@ def status(name: str) -> dict:
             "finished_at": record.get("finished_at"), "report": record.get("report")}
 
 
-def _industry(cfg: dict, name: str) -> dict:
+def _industry(cfg: dict[str, Any], name: str) -> dict[str, Any]:
     for industry in (cfg.get("promote") or {}).get("industry", []):
         if industry["name"] == name:
             return industry
     raise ValueError(f"There's no industry called '{name}' under [promote].")
 
 
-def start(cfg: dict, name: str) -> None:
+def start(cfg: dict[str, Any], name: str) -> None:
     """The dashboard button: check it can work, then research in the background so the page doesn't wait."""
     if IS_EXAMPLE:
         raise ValueError("The demo doesn't run Claude. In your own workspace, this researches the industry on the web.")
@@ -110,7 +110,7 @@ def begin(name: str) -> None:
     _save(name, {"name": name, "state": "running", "started_at": now(), "detail": "Searching the web", "report": record.get("report")})
 
 
-def finish(name: str, ok: bool, detail: str, report: dict | None = None) -> None:
+def finish(name: str, ok: bool, detail: str, report: dict[str, Any] | None = None) -> None:
     record = _load(name)
     _save(name, {"name": name, "state": "done" if ok else "failed", "started_at": record.get("started_at") or now(),
                  "finished_at": now(), "detail": detail, "report": report if ok else record.get("report")})
@@ -130,7 +130,7 @@ def command(claude: str, model: str) -> list[str]:
     ]
 
 
-def _figures(official: list[dict]) -> list[str]:
+def _figures(official: list[dict[str, Any]]) -> list[str]:
     lines = []
     for area in official:
         if area.get("jobs") is None:
@@ -142,7 +142,7 @@ def _figures(official: list[dict]) -> list[str]:
     return lines
 
 
-def prompt(name: str, industry: dict, places: dict, official: list[dict], today: str) -> str:
+def prompt(name: str, industry: dict[str, Any], places: dict[str, Any], official: list[dict[str, Any]], today: str) -> str:
     where = ", ".join(p for p in (places.get("metro"), places.get("state"), places.get("country")) if p) or "the United States"
     employers = industry.get("companies", [])[:40]
     figures = _figures(official)
@@ -186,12 +186,12 @@ def prompt(name: str, industry: dict, places: dict, official: list[dict], today:
     return "\n".join(parts)
 
 
-def _list(value: Any) -> list:
+def _list(value: Any) -> list[Any]:
     """A list from Claude's JSON, or an empty one for anything else it wrote there."""
     return value if isinstance(value, list) else []
 
 
-def _dict(value: Any) -> dict:
+def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
@@ -228,13 +228,13 @@ def _texts(value: Any) -> list[str]:
     return []
 
 
-def read_stream(output: str) -> tuple[str, dict, set[str]]:
+def read_stream(output: str) -> tuple[str, dict[str, Any], set[str]]:
     """Claude's closing message, the run's result, and the pages this run came across: each address WebFetch was asked
     to open, and each link a WebSearch result listed. An address that only appears inside a fetched page isn't one, since
     the page's author wrote it."""
     seen: set[str] = set()
     searches: set[str] = set()
-    result: dict = {}
+    result: dict[str, Any] = {}
     for line in output.splitlines():
         try:
             event = json.loads(line)
@@ -277,7 +277,7 @@ def _text(value, limit: int) -> str:
     return CONTROL.sub(" ", value).strip()[:limit] if isinstance(value, str) else ""
 
 
-def _json(answer: str) -> dict:
+def _json(answer: str) -> dict[str, Any]:
     start, end = answer.find("{"), answer.rfind("}")
     if start < 0 or end <= start:
         raise ClaudeFailed("Claude's answer had no outlook in it.")
@@ -290,7 +290,7 @@ def _json(answer: str) -> dict:
     return data
 
 
-def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict], list[dict], dict]:
+def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Keep the points whose sources this run's own tools came across. Returns sections, sources and what was dropped.
 
     A source counts only if its whole address, give or take its scheme, a www., a fragment or a closing slash, is one
@@ -298,7 +298,7 @@ def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict], list[dict], dict]
     Anything in the answer of the wrong shape is left out rather than trusted."""
     data = _json(answer)
     pages = {bare for bare in map(_bare, seen) if bare}
-    sources: dict[int, dict] = {}
+    sources: dict[int, dict[str, Any]] = {}
     unconfirmed = 0
     for raw in _list(data.get("sources")):
         if not isinstance(raw, dict) or isinstance(raw.get("id"), bool) or not isinstance(raw.get("id"), int):
@@ -317,7 +317,7 @@ def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict], list[dict], dict]
     sections, dropped = [], 0
     by_heading = {s["heading"]: s for s in _list(data.get("sections")) if isinstance(s, dict) and isinstance(s.get("heading"), str)}
     for heading in HEADINGS:
-        points: list[dict] = []
+        points: list[dict[str, Any]] = []
         for raw in _list(by_heading.get(heading, {}).get("points")):
             if not isinstance(raw, dict):
                 continue
@@ -364,7 +364,7 @@ def cited(url: str, seen: Iterable[str]) -> bool:
     return bool(bare) and bare in {page for page in map(_bare, seen) if page}
 
 
-def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
+def run(conn, cfg: dict[str, Any], name: str, claude: str | None = None) -> dict[str, Any]:
     """Research one industry and keep the outlook if any of it survives the source check."""
     from . import market  # market lists each industry's outlook, so it imports this module first
 
@@ -377,7 +377,7 @@ def run(conn, cfg: dict, name: str, claude: str | None = None) -> dict:
             raise ClaudeFailed("Claude Code wasn't found on this PC.")
         settings = cfg.get("market") or {}
         places = {"metro": None, "state": None, "country": str(settings.get("country") or "United States")}
-        official: list[dict] = []
+        official: list[dict[str, Any]] = []
         try:
             found, _ = market.areas(cfg)
             for place in found:

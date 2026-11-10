@@ -8,6 +8,7 @@ an earlier brief stays. State lives in the job's events.
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 from . import checks, claude_code
 from .claude_code import ClaudeFailed, NoDocument, find_claude, sign_in_help, spawn_worker
@@ -25,7 +26,7 @@ STALE_MINUTES = TIME_LIMIT_MINUTES + 5
 INSTRUCTIONS = Path(__file__).parent / "interview_prep.md"
 
 
-def states(conn) -> dict[int, dict]:
+def states(conn) -> dict[int, dict[str, Any]]:
     """Each job's latest interview prep run, by job id."""
     return claude_code.latest(conn, STATE_NAMES, STALE_MINUTES, "The run stopped without finishing, so no new brief was kept.")
 
@@ -74,7 +75,7 @@ def start(conn, job_id: int) -> None:
         raise ValueError(f"Couldn't start the interview prep: {err}") from err
 
 
-def command(claude: str, cfg: dict | None = None) -> list[str]:
+def command(claude: str, cfg: dict[str, Any] | None = None) -> list[str]:
     """No tools: everything Claude needs is in the prompt, and the brief comes back in its closing message."""
     return claude_code.command(claude, [], cfg)
 

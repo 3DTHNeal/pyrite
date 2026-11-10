@@ -15,6 +15,7 @@ import json
 import re
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from . import store
 
@@ -65,7 +66,7 @@ def _same_company(a: str, b: str) -> bool:
     return bool(a and b) and (a in b or b in a)
 
 
-def paste_roles(lines: list[str]) -> list[dict]:
+def paste_roles(lines: list[str]) -> list[dict[str, Any]]:
     """Each work-experience section of the paste sheet: its title, company and the line span of its text block."""
     roles = []
     i = 0
@@ -94,9 +95,9 @@ def paste_roles(lines: list[str]) -> list[dict]:
     return roles
 
 
-def resume_roles(text: str) -> list[dict]:
+def resume_roles(text: str) -> list[dict[str, Any]]:
     """Each `####` role in a resume.md, with its bullets as the plain text a description box takes."""
-    roles: list[dict] = []
+    roles: list[dict[str, Any]] = []
     company = ""
     for raw in text.splitlines():
         line = raw.strip()
@@ -114,7 +115,7 @@ def resume_roles(text: str) -> list[dict]:
     return [r for r in roles if r["lines"]]
 
 
-def _find(role: dict, candidates: list[dict]) -> dict | None:
+def _find(role: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
     for other in candidates:
         if _norm(other["title"]) == _norm(role["title"]) and _same_company(other["company"], role["company"]):
             return other
@@ -149,12 +150,12 @@ def close_fences(lines: list[str]) -> tuple[list[str], list[str]]:
     return out, problems
 
 
-def merge(paste: str, resume: str) -> tuple[list[str], dict]:
+def merge(paste: str, resume: str) -> tuple[list[str], dict[str, Any]]:
     """The paste sheet's lines with each matched role's text replaced by the resume's, and what matched."""
     lines, problems = close_fences(paste.splitlines())
     sheet = paste_roles(lines)
     tailored = resume_roles(resume)
-    report: dict[str, list] = {"tailored": [], "kept": [], "unmatched": []}
+    report: dict[str, list[str]] = {"tailored": [], "kept": [], "unmatched": []}
     label = lambda r: f"{r['title']} at {r['company']}".strip()
     # Replace from the bottom up so earlier spans stay valid.
     for role in sorted(sheet, key=lambda r: r["line"], reverse=True):
@@ -243,7 +244,7 @@ def _body(paste: str) -> list[str]:
 
 
 def compose(paste: str, resume: str, folder: Path, company: str, title: str, url: str, today: date,
-            unchecked: str = "") -> tuple[str, dict]:
+            unchecked: str = "") -> tuple[str, dict[str, Any]]:
     """The sheet's text and a report of what it holds. `unchecked` is why the assay doesn't vouch for the resume now."""
     merged, report = merge(paste, resume)
     per_application, blanks = asks(paste)
@@ -350,10 +351,10 @@ def is_ask(value: str) -> bool:
     return bool(_ITALIC_ASK.search(value or "")) or not first or bool(_GUIDANCE.search(first)) or len(first.split()) > 12
 
 
-def sections(lines: list[str]) -> list[dict]:
+def sections(lines: list[str]) -> list[dict[str, Any]]:
     """Every `##` and `###` section of the sheet: its heading, table rows (as cell lists) and loose text lines."""
-    found: list[dict] = []
-    current: dict | None = None
+    found: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
     in_fence = False
     for line in lines:
         if in_fence and line.startswith("#"):
@@ -385,7 +386,7 @@ def sections(lines: list[str]) -> list[dict]:
     return found
 
 
-def _rows(section: dict | None) -> dict[str, str]:
+def _rows(section: dict[str, Any] | None) -> dict[str, str]:
     rows: dict[str, str] = {}
     for cells in (section or {}).get("rows", []):
         if len(cells) >= 2 and cells[0].lower() not in ("field", "question"):
@@ -393,7 +394,7 @@ def _rows(section: dict | None) -> dict[str, str]:
     return rows
 
 
-def _section(found: list[dict], pattern: str, level: int | None = None) -> dict | None:
+def _section(found: list[dict[str, Any]], pattern: str, level: int | None = None) -> dict[str, Any] | None:
     rx = re.compile(pattern, re.IGNORECASE)
     for section in found:
         if rx.search(section["heading"]) and (level is None or section["level"] == level):
@@ -401,7 +402,7 @@ def _section(found: list[dict], pattern: str, level: int | None = None) -> dict 
     return None
 
 
-def _fence_text(section: dict) -> str:
+def _fence_text(section: dict[str, Any]) -> str:
     inner = [line for line in section["fence"] if not line.startswith("```")]
     return "\n".join(inner).strip()
 
@@ -453,7 +454,7 @@ def posting_source(source_key: str, url: str) -> str:
     return ""
 
 
-def structure(merged_lines: list[str], folder: Path, company: str, title: str, url: str, source: str = "") -> dict:
+def structure(merged_lines: list[str], folder: Path, company: str, title: str, url: str, source: str = "") -> dict[str, Any]:
     """The merged sheet as data: what `pyrite autofill` types, and what it must leave to the candidate."""
     found = sections(merged_lines)
     info = _section(found, r"information", 2)
@@ -526,7 +527,7 @@ def structure(merged_lines: list[str], folder: Path, company: str, title: str, u
 
 
 def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", today: date | None = None, source: str = "",
-               unchecked: str = NOT_LOOKED_UP) -> dict:
+               unchecked: str = NOT_LOOKED_UP) -> dict[str, Any]:
     """Write the folder's fill sheet and say what went into it. Raises FileNotFoundError when a source is missing, and
     SheetError when the paste sheet doesn't read back as the roles it holds.
 
@@ -564,7 +565,7 @@ def make_sheet(folder: Path, company: str = "", title: str = "", url: str = "", 
     return report
 
 
-def summary(report: dict) -> str:
+def summary(report: dict[str, Any]) -> str:
     parts = [f"{len(report['tailored'])} roles tailored"]
     if report.get("problems"):
         parts.insert(0, f"{SHEET_PROBLEM} " + " ".join(report["problems"]))

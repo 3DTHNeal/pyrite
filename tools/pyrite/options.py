@@ -21,10 +21,10 @@ CLAUDE_DEFAULT = "Claude Code's default"
 CLAUDE_CHECK_SECONDS = 60
 
 _status_lock = threading.Lock()
-_claude_seen: tuple[float, dict] | None = None
+_claude_seen: tuple[float, dict[str, Any]] | None = None
 
 
-def _field(where: str, kind: str, label: str, hint: str = "", **more: Any) -> dict:
+def _field(where: str, kind: str, label: str, hint: str = "", **more: Any) -> dict[str, Any]:
     """One setting: `where` is its table and key in search.toml, as "run.tailor_per_day".
 
     `kind` is "model", "choice", "number" or "switch". `default` is what Pyrite uses while the key isn't in the file,
@@ -34,11 +34,11 @@ def _field(where: str, kind: str, label: str, hint: str = "", **more: Any) -> di
     return {"id": where, "table": table, "key": key, "kind": kind, "label": label, "hint": hint, **more}
 
 
-def _model(where: str, label: str, hint: str, default: str) -> dict:
+def _model(where: str, label: str, hint: str, default: str) -> dict[str, Any]:
     return _field(where, "model", label, hint, default=default, unset=default)
 
 
-SECTIONS: tuple[dict, ...] = (
+SECTIONS: tuple[dict[str, Any], ...] = (
     {"id": "claude", "label": "Claude", "status": "claude",
      "intro": "Pyrite judges and writes through Claude Code on this computer, signed in to your own Claude plan.",
      "panels": (
@@ -115,30 +115,30 @@ SECTIONS: tuple[dict, ...] = (
      "notes": ("The port, and the extra names the dashboard answers to, can only be changed under [dashboard] in "
                "profile/search.toml.",)},
 )
-FIELDS: dict[str, dict] = {field["id"]: field for section in SECTIONS for panel in section["panels"] for field in panel["fields"]}
+FIELDS: dict[str, dict[str, Any]] = {field["id"]: field for section in SECTIONS for panel in section["panels"] for field in panel["fields"]}
 
 
-def _held(cfg: dict, field: dict) -> Any:
+def _held(cfg: dict[str, Any], field: dict[str, Any]) -> Any:
     """What the file holds for a setting, or None if the key isn't there."""
     table = cfg.get(field["table"])
     return table.get(field["key"]) if isinstance(table, dict) else None
 
 
-def _in_use(cfg: dict, field: dict) -> Any:
+def _in_use(cfg: dict[str, Any], field: dict[str, Any]) -> Any:
     held = _held(cfg, field)
     return field.get("default") if held is None else held
 
 
-def _version(cfg: dict) -> str:
+def _version(cfg: dict[str, Any]) -> str:
     held = {name: _held(cfg, field) for name, field in FIELDS.items()}
     return hashlib.sha256(json.dumps(held, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-def view() -> dict:
+def view() -> dict[str, Any]:
     """The sections as the page draws them, each setting with what the file holds now."""
     cfg = tomllib.loads(settings._read())
 
-    def shown(field: dict) -> dict:
+    def shown(field: dict[str, Any]) -> dict[str, Any]:
         # A switch or a list to pick from always shows a value, so it shows the default while the key is unset.
         value = _held(cfg, field) if field["kind"] in ("model", "number") or "default" not in field else _in_use(cfg, field)
         return {**{k: v for k, v in field.items() if k not in ("table", "key")}, "value": value}
@@ -148,7 +148,7 @@ def view() -> dict:
                                                 for panel in section["panels"]]} for section in SECTIONS]}
 
 
-def _clean(field: dict, raw: Any) -> Any:
+def _clean(field: dict[str, Any], raw: Any) -> Any:
     """What the page sent for one setting, as the value to write, or None to take the key out. Raises ValueError,
     naming the setting, for anything it can't hold."""
     label, kind = field["label"], field["kind"]
@@ -179,7 +179,7 @@ def _clean(field: dict, raw: Any) -> Any:
     return raw.strip()
 
 
-def save(body: dict) -> dict:
+def save(body: dict[str, Any]) -> dict[str, Any]:
     """Set the settings named in `values`, each by its id, and leave every other line of search.toml as it was."""
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so settings can't be saved. Point PYRITE_HOME at your own workspace to change them.")
@@ -214,7 +214,7 @@ def save(body: dict) -> dict:
     return view()
 
 
-def status(cfg: dict, fresh: bool = False) -> dict:
+def status(cfg: dict[str, Any], fresh: bool = False) -> dict[str, Any]:
     """Whether Claude Code is signed in and the mail reader is working, for the top of their sections, each as
     {"ok", "what", "fix"}. Claude Code's answer is kept for a minute unless `fresh` asks again."""
     global _claude_seen

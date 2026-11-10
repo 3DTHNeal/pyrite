@@ -12,11 +12,13 @@ is thrown away once judged, so message text never stays on disk or in the databa
 """
 import json
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from . import claude_code, inbox
@@ -113,10 +115,10 @@ class Item(Message):
     message_id: str = ""
     reply_domain: str = ""
     text: str = ""
-    links: tuple = ()
+    links: tuple[str, ...] = ()
 
 
-def _field(entry: dict, key: str, limit: int) -> str:
+def _field(entry: dict[str, Any], key: str, limit: int) -> str:
     value = entry.get(key)
     return inbox._clean(value, limit) if isinstance(value, str) else ""
 
@@ -130,7 +132,7 @@ def _date(value) -> datetime | None:
         return None
     text = value.strip()
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         try:
             parsed = parsedate_to_datetime(text)
@@ -210,7 +212,7 @@ LIST_OF_OBJECTS = re.compile(r"\[\s*\{")
 EMPTY_LIST = re.compile(r"\A\[\s*\]\Z")
 
 
-def _find_list(raw: str) -> list:
+def _find_list(raw: str) -> list[Any]:
     """The longest JSON list of objects anywhere in the text, so a code fence or a sentence around it does no harm.
 
     A run that couldn't read the mail mustn't pass for one that found none, or the mail it missed would never be read
@@ -218,7 +220,7 @@ def _find_list(raw: str) -> list:
     anything around it, even a sentence, all raise ValueError. Only an answer that is just `[]` means no mail.
     """
     decoder = json.JSONDecoder()
-    best: list = []
+    best: list[Any] = []
     position = 0
     while (found := JSON_START.search(raw, position)) is not None:
         start = found.start()
@@ -248,7 +250,7 @@ def parse_export(raw: str) -> list[Item]:
     return [item for item in map(_item, _find_list(raw)[:MAX_ITEMS]) if item]
 
 
-def known_companies(conn, cfg: dict, applied: bool = False) -> dict[str, set[str]]:
+def known_companies(conn, cfg: dict[str, Any], applied: bool = False) -> dict[str, set[str]]:
     """Every company Pyrite has seen, with the domains known to be theirs. Scams borrow big names, applied to or not.
 
     With `applied`, only the companies you've applied to, and those listed under [inbox.domains]. That's what the mail
@@ -356,7 +358,7 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
     return strong + weak if strong or len(weak) >= 2 else []
 
 
-def _job_named(item: Item, jobs: list) -> int | None:
+def _job_named(item: Item, jobs: list[sqlite3.Row]) -> int | None:
     """The tracked job whose company the mail names, if any, so the warning shows on its card. A guess, not a match."""
     for job in jobs:
         core = inbox._core_name(job["company"])
@@ -365,7 +367,7 @@ def _job_named(item: Item, jobs: list) -> int | None:
     return None
 
 
-def record_alerts(conn, items: list[Item], jobs: list, companies: dict[str, set[str]]) -> list[dict]:
+def record_alerts(conn, items: list[Item], jobs: list[sqlite3.Row], companies: dict[str, set[str]]) -> list[dict[str, Any]]:
     """Keep each new warning, with the sender, subject, date and reasons only. Never touches a job."""
     known = {row["message_id"] for row in conn.execute("SELECT message_id FROM mail_alerts")}
     found = []
@@ -387,7 +389,7 @@ def record_alerts(conn, items: list[Item], jobs: list, companies: dict[str, set[
     return found
 
 
-def open_alerts(conn) -> list[dict]:
+def open_alerts(conn) -> list[dict[str, Any]]:
     rows = conn.execute("SELECT * FROM mail_alerts WHERE dismissed_at IS NULL ORDER BY date DESC, id DESC").fetchall()
     alerts = []
     for row in rows:
@@ -421,7 +423,7 @@ def command(claude: str, model: str = DEFAULT_MODEL) -> list[str]:
     ]
 
 
-def window(conn, cfg: dict) -> datetime:
+def window(conn, cfg: dict[str, Any]) -> datetime:
     """How far back to read: the lookback at most, and only a little past the last good run."""
     days = cfg.get("inbox", {}).get("lookback_days", inbox.DEFAULT_LOOKBACK_DAYS)
     since = datetime.now(UTC) - timedelta(days=days)
@@ -481,13 +483,13 @@ def missing_gmail(answer: str) -> tuple[str, bool]:
     return f"Claude Code's Gmail connector wasn't connected when the check started (it was {status}), so no mail was read.", True
 
 
-def _fail(conn, message: str) -> dict:
+def _fail(conn, message: str) -> dict[str, Any]:
     inbox._record_status(conn, error=message, source_key=SOURCE_KEY, company="Email replies (Gmail)")
     conn.commit()
     return {"state": "error", "message": message[:300]}
 
 
-def failed(conn, cfg: dict, message: str) -> dict:
+def failed(conn, cfg: dict[str, Any], message: str) -> dict[str, Any]:
     """Record a mail check that stopped on something unexpected against the source in use, so the Sources tab shows it
     rather than the last good check."""
     if cfg.get("inbox", {}).get("source", "imap") == SOURCE:
@@ -497,7 +499,7 @@ def failed(conn, cfg: dict, message: str) -> dict:
     return {"state": "error", "message": message[:300]}
 
 
-def ingest(conn, cfg: dict, items: list[Item]) -> dict:
+def ingest(conn, cfg: dict[str, Any], items: list[Item]) -> dict[str, Any]:
     """Judge exported messages: possible replies to tracked jobs, and warnings about likely scams."""
     jobs = inbox.tracked_jobs(conn)
     found = inbox.record_matches(conn, jobs, items, cfg)
@@ -507,7 +509,7 @@ def ingest(conn, cfg: dict, items: list[Item]) -> dict:
     return {"state": "ok", "jobs": len(jobs), "messages": len(items), "found": found, "alerts": alerts}
 
 
-def ingest_file(conn, cfg: dict, path: Path) -> dict:
+def ingest_file(conn, cfg: dict[str, Any], path: Path) -> dict[str, Any]:
     """An export made by hand, for instance by a Claude session that read Gmail itself."""
     try:
         items = parse_export(path.read_text(encoding="utf-8"))
@@ -516,7 +518,7 @@ def ingest_file(conn, cfg: dict, path: Path) -> dict:
     return ingest(conn, cfg, items)
 
 
-def run(conn, cfg: dict, claude: str | None = None, ask=claude_code.ask, pause=time.sleep) -> dict:
+def run(conn, cfg: dict[str, Any], claude: str | None = None, ask=claude_code.ask, pause=time.sleep) -> dict[str, Any]:
     """One scan through Claude Code. Never raises for mail trouble: that's reported beside the job boards instead."""
     claude = claude or find_claude()
     if not claude:
@@ -554,14 +556,14 @@ def run(conn, cfg: dict, claude: str | None = None, ask=claude_code.ask, pause=t
     raise AssertionError("unreachable")
 
 
-def check(conn, cfg: dict) -> dict:
+def check(conn, cfg: dict[str, Any]) -> dict[str, Any]:
     """The sweep's mail step: Gmail through Claude Code if search.toml asks for it, otherwise IMAP."""
     if cfg.get("inbox", {}).get("source", "imap") == SOURCE:
         return run(conn, cfg)
     return inbox.run(conn, cfg)
 
 
-def summary(result: dict) -> str:
+def summary(result: dict[str, Any]) -> str:
     """One sentence for the sweep's report."""
     if result["state"] == "ok":
         replies, alerts = len(result["found"]), len(result.get("alerts", []))

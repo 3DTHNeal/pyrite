@@ -15,6 +15,7 @@ close any day but hasn't closed. Only a firm deadline that has passed makes a jo
 import re
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 _MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 _MONTH = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
@@ -171,7 +172,7 @@ def read_notes(folder: Path) -> tuple[str | None, list[str]]:
     return deadline, blockers
 
 
-def for_job(description: str, folder: Path | None, today: date) -> dict:
+def for_job(description: str, folder: Path | None, today: date) -> dict[str, Any]:
     """A job's deadline and the things to settle before applying. Returns deadline (ISO or None), deadline_firm,
     days_to_deadline and blockers.
 
@@ -185,13 +186,13 @@ def for_job(description: str, folder: Path | None, today: date) -> dict:
     return {"deadline": when, "deadline_firm": firm, "days_to_deadline": days, "blockers": blockers}
 
 
-def expired(info: dict) -> bool:
+def expired(info: dict[str, Any]) -> bool:
     """Whether a job's firm deadline has passed, which makes it a pass. A floor that has passed doesn't."""
     days = info.get("days_to_deadline")
     return days is not None and days < 0 and bool(info.get("deadline_firm", True))
 
 
-def decide_soon(info: dict, window: int = DECIDE_DAYS) -> bool:
+def decide_soon(info: dict[str, Any], window: int = DECIDE_DAYS) -> bool:
     """Whether the tailor-or-pass decision is due: the deadline is within the window, or a floor date has just passed."""
     days = info.get("days_to_deadline")
     if days is None:

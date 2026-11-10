@@ -21,6 +21,7 @@ boards you watch, so it waits until there are enough of them. A range in another
 import re
 import statistics
 from dataclasses import dataclass
+from typing import Any
 
 MIN_PEERS = 5
 TOO_LOW = 0.75  # The top of the range under this share of the typical middle.
@@ -88,7 +89,7 @@ def parse(text: str) -> Range | None:
     return Range(lo * PER_YEAR[per], hi * PER_YEAR[per], currency)
 
 
-def settings(cfg: dict) -> dict:
+def settings(cfg: dict[str, Any]) -> dict[str, Any]:
     """[pay] from search.toml, with its defaults."""
     raw = cfg.get("pay") or {}
     return {"currency": str(raw.get("currency") or "USD").upper(), "points": int(raw.get("points", DEFAULT_POINTS))}
@@ -128,12 +129,12 @@ def _yardstick(track: str, level: str, known: dict[str, tuple[float, int]]) -> t
     return 0.0, 0, ""
 
 
-def judge(comp: str, track: str, level: str, cfg: dict, known: dict[str, tuple[float, int]]) -> dict:
+def judge(comp: str, track: str, level: str, cfg: dict[str, Any], known: dict[str, tuple[float, int]]) -> dict[str, Any]:
     """What a posting's pay says about it. Returns pay_low and pay_high (a year's pay, or None), pay_too_low, pay_signs
     (each a label, a tone and a sentence for the dashboard), pay_points for its priority, and pay_reasons."""
     rules = settings(cfg)
     found = parse(comp)
-    result: dict = {"pay_low": None, "pay_high": None, "pay_currency": None, "pay_too_low": False, "pay_signs": [],
+    result: dict[str, Any] = {"pay_low": None, "pay_high": None, "pay_currency": None, "pay_too_low": False, "pay_signs": [],
                     "pay_points": 0, "pay_reasons": []}
     if not found:
         return result

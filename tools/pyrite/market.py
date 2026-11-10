@@ -72,7 +72,7 @@ def _download(url: str) -> bytes | None:
         raise Unavailable(f"Couldn't reach the BLS: {getattr(err, 'reason', err)}") from err
 
 
-def _rows(body: bytes) -> list[dict]:
+def _rows(body: bytes) -> list[dict[str, Any]]:
     return list(csv.DictReader(io.StringIO(body.decode("utf-8-sig", errors="replace"))))
 
 
@@ -111,7 +111,7 @@ def industry_titles() -> dict[str, str]:
     return _titles(INDUSTRY_TITLES, "industry_titles.csv", "industry_code")
 
 
-def naics_codes(industry: dict) -> list[str]:
+def naics_codes(industry: dict[str, Any]) -> list[str]:
     """An industry's codes as text. Written by hand as naics = [333998], without quotes, they read as numbers."""
     return [str(code).strip() for code in industry.get("naics") or []]
 
@@ -157,12 +157,12 @@ def find_metro(titles: dict[str, str], wanted: str) -> str:
     raise ValueError(f"[market] metro: no metro area is called '{wanted}'. Write it as the BLS does, as in \"Madison, WI\".")
 
 
-def is_us(cfg: dict) -> bool:
+def is_us(cfg: dict[str, Any]) -> bool:
     country = str((cfg.get("market") or {}).get("country") or "United States")
     return country.strip().lower() in US_NAMES
 
 
-def areas(cfg: dict) -> tuple[list[dict], list[str]]:
+def areas(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
     """The areas to show, smallest first, and anything about [market] that needs fixing."""
     market = cfg.get("market") or {}
     if not is_us(cfg):
@@ -203,7 +203,7 @@ def _number(text: str) -> float:
         return 0.0
 
 
-def _keep(row: dict) -> dict:
+def _keep(row: dict[str, Any]) -> dict[str, Any]:
     """The parts of one QCEW row that the panel uses."""
     return {
         "disclosed": row.get("disclosure_code") != "N",
@@ -218,7 +218,7 @@ def _keep(row: dict) -> dict:
     }
 
 
-def _detail(body: bytes) -> dict[str, dict]:
+def _detail(body: bytes) -> dict[str, dict[str, Any]]:
     """Private employers' rows by industry code. A file with none of them has the area's totals only.
 
     A disclosure code of "-" marks a row that isn't published yet: every figure in it is a zero
@@ -228,7 +228,7 @@ def _detail(body: bytes) -> dict[str, dict]:
             if row.get("own_code") == PRIVATE and row.get("disclosure_code") != "-"}
 
 
-def area_numbers(code: str, today: date | None = None) -> dict:
+def area_numbers(code: str, today: date | None = None) -> dict[str, Any]:
     """One area's newest quarter with industry detail: {"quarter": "2026 Q1", "rows": {...}, "note": ...}.
 
     Kept on disk, and looked for again after RECHECK_DAYS. Past quarters are kept as they were read.
@@ -267,7 +267,7 @@ def area_numbers(code: str, today: date | None = None) -> dict:
         return {"quarter": known["quarter"], "rows": json.loads(cached.read_text(encoding="utf-8")), "note": note}
 
 
-def combine(rows: dict[str, dict], codes: list[str]) -> dict[str, Any]:
+def combine(rows: dict[str, dict[str, Any]], codes: list[str]) -> dict[str, Any]:
     """The figures for an industry made of one or more codes, in one area.
 
     The BLS withholds a figure that would reveal one employer's numbers, so a code can be listed and
@@ -315,7 +315,7 @@ def _since(iso: str | None, today: date) -> int | None:
     return (today - parsed).days if parsed else None
 
 
-def history(jobs: list[dict], industry: dict, mentions_needed: int, today: date) -> dict:
+def history(jobs: list[dict[str, Any]], industry: dict[str, Any], mentions_needed: int, today: date) -> dict[str, Any]:
     """What Pyrite has seen of one industry: postings that passed the filters, and what came of applying."""
     matched = [job for job in jobs if score._in_industry(industry, job, mentions_needed)]
     recent = [job for job in matched if (_since(job["first_seen"], today) or 0) < SEEN_DAYS]
@@ -348,7 +348,7 @@ REPLIED = """(response_at IS NOT NULL AND (interview_at IS NOT NULL OR offer_at 
               (SELECT job_id FROM events WHERE kind IN ('responded', 'interviewing', 'offer')))) AS replied"""
 
 
-def view(conn, cfg: dict, today: date | None = None) -> dict:
+def view(conn, cfg: dict[str, Any], today: date | None = None) -> dict[str, Any]:
     """Everything the Industries tab shows, for every industry under [promote]."""
     today = today or datetime.now().date()
     promote = cfg.get("promote") or {}
@@ -357,9 +357,9 @@ def view(conn, cfg: dict, today: date | None = None) -> dict:
     first = min((job["first_seen"] for job in jobs), default=None)
     needed = promote.get("mentions_needed", 3)
 
-    places: list[dict] = []
+    places: list[dict[str, Any]] = []
     problems: list[str] = []
-    numbers: dict[str, dict] = {}
+    numbers: dict[str, dict[str, Any]] = {}
     titles: dict[str, str] = {}
     if any(i.get("naics") for i in industries):
         try:

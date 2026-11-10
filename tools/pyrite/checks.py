@@ -12,6 +12,7 @@ import unicodedata
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 
 from .store import ROOT, SENT_FOLDER, sent_copies
 
@@ -196,7 +197,7 @@ ORDINARY_CAPS = {
 }
 
 
-def _split_sections(text: str, title: re.Pattern) -> tuple[str, str]:
+def _split_sections(text: str, title: re.Pattern[str]) -> tuple[str, str]:
     """The text outside and inside the sections whose heading matches title, at any heading level. Such a section runs
     to the next heading at its own level or above, so its subsections go with it."""
     outside: list[str] = []
@@ -251,7 +252,7 @@ def unsupported_claims(text: str) -> list[str]:
     return [line for line in lines if line]
 
 
-def unenforced_claims(cfg: dict, read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
+def unenforced_claims(cfg: dict[str, Any], read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
     """Lines your approved sources list under "Unsupported" that no pattern under [guard] unsupported matches, each as
     (line, the file that lists it).
 
@@ -316,7 +317,7 @@ def unguarded_terms(facts: str, forbidden: list[str], own_name: str = "") -> lis
     return found
 
 
-def _names_something(before: str, first: re.Match, rest: str) -> bool:
+def _names_something(before: str, first: re.Match[str], rest: str) -> bool:
     """Whether the first capitalized word of a "Do not use" sentence is a name rather than a label or an instruction."""
     if before.strip():
         return True  # Capitalized in mid-sentence, as in "the Hive".
@@ -334,7 +335,7 @@ def _source_text(rel: str) -> str:
         return ""
 
 
-def listed_terms(cfg: dict, read: Callable[[str], str] | None = None) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
+def listed_terms(cfg: dict[str, Any], read: Callable[[str], str] | None = None) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
     """The names your approved sources list under "Do not use" that no pattern under [guard] forbidden blocks.
 
     The assay blocks each of these by name, as if forbidden had a pattern for it, so a name is written once, in the
@@ -363,7 +364,7 @@ def listed_terms(cfg: dict, read: Callable[[str], str] | None = None) -> tuple[l
     return blocked, shared
 
 
-def blocked_patterns(cfg: dict, read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
+def blocked_patterns(cfg: dict[str, Any], read: Callable[[str], str] | None = None) -> list[tuple[str, str]]:
     """Every pattern a draft must not match, each with where it comes from: "" for forbidden under [guard], or the
     file whose "Do not use" section names it."""
     return ([(_flexible(pattern), "") for pattern in cfg.get("guard", {}).get("forbidden", [])]
@@ -396,23 +397,23 @@ def _flexible(pattern: str) -> str:
     return rf"\b{body}{'s?' if pattern[-1].isalpha() and pattern[-1].lower() != 's' else ''}\b"
 
 
-def with_listed(guard: dict, cfg: dict, read: Callable[[str], str] | None = None) -> dict:
+def with_listed(guard: dict[str, Any], cfg: dict[str, Any], read: Callable[[str], str] | None = None) -> dict[str, Any]:
     """[guard] with a pattern added to forbidden for each name listed under "Do not use", as the assay reads it."""
     return {**guard, "forbidden": [pattern for pattern, _where in blocked_patterns({**cfg, "guard": guard}, read)]}
 
 
-def _confidential(label: str, match: re.Match, where: str) -> str:
+def _confidential(label: str, match: re.Match[str], where: str) -> str:
     listed = f", which {where} lists under \"Do not use\"" if where else ""
     return f"{label} uses a confidential term: {match.group(0)!r}{listed}"
 
 
-def missing_sources(cfg: dict) -> list[str]:
+def missing_sources(cfg: dict[str, Any]) -> list[str]:
     """Approved sources named in search.toml that aren't in the workspace. A copied example config names the example's
     own applications, so a new workspace has these until its owner points them at their own files."""
     return [rel for rel in cfg["guard"]["approved_sources"] if not (ROOT / rel).exists()]
 
 
-def _read_sources(cfg: dict) -> str:
+def _read_sources(cfg: dict[str, Any]) -> str:
     parts = []
     for rel in cfg["guard"]["approved_sources"]:
         path = ROOT / rel
@@ -477,7 +478,7 @@ def _number_errors(label: str, body: str, known: str, where: str) -> list[str]:
     return errors
 
 
-def _phrases(pattern: re.Pattern, text: str) -> set[str]:
+def _phrases(pattern: re.Pattern[str], text: str) -> set[str]:
     return {m.group(0).lower() for m in pattern.finditer(text)}
 
 
@@ -580,12 +581,12 @@ def _borrowed_terms(text: str, posting: str, vocab: set[str], allowed: set[str],
     return borrowed
 
 
-def _either_side(sentence: str, match: re.Match) -> tuple[str, str]:
+def _either_side(sentence: str, match: re.Match[str]) -> tuple[str, str]:
     """The words before and after a claim that could deny it."""
     return sentence[max(0, match.start() - DENIAL_WINDOW):match.start()], sentence[match.end():match.end() + DENIAL_WINDOW]
 
 
-def _disclaimed(before: str, after: str, disclaimers: list) -> bool:
+def _disclaimed(before: str, after: str, disclaimers: list[str]) -> bool:
     """Whether a sentence denies the claim it names.
 
     A negative counts when it leads up to the claim ("I have not led X"), or when you deny it in the
@@ -636,7 +637,7 @@ def _lookalike(word: str) -> bool:
     return folded != word and folded.isascii()
 
 
-def _fold_lookalikes(match: re.Match) -> str:
+def _fold_lookalikes(match: re.Match[str]) -> str:
     word = match.group(0)
     return word.translate(LOOKALIKES) if _lookalike(word) else word
 
@@ -658,7 +659,7 @@ def _set_aside(body: str, phrase: str) -> str:
     return re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", " ", body) if phrase else body
 
 
-def _unsupported(text: str, guard: dict, label: str) -> tuple[list[str], list[str]]:
+def _unsupported(text: str, guard: dict[str, Any], label: str) -> tuple[list[str], list[str]]:
     """Errors for unsupported claims, and the exact words of the claims that were properly disclaimed."""
     errors, disclaimed = [], []
     for sentence in SENTENCE.split(text):
@@ -674,7 +675,7 @@ def _unsupported(text: str, guard: dict, label: str) -> tuple[list[str], list[st
     return errors, disclaimed
 
 
-def explain(sentence: str, guard: dict) -> dict:
+def explain(sentence: str, guard: dict[str, Any]) -> dict[str, Any]:
     """How the confidential and unsupported checks read one piece of text, for the Profile tab's test box: the text as
     the checks see it, and each match in it as never (confidential), claim (unsupported and claimed) or denied
     (unsupported, but the sentence denies it). It uses the same patterns and the same reading of a denial as a draft's
@@ -700,7 +701,7 @@ def explain(sentence: str, guard: dict) -> dict:
 
 
 def check_text(
-    text: str, kind: str, cfg: dict, sources: str, company: str = "", title: str = "", contact_line: str | None = None,
+    text: str, kind: str, cfg: dict[str, Any], sources: str, company: str = "", title: str = "", contact_line: str | None = None,
     posting: str = "", blocked: list[tuple[str, str]] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Check one document's Markdown. kind is 'resume' or 'letter'. posting is the job's text, when there is one.
@@ -806,7 +807,7 @@ def wording_warnings(body: str, kind: str, label: str) -> list[str]:
     return warnings
 
 
-def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: str = "", posting: str = "") -> tuple[list[str], list[str]]:
+def check_brief(text: str, cfg: dict[str, Any], sources: str, company: str = "", title: str = "", posting: str = "") -> tuple[list[str], list[str]]:
     """Check an interview prep brief.
 
     It's private notes, so it has no name or contact line to match, and it may repeat what the posting
@@ -855,7 +856,7 @@ def check_brief(text: str, cfg: dict, sources: str, company: str = "", title: st
     return errors, warnings
 
 
-def check_resume_structure(text: str, cfg: dict) -> tuple[list[str], list[str]]:
+def check_resume_structure(text: str, cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     source = ROOT / cfg["guard"]["heading_source"]
@@ -943,7 +944,7 @@ def fingerprints(folder: Path) -> dict[str, str]:
 GUARD_KEY = "search.toml [guard]"
 
 
-def source_fingerprints(cfg: dict) -> dict[str, str]:
+def source_fingerprints(cfg: dict[str, Any]) -> dict[str, str]:
     """A hash of everything a pass was judged against: each approved source, the heading source and the [guard] rules.
     Taking a fact out of the bank, or a new pattern in [guard], means an earlier pass no longer says the draft is true."""
     guard = cfg["guard"]
@@ -957,7 +958,7 @@ def source_fingerprints(cfg: dict) -> dict[str, str]:
     return prints
 
 
-def sources_changed(cfg: dict, recorded: dict | None) -> list[str]:
+def sources_changed(cfg: dict[str, Any], recorded: dict[str, Any] | None) -> list[str]:
     """Which sources or rules changed after a pass. A pass from before these were recorded has nothing to compare."""
     if not recorded:
         return []
@@ -965,7 +966,7 @@ def sources_changed(cfg: dict, recorded: dict | None) -> list[str]:
     return sorted(name for name in set(recorded) | set(now) if recorded.get(name) != now.get(name))
 
 
-def changed_since(folder: Path, checked: dict) -> list[str]:
+def changed_since(folder: Path, checked: dict[str, Any]) -> list[str]:
     """Which of the files that passed have changed or gone since, plus a cover letter or a built document added
     afterwards. A pass recorded before the paste-box .txt files were covered says nothing about them."""
     covers_txt = any(name.endswith(".txt") for name in checked)
@@ -981,7 +982,7 @@ def changed_since(folder: Path, checked: dict) -> list[str]:
     return sorted(name for name in names if checked.get(name) != now[name])
 
 
-def not_covered(folder: Path, cfg: dict, result: dict | str | None) -> str:
+def not_covered(folder: Path, cfg: dict[str, Any], result: dict[str, Any] | str | None) -> str:
     """Why a job's last assay verdict doesn't vouch for its folder as it is now, or "" when it does.
 
     Anything that carries the draft's text to an employer asks this first. A pass covers the files it hashed,
@@ -1006,7 +1007,7 @@ def not_covered(folder: Path, cfg: dict, result: dict | str | None) -> str:
     return " ".join(reasons)
 
 
-def keyword_overlap(resume: str, description: str, cfg: dict) -> dict:
+def keyword_overlap(resume: str, description: str, cfg: dict[str, Any]) -> dict[str, Any]:
     """How many of the skill terms the posting uses also appear on the resume."""
     wanted, covered = [], []
     for pattern, _weight in cfg["scoring"]["keywords"]:
@@ -1020,7 +1021,7 @@ def keyword_overlap(resume: str, description: str, cfg: dict) -> dict:
     return {"pct": pct, "covered": covered, "missing": missing}
 
 
-def check_application(folder: Path, cfg: dict, company: str, title: str, description: str = "") -> dict:
+def check_application(folder: Path, cfg: dict[str, Any], company: str, title: str, description: str = "") -> dict[str, Any]:
     """Run every gate over an application folder."""
     errors, warnings = [], []
     sources = _read_sources(cfg)
@@ -1097,7 +1098,7 @@ POLISH_ASK = ("The fact checker passed your draft, so it's ready to send, but it
               "Fix them and change nothing else, adding no claim the fact bank doesn't support:")
 
 
-def polish_requests(report: dict, letter: bool = True) -> list[str]:
+def polish_requests(report: dict[str, Any], letter: bool = True) -> list[str]:
     """What's worth one more pass on a draft that passed: warnings a rewrite can clear, and too close a copy of the posting.
 
     The draft is ready without these. The daily run and a refresh still give it one more go, because a
@@ -1113,7 +1114,7 @@ def polish_requests(report: dict, letter: bool = True) -> list[str]:
     return asks
 
 
-def reads_as_copied(overlap: dict | None) -> str:
+def reads_as_copied(overlap: dict[str, Any] | None) -> str:
     """A sentence saying the resume uses too many of the posting's skill terms, or "" when it doesn't."""
     overlap = overlap or {}
     pct, covered = overlap.get("pct"), overlap.get("covered") or []

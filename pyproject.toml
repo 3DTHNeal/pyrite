@@ -101,6 +101,8 @@ mypy_path = "tools"
 ignore_missing_imports = true
 # Without this, mypy skips the body of every function that has no annotations, which is most of the commands.
 check_untyped_defs = true
+# A bare `dict` or `list` in an annotation says nothing about what's inside, so each one names its contents.
+disallow_any_generics = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 

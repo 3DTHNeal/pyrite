@@ -6,8 +6,6 @@ bullets) is mostly mechanical, so this reads it from the text python-docx or pdf
 which in its notes, so the person knows what to check. It never drops a line it couldn't place: those are kept as
 they are, and named.
 """
-from __future__ import annotations
-
 import re
 import shutil
 import subprocess

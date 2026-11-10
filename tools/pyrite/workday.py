@@ -20,6 +20,7 @@ import tomllib
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from . import checks, claude_code, store
@@ -40,7 +41,7 @@ OFF =("Workday autofill is experimental and off. To try it, add `autofill = true
        "in profile/search.toml. It never submits.")
 
 
-def is_workday(url: str) -> bool:
+def is_workday(url: str | None) -> bool:
     """Whether `url` is an https page on one of Workday's own hosts."""
     try:
         parts = urlparse((url or "").strip())
@@ -273,18 +274,18 @@ class Report:
         return "\n".join(lines)
 
 
-def states(conn) -> dict[int, dict]:
+def states(conn) -> dict[int, dict[str, Any]]:
     """Each job's latest autofill run, by job id."""
     return claude_code.latest(conn, STATE_NAMES, STALE_MINUTES, "The run stopped without reporting. Its log is in the job's folder.")
 
 
-def unchecked(job, cfg: dict | None = None) -> str:
+def unchecked(job, cfg: dict[str, Any] | None = None) -> str:
     """Why the assay doesn't vouch for the role text a fill would type into an employer's form, or "" when it does."""
     gap = checks.not_covered(store.ROOT / job["app_folder"], cfg or store.load_config(), job["check_result"])
     return f"{gap} Autofill types only role text that passed the assay, so check the job again first." if gap else ""
 
 
-def refusal(conn, job, cfg: dict | None = None) -> str | None:
+def refusal(conn, job, cfg: dict[str, Any] | None = None) -> str | None:
     """Why the dashboard can't start a fill for this job right now, if there's a reason."""
     if IS_EXAMPLE:
         return "The demo doesn't open a browser. In your own workspace, this types the fill sheet into the Workday form."
@@ -305,7 +306,7 @@ def refusal(conn, job, cfg: dict | None = None) -> str | None:
     return unchecked(job, cfg) or None
 
 
-def start(conn, job_id: int, cfg: dict | None = None) -> None:
+def start(conn, job_id: int, cfg: dict[str, Any] | None = None) -> None:
     """The dashboard button: check it can work, claim the job, then fill in a process of its own so the page doesn't wait."""
     job = get_job(conn, job_id)
     problem = refusal(conn, job, cfg)
@@ -836,7 +837,7 @@ def _add_after(page, heading: str):
     return button if button.count() else None
 
 
-def fill_roles(page, roles: list[dict], report: Report) -> None:
+def fill_roles(page, roles: list[dict[str, Any]], report: Report) -> None:
     """Each job in its own block, one at a time, so a field one block lacks or won't take can't stop the jobs after it."""
     titles = page.locator('[id^="workExperience-"][id$="--jobTitle"]')
     for i, role in enumerate(roles):
@@ -859,7 +860,7 @@ def fill_roles(page, roles: list[dict], report: Report) -> None:
             page.keyboard.press("Escape")
 
 
-def _fill_role(page, block: str, role: dict, report: Report, what: str) -> None:
+def _fill_role(page, block: str, role: dict[str, Any], report: Report, what: str) -> None:
     def box(suffix: str):
         found = page.locator(f'[id="{block}--{suffix}"]')
         return found.first if found.count() else None
@@ -945,7 +946,7 @@ def _remove_block(page, inside) -> None:
         inside.fill("")
 
 
-def fill_education(page, education: list[dict], report: Report) -> None:
+def fill_education(page, education: list[dict[str, Any]], report: Report) -> None:
     kept = 0  # Blocks on the form so far: an entry left off doesn't take up a place.
     for i, entry in enumerate(education):
         what = f"education {i + 1}"
@@ -1005,7 +1006,7 @@ def _year_box(page, block: str, name: str):
     return None
 
 
-def _education_details(page, block: str, entry: dict, report: Report, what: str) -> None:
+def _education_details(page, block: str, entry: dict[str, Any], report: Report, what: str) -> None:
     """An education entry's degree, field of study, GPA and years, once its school is in."""
     degree = _in_block(page, block, ["degree", "degreeType"], "button")
     if degree is not None and _is_unset(degree) and entry.get("degree"):
@@ -1121,7 +1122,7 @@ def upload_resume(page, files: dict[str, str], report: Report) -> None:
                                   + (f". It says: {said}" if said else "") + ". Check the Resume/CV section")
 
 
-def fill_experience(page, data: dict, report: Report, overrides: dict[str, str] | None = None) -> None:
+def fill_experience(page, data: dict[str, Any], report: Report, overrides: dict[str, str] | None = None) -> None:
     """Each section on its own, so a tenant's odd education block can't stop the skills or the resume from going in."""
     sections = (
         ("jobs", lambda: fill_roles(page, data.get("roles", []), report)),
@@ -1622,7 +1623,7 @@ def wait_for_turn(page, step: str, context) -> bool:
     return False
 
 
-def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | None = None, on_filled=None) -> Report:
+def run(data: dict[str, Any], url: str, root: Path, pause: bool = True, report: Report | None = None, on_filled=None) -> Report:
     """Open the application in a browser the candidate signs in to, fill what the sheet answers, and stop before Submit.
 
     `on_filled(report)` is called once the filling is over and before the browser is held open for the candidate.
@@ -1754,11 +1755,11 @@ def run(data: dict, url: str, root: Path, pause: bool = True, report: Report | N
     return report
 
 
-def load_sheet(path: Path) -> dict:
+def load_sheet(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def sheet_refusal(sheet: Path, cfg: dict | None = None) -> str | None:
+def sheet_refusal(sheet: Path, cfg: dict[str, Any] | None = None) -> str | None:
     """Why a fill sheet named on the command line mustn't be typed in, if there's a reason.
 
     The same gates `pyrite autofill` and the dashboard apply: the [workday] switch, a job that hasn't been sent, and an
