@@ -615,7 +615,7 @@ class Steps(unittest.TestCase):
 
     def test_where_says_what_it_holds_on_the_hub(self):
         step = next(s for s in profile.view()["steps"] if s["id"] == "where")
-        self.assertEqual(step["summary"], "11 local places, remote")
+        self.assertEqual(step["summary"], "11 location patterns, remote")
         self.assertNotIn("Until it's built", step["meanwhile"])
 
     # ---- Roles you want ----

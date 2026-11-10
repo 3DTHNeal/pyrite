@@ -1,7 +1,8 @@
 "use strict";
 // Where you'll work: the places that count as local, whether remote roles and relocation do, and the area the
 // Industries tab looks up, from [location] and [market] in search.toml. Places are plain names; the patterns written
-// by hand under local and local_exact stay, and Advanced shows and edits them. Every draft judges a location you type,
+// by hand under local and local_exact stay, and Advanced shows and edits them, with the remote_home and
+// remote_elsewhere lists that replace the built-in reading of a remote role's place. Every draft judges a location you type,
 // and the prospects already found, with the filters' own code and the settings as drafted.
 
 profileStep("where", {
@@ -11,6 +12,7 @@ profileStep("where", {
     if (!memo.form) {
       memo.form = {
         places: [...data.places], local: [...data.local], local_exact: [...data.local_exact],
+        remote_home: [...(data.remote_home || [])], remote_elsewhere: [...(data.remote_elsewhere || [])],
         accept_remote: data.accept_remote, accept_relocation: data.accept_relocation,
         market: { ...data.market }, test: "",
       };
@@ -32,10 +34,12 @@ profileStep("where", {
         last = result.preview;
         showTest();
         showProspects();
+        linkPromoted(result);
       }
     });
     const changed = (now) => send({
       places: form.places, local: form.local, local_exact: form.local_exact,
+      remote_home: form.remote_home, remote_elsewhere: form.remote_elsewhere,
       accept_remote: form.accept_remote, accept_relocation: form.accept_relocation, market: form.market, test: form.test,
     }, now);
 
@@ -62,11 +66,22 @@ profileStep("where", {
     const placesBox = h("div", { class: "profile-chips" });
     const localBox = h("div", { class: "profile-chips" });
     const exactBox = h("div", { class: "profile-chips" });
+    const homeBox = h("div", { class: "profile-chips" });
+    const elsewhereBox = h("div", { class: "profile-chips" });
     const draw = () => {
       chips(placesBox, data.places, form.places, "profile-chip", "No places yet.");
       chips(localBox, data.local, form.local, "profile-chip pattern", "No patterns.");
       chips(exactBox, data.local_exact, form.local_exact, "profile-chip pattern", "No patterns.");
+      chips(homeBox, data.remote_home || [], form.remote_home, "profile-chip pattern", "Not set.");
+      chips(elsewhereBox, data.remote_elsewhere || [], form.remote_elsewhere, "profile-chip pattern", "Not set.");
     };
+
+    // A promoted city that isn't one of your places is named in the notes; this links to where it's set.
+    function linkPromoted(result) {
+      const callout = review.querySelector(".callout.info");
+      if (!callout || !result.count || !(result.preview.promoted_out || []).length) return;
+      callout.append(h("p", {}, h("a", { href: "#settings/ranking" }, "Settings › Cities and industries")));
+    }
 
     const adder = (placeholder, button, list) => {
       const field = h("input", { type: "text", placeholder, "aria-label": placeholder, disabled: off });
@@ -139,12 +154,6 @@ profileStep("where", {
       return profileField(label, input, help);
     };
 
-    const remoteLists = [["remote_home", "Remote open to you"], ["remote_elsewhere", "Remote open elsewhere"]]
-      .filter(([key]) => data[key] !== null)
-      .map(([key, label]) => h("div", { class: "stack" }, h("b", {}, `${label}: ${key} under [location]`),
-        h("div", { class: "profile-chips" }, data[key].length ? data[key].map((p) => h("span", { class: "profile-chip pattern" }, h("span", {}, p)))
-          : h("span", { class: "muted" }, "Empty."))));
-
     const main = h("div", { class: "stack profile-form" },
       h("section", { class: "panel stack", "aria-label": "Your places" },
         h("h3", { class: "profile-sub" }, "Places that count as local"),
@@ -187,8 +196,11 @@ profileStep("where", {
           adder("A pattern, such as springfield[\\s,]*il\\b", "Add pattern", form.local)),
         h("div", { class: "stack" }, h("b", {}, "local_exact under [location]"), exactBox,
           adder("A pattern, such as , IL\\b", "Add pattern", form.local_exact)),
-        remoteLists.length ? h("p", { class: "muted" }, "These lists replace the built-in reading of a remote role's place, which assumes you're in the US. Change them in profile/search.toml.") : null,
-        remoteLists),
+        h("p", { class: "muted" }, "Remote roles are read with built-in lists that assume you're in the US, so “Remote - US” is open to you and “Remote - Germany” isn't. Elsewhere, set both of these and they replace those lists: a remote role naming one under remote_home is open to you, and one naming only those under remote_elsewhere isn't. Taking off the last pattern of one takes the list away."),
+        h("div", { class: "stack" }, h("b", {}, "Remote open to you: remote_home under [location]"), homeBox,
+          adder("A pattern, such as \\buk\\b", "Add pattern", form.remote_home)),
+        h("div", { class: "stack" }, h("b", {}, "Remote open elsewhere: remote_elsewhere under [location]"), elsewhereBox,
+          adder("A pattern, such as united states", "Add pattern", form.remote_elsewhere))),
       review);
     draw();
     showTest();

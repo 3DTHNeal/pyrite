@@ -1729,6 +1729,8 @@ MAX_PLACE = 120
 # Prospects whose place would count differently are listed up to this many. The counts cover all of them.
 MOVES_SHOWN = 12
 MARKET_KEYS = ("state", "metro", "country")
+# The lists that replace the built-in reading of a remote role's place, which assumes you're in the US.
+WHERE_REMOTE_LISTS = ("remote_home", "remote_elsewhere")
 
 
 def _where_view(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -1771,6 +1773,10 @@ def _why_place(location: str, cfg: dict[str, Any]) -> str:
                 continue
     kind = score.classify_location(location, "", cfg)
     remote = bool(score.REMOTE.search(location))
+    if remote and loc.get("accept_remote", True):
+        mine = _where_remote_why(location, loc)
+        if mine:
+            return mine
     if kind == "remote":
         return "It reads as a remote role open to you."
     if kind == "unknown":
@@ -1781,6 +1787,54 @@ def _why_place(location: str, cfg: dict[str, Any]) -> str:
     if remote:
         return "It reads as remote, and you don't take remote roles."
     return "It isn't one of your places, and you won't relocate."
+
+
+def _where_remote_why(location: str, loc: dict[str, Any]) -> str | None:
+    """Why a remote role is open to you or not by your own remote_home and remote_elsewhere, or None when neither is
+    set and the built-in lists judge it."""
+    home, elsewhere = loc.get("remote_home"), loc.get("remote_elsewhere")
+    if home is None and elsewhere is None:
+        return None
+    for key, said in (("remote_home", "so it's a remote role open to you"),
+                      ("remote_elsewhere", "and nothing under remote_home, so it's open only somewhere else")):
+        for pattern in loc.get(key) or []:
+            try:
+                if re.search(pattern, location, re.I):
+                    return f"It matches the pattern {pattern!r} under {key}, {said}."
+            except re.error:
+                continue
+    return "It matches nothing under remote_home or remote_elsewhere, so it's taken as a remote role open to you."
+
+
+def _where_remote_notes(where: dict[str, Any]) -> list[str]:
+    """What's off when one remote list is set without the other. Either replaces the built-in lists, so the one left
+    empty matches nothing rather than falling back to them."""
+    home, elsewhere = where["remote_home"], where["remote_elsewhere"]
+    if not where["accept_remote"] or (home is None and elsewhere is None) or bool(home) == bool(elsewhere):
+        return []
+    if home:
+        return ["remote_home is set and remote_elsewhere isn't. Either list replaces the built-in reading of a remote "
+                "role's place, so with nothing under remote_elsewhere, no remote role is dropped for where it's open. "
+                "Add the places that aren't open to you there."]
+    return ["remote_elsewhere is set and remote_home isn't. Either list replaces the built-in reading of a remote "
+            "role's place, so a remote role naming one of these is dropped even when it also names a place open to "
+            "you. Add the places that are open to you under remote_home."]
+
+
+def _where_promoted_out(cfg: dict[str, Any]) -> list[str]:
+    """The cities under [promote] that [location] drops an onsite posting from, judged by each one's name as the
+    filters judge a posting's place."""
+    cities = (cfg.get("promote") or {}).get("cities") or []
+    names = [str(city.get("name") or "").strip() for city in cities if isinstance(city, dict)]
+    return [name for name in dict.fromkeys(names) if name and score.classify_location(name, "", cfg) == "out"]
+
+
+def _where_promoted_note(names: list[str]) -> str:
+    if len(names) == 1:
+        return (f"{names[0]} is promoted under Settings › Cities and industries, but isn't one of your places, so its "
+                "onsite postings are dropped before promotion counts. Add it as a place, or change it there.")
+    return (f"{_and(names)} are promoted under Settings › Cities and industries, but aren't among your places, so "
+            "their onsite postings are dropped before promotion counts. Add them as places, or change them there.")
 
 
 def _place_prospects(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any] | None:
@@ -1862,15 +1916,19 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
                                             add=[p for p in places if p not in before])
             count += len(set(places) ^ set(before))
 
-    for key in ("local", "local_exact"):
+    for key in ("local", "local_exact", *WHERE_REMOTE_LISTS):
         if key not in edits:
             continue
-        before = shown[key]
+        before = shown[key] or []
         wanted = [_pattern(raw) if raw not in before else raw for raw in _list(edits[key], f"The patterns under {key}", str)]
         wanted = list(dict.fromkeys(wanted))
         if set(wanted) != set(before):
-            config = tomledit.edit_list(config, "location", key, remove=[p for p in before if p not in wanted],
-                                        add=[p for p in wanted if p not in before], literal=True)
+            if not wanted and key in WHERE_REMOTE_LISTS:
+                # An empty list would still replace the built-in one, so taking off the last pattern takes the key.
+                config = tomledit.delete_value(config, "location", key)
+            else:
+                config = tomledit.edit_list(config, "location", key, remove=[p for p in before if p not in wanted],
+                                            add=[p for p in wanted if p not in before], literal=True)
             count += len(set(wanted) ^ set(before))
 
     for key in ("accept_remote", "accept_relocation"):
@@ -1908,12 +1966,19 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
     if not after["places"] and not after["local"] and not after["local_exact"] and not after["accept_remote"] \
             and not after["accept_relocation"]:
         notes.append("With no places, no remote roles and no relocation, every posting that names a place is dropped.")
-    filters_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_remote", "accept_relocation"))
+    filters_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_remote",
+                                                               "accept_relocation", *WHERE_REMOTE_LISTS))
     prospects = _place_prospects(old_cfg, new_cfg)
     if filters_changed and prospects and prospects["moved"]:
         notes.append("Prospects already found keep their place and score until `pyrite rescore`, which drops the ones "
                      "that no longer pass, unless you've acted on them. `pyrite discover --fresh` gives postings dropped "
                      "before another look.")
+    notes += _where_remote_notes(after)
+    # Named when the edit changes which onsite places count, so a change to remote roles or the area doesn't repeat it.
+    onsite_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_relocation"))
+    promoted_out = _where_promoted_out(new_cfg) if onsite_changed else []
+    if promoted_out:
+        notes.append(_where_promoted_note(promoted_out))
     if chosen != shown["market"]:
         notes += _market_notes(chosen)
 
@@ -1922,7 +1987,7 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
     if test:
         tested = {"location": test, "now": _place_kind(test, "", old_cfg), "after": _place_kind(test, "", new_cfg),
                   "why": _why_place(test, new_cfg)}
-    return Draft(out, count, notes, {"test": tested, "prospects": prospects, "where": after})
+    return Draft(out, count, notes, {"test": tested, "prospects": prospects, "where": after, "promoted_out": promoted_out})
 
 
 # ---------- Roles you want ----------
