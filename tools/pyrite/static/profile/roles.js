@@ -242,7 +242,7 @@ profileStep("roles", {
       h("section", { class: "panel stack", "aria-label": "Try a title" },
         h("h3", { class: "profile-sub" }, "Try a title"), title, tested),
       h("section", { class: "panel stack", "aria-label": "Your prospects" },
-        h("h3", { class: "profile-sub" }, "Your prospects with these changes"), prospects),
+        h("h3", { class: "profile-sub" }, "Your prospects with these changes"), prospects, profileRescore()),
       h("details", { class: "profile-advanced" }, h("summary", {}, "Advanced: points for skills, and flags"),
         h("p", { class: "muted" }, `A posting scores 25 for its role type, up to 10 for seniority, 15 for local or 10 for remote, and the points for each skill pattern it mentions, up to 40 in all. Flags take points off and mark the card. Below ${data.min_score} it isn't kept.`),
         h("b", {}, "Skill points"), rowsBox,
@@ -260,7 +260,7 @@ profileStep("roles", {
       aside: h("div", { class: "panel stack" }, h("h2", {}, "How a title is read"),
         h("p", {}, "A plain title such as “data engineer” matches as whole words in any case, so it takes “Senior Data Engineer, Platform” but not “Data Engineering Manager”."),
         h("p", {}, "Order matters: a title goes to the first role type that takes it, and that decides what its drafts lead with."),
-        h("p", { class: "muted" }, "Saving changes search.toml, not the prospects you have. `pyrite rescore` scores them again, as the preview shows, and `pyrite discover --fresh` looks again at postings dropped before.")),
+        h("p", { class: "muted" }, "Saving changes search.toml, not the prospects you have. Rescore now, under Your prospects once you've saved, scores them again as the preview shows, or the next pan does before it reads the boards. `pyrite discover --fresh` looks again at postings dropped before.")),
     };
   },
 });

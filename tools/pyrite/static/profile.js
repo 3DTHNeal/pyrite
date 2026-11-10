@@ -78,6 +78,50 @@ function profileField(label, input, help) {
   return h("label", { class: "profile-field" }, h("span", {}, label), input, help ? h("small", { class: "muted" }, help) : null);
 }
 
+// Rescore now, for Roles you want and Where you'll work: once a save leaves prospects scored by settings that have
+// changed since, it says how many would move and offers to score them again as `pyrite rescore` does, backing up the
+// database first. It goes by the settings as saved, so a change waiting to be saved doesn't count yet.
+function profileRescore() {
+  const box = h("div", { class: "stack", "aria-live": "polite" });
+  const draw = (state, done) => {
+    const due = state.due;
+    if (due.error) {
+      fill(box, h("div", { class: "callout bad" }, h("b", {}, due.error)));
+      return;
+    }
+    const said = done ? h("div", { class: "callout good" }, done.said.split("\n").map((line) => h("p", {}, line)),
+      h("p", { class: "muted" }, `The database as it was before is in ${done.backup.folder}/${done.backup.name}.`)) : null;
+    if (!due.changed && !due.dropped) {
+      fill(box, said);
+      return;
+    }
+    const error = h("p", { class: "error", role: "alert" });
+    const go = h("button", { class: "btn primary", type: "button", disabled: Boolean(state.why_not) }, "Rescore now");
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      error.textContent = "";
+      try {
+        const result = await api("/api/profile/rescore", {});
+        toast(`Rescored your prospects. The database as it was before is in ${result.backup.folder}.`);
+        draw(result, result);
+      } catch (err) {
+        error.textContent = err.message;
+        go.disabled = false;
+      }
+    });
+    const moves = [due.changed ? `${due.changed} would score differently` : "", due.dropped ? `${due.dropped} would be dropped` : ""];
+    fill(box, said, h("div", { class: "callout info stack" },
+      h("b", {}, `Your prospects were scored before your latest settings. Of ${profileCount(due.total, "prospect")}, ${moves.filter(Boolean).join(" and ")}.`),
+      due.held ? h("p", {}, `${profileCount(due.held, "prospect")} you've acted on would be kept as ${due.held === 1 ? "it is" : "they are"}.`) : null,
+      h("div", { class: "part-actions" }, go, h("span", { class: "muted" }, state.why_not || "It backs up data/pyrite.db first, as Back up now does.")),
+      error,
+      h("p", { class: "muted" }, "Or leave them: the next pan scores them again before it reads the boards.",
+        state.last_pan ? ` The latest pan started ${profileWhen(state.last_pan)}.` : "")));
+  };
+  api("/api/profile/rescore").then((state) => draw(state, null), (err) => fill(box, h("p", { class: "error", role: "alert" }, err.message)));
+  return box;
+}
+
 let profileData = null;
 let profileAt = ""; // "" for the hub, or the open section's id.
 let profilePending = null; // { changes, count } while the open section has edits that aren't saved.
