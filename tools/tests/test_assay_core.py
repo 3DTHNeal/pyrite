@@ -1,14 +1,20 @@
 """The assay package stays general and self-contained, so another tool can use it and it can move to a repository of
 its own. Nothing in it may know about Pyrite, and nothing in it may do more than read the text it's given."""
 import ast
+import contextlib
+import io
 import re
+import sys
 import unittest
+import unittest.mock as mock
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 
 from support import CODE_ROOT
 
 from assay import claims, factbank, names, numbers, seal, terms
 from assay import text as reading
+from pyrite import __main__ as entry
 
 PACKAGE = CODE_ROOT / "tools" / "assay"
 # The standard library the assay may use: text, numbers, hashes and types. No subprocess, socket, os, sqlite3 or
@@ -89,6 +95,42 @@ class WorksOnItsOwn(unittest.TestCase):
         before = {"facts.md": seal.digest(b"one"), "rules": seal.value_digest({"b": 1, "a": 2})}
         after = {"facts.md": seal.digest(b"two"), "rules": seal.value_digest({"a": 2, "b": 1})}
         self.assertEqual(seal.changed(before, after), ["facts.md"])
+
+
+class SaysWhyItWontLoad(unittest.TestCase):
+    """An install that can't reach tools/assay gets a reason and a fix, not a traceback from deep inside an import."""
+
+    def spec_at(self, folder: Path):
+        return ModuleSpec("assay", None, origin=str(folder / "__init__.py"))
+
+    def run_with(self, spec):
+        with mock.patch.object(entry.importlib.util, "find_spec", return_value=spec), \
+                mock.patch.object(sys, "argv", ["pyrite", "--version"]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                entry.run()
+            except SystemExit as exit_:
+                return str(exit_.code)
+        return ""
+
+    def test_the_clones_own_package_is_no_problem(self):
+        self.assertEqual(entry.assay_problem(), "")
+        with mock.patch.object(entry.importlib.util, "find_spec", return_value=self.spec_at(PACKAGE)):
+            self.assertEqual(entry.assay_problem(), "")
+
+    def test_a_strict_editable_install_is_told_to_reinstall(self):
+        message = self.run_with(None)
+        self.assertIn("can't find its fact checker", message)
+        self.assertIn("strict mode", message)
+        self.assertIn("pip install -e .", message)
+        self.assertIn("python tools/pyrite.py", message)
+
+    def test_another_package_called_assay_is_named(self):
+        elsewhere = Path(sys.prefix) / "Lib" / "site-packages" / "assay"
+        message = self.run_with(self.spec_at(elsewhere))
+        self.assertIn("different package named assay", message)
+        self.assertIn(str(elsewhere.resolve()), message)
+        self.assertIn("python tools/pyrite.py", message)
 
 
 if __name__ == "__main__":
