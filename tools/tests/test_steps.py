@@ -6,6 +6,7 @@ import tempfile
 import tomllib
 import unittest
 import unittest.mock as mock
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,8 @@ class Steps(unittest.TestCase):
             ("masters", {"resume": {"headline": self.view["master_blocks"]["resume"]["headline"],
                                     "blocks": self.view["master_blocks"]["resume"]["blocks"]},
                          "letter": {"body": self.view["master_blocks"]["letter"]["body"]}}),
+            ("where", {key: self.view["where"][key] for key in
+                       ("places", "local", "local_exact", "accept_remote", "accept_relocation", "market")}),
         ):
             result = self.draft(step, edits)
             self.assertEqual((result["changes"], result["count"]), ({}, 0), step)
@@ -471,6 +474,129 @@ class Steps(unittest.TestCase):
         self.assertFalse(self.view["master_blocks"]["resume"]["exists"])
         with self.assertRaises(ValueError):
             self.draft("masters", {"resume": {"headline": "x"}})
+
+    # ---- Where you'll work ----
+
+    def where(self, **changes):
+        form = {key: self.view["where"][key] for key in
+                ("places", "local", "local_exact", "accept_remote", "accept_relocation", "market")}
+        return self.draft("where", {**form, **changes})
+
+    def test_where_shows_the_patterns_and_the_area(self):
+        where = self.view["where"]
+        self.assertEqual(where["places"], [])
+        self.assertIn("sun prairie", where["local"])
+        self.assertIn(", WI\\b", where["local_exact"])
+        self.assertEqual((where["accept_remote"], where["accept_relocation"]), (True, False))
+        self.assertEqual(where["market"], {"state": "Wisconsin", "metro": "Madison, WI", "country": ""})
+        self.assertIsNone(where["remote_home"])
+
+    def test_an_unchanged_where_leaves_search_toml_byte_for_byte(self):
+        before = (self.root / "profile" / "search.toml").read_bytes()
+        result = self.where(test="Remote - US")
+        self.assertEqual((result["changes"], result["count"]), ({}, 0))
+        # The hand-written patterns, given back in another order, are no change either.
+        self.assertEqual(self.where(local=self.view["where"]["local"][::-1])["changes"], {})
+        self.assertEqual((self.root / "profile" / "search.toml").read_bytes(), before)
+
+    def test_adding_places_keeps_the_patterns_and_comments(self):
+        result = self.where(places=["Springfield, IL", "Oak Park", "oak park", " "])
+        config = lf(result, "config")
+        self.assertIn('accept_relocation = false # onsite roles elsewhere are dropped\nplaces = ["Springfield, IL", "Oak Park"]\n', config)
+        self.assertIn("# Either or both will do. Madison is tied to Wisconsin here", config)
+        self.assertEqual(tomllib.loads(config)["location"]["local"], self.view["where"]["local"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["code"], [])  # Where you'll work never lets a draft say more.
+        self.save(result)
+        self.assertEqual(self.view["where"]["places"], ["Springfield, IL", "Oak Park"])
+        config = lf(self.where(places=["Oak Park"]), "config")
+        self.assertIn('places = ["Oak Park"]\n', config)
+
+    def test_a_place_written_without_brackets_becomes_a_list(self):
+        path = self.root / "profile" / "search.toml"
+        path.write_bytes(path.read_bytes().replace(b"accept_remote = true", b'places = "Oak Park"\naccept_remote = true'))
+        self.view = {**profile.view(), **steps.view()}
+        self.assertEqual(self.view["where"]["places"], ["Oak Park"])
+        self.assertEqual(tomllib.loads(lf(self.where(places=["Oak Park", "Evanston"]), "config"))["location"]["places"],
+                         ["Oak Park", "Evanston"])
+
+    def test_patterns_and_toggles_change_a_key_at_a_time(self):
+        local = [p for p in self.view["where"]["local"] if p != "verona"] + ["\\bfitchburg\\b"]
+        result = self.where(local=local, accept_remote=False, accept_relocation=True)
+        config = lf(result, "config")
+        self.assertIn("accept_remote = false      # US remote roles count\n", config)
+        self.assertIn("accept_relocation = true # onsite roles elsewhere are dropped\n", config)
+        self.assertIn("  '\\bfitchburg\\b',\n]", config)
+        self.assertNotIn("'verona'", config)
+        self.assertEqual(result["count"], 4)
+
+    def test_the_area_for_the_industries_tab(self):
+        result = self.where(market={"state": "Illinois", "metro": "", "country": "United States"})
+        config = lf(result, "config")
+        self.assertIn('[market]\nstate = "Illinois"\ncountry = "United States"\n', config)
+        self.assertNotIn("metro =", config)
+        self.assertIn('# model = "claude-sonnet-5-5"', config)  # Settings' key, left alone.
+        notes = self.where(market={"state": "Ontario", "metro": "", "country": "Canada"})["notes"]
+        self.assertTrue(any("United States only" in note for note in notes), notes)
+
+    def test_a_bad_area_is_named_from_the_bls_list_when_pyrite_has_it(self):
+        titles = {"17000": "Illinois -- Statewide", "C4418": "Springfield, IL MSA"}
+        with mock.patch.object(steps.market, "_fresh", return_value=True), \
+                mock.patch.object(steps.market, "area_titles", return_value=titles):
+            self.assertEqual(self.where(market={"state": "Illinois", "metro": "Springfield, IL"})["notes"], [])
+            notes = self.where(market={"state": "Illinoise", "metro": "Springfield"})["notes"]
+        self.assertTrue(any("no state is called 'Illinoise'" in note for note in notes), notes)
+
+    def test_a_location_is_judged_with_the_settings_as_drafted(self):
+        for text, kind, why in (("Remote - US", "remote", "remote role open to you"),
+                                ("Madison, Wisconsin", "local", "madison"),
+                                ("Springfield, Illinois", "out", "won't relocate"),
+                                ("Remote - Germany", "out", "open only somewhere else")):
+            tested = self.where(test=text)["preview"]["test"]
+            self.assertEqual((tested["now"], tested["after"]), (kind, kind), text)
+            self.assertIn(why, tested["why"], text)
+        tested = self.where(places=["Springfield, IL"], test="Springfield, Illinois")["preview"]["test"]
+        self.assertEqual((tested["now"], tested["after"]), ("out", "local"))
+        self.assertIn("“Springfield, IL”", tested["why"])
+        tested = self.where(accept_remote=False, test="Remote - US")["preview"]["test"]
+        self.assertEqual((tested["now"], tested["after"]), ("remote", "out"))
+
+    def test_the_prospects_are_counted_before_and_after(self):
+        path = self.root / "data" / "pyrite.db"
+        with closing(store.connect(path)) as conn:
+            for index, (location, status, source) in enumerate((
+                    ("Madison, WI", "new", "greenhouse:a"), ("Remote - US", "new", "greenhouse:a"),
+                    ("Springfield, IL", "new", "lever:b"), ("Springfield, IL", "applied", "lever:b"),
+                    ("Springfield, IL", "new", "manual"))):
+                conn.execute("INSERT INTO jobs (source_key, source_id, company, title, location, status, first_seen, last_seen) "
+                             "VALUES (?, ?, 'Acme', 'Staff Engineer', ?, ?, '', '')", (source, str(index), location, status))
+            conn.commit()
+        with mock.patch.object(store, "DB_PATH", path):
+            found = self.where(places=["Springfield, IL"], accept_remote=False)["preview"]["prospects"]
+            self.assertEqual(found["total"], 3)  # Only prospects from the boards: not sent, and not added by hand.
+            self.assertEqual((found["now"]["local"], found["now"]["remote"], found["now"]["out"]), (1, 1, 1))
+            self.assertEqual((found["after"]["local"], found["after"]["remote"], found["after"]["out"]), (2, 0, 1))
+            self.assertEqual([(m["location"], m["now"], m["after"]) for m in found["moves"]],
+                             [("Remote - US", "remote", "out"), ("Springfield, IL", "out", "local")])
+            notes = self.where(places=["Springfield, IL"])["notes"]
+            self.assertTrue(any("pyrite rescore" in note for note in notes), notes)
+        with mock.patch.object(store, "DB_PATH", self.root / "data" / "none.db"):
+            self.assertIsNone(self.where()["preview"]["prospects"])
+        self.assertFalse((self.root / "data" / "none.db").exists())
+
+    def test_bad_where_input_is_refused(self):
+        for changes in ({"places": "Oak Park"}, {"places": ["Oak\nPark"]}, {"places": ["--"]}, {"places": ["x" * 200]},
+                        {"local": ["(unclosed"]}, {"local": [".*"]}, {"local_exact": [3]}, {"accept_remote": "yes"},
+                        {"market": "Illinois"}, {"market": {"state": "Illi\nnois"}}):
+            with self.assertRaises(ValueError, msg=changes):
+                self.where(**changes)
+        # A hand-written pattern already in the file is kept as it is, even one the form wouldn't take today.
+        self.assertEqual(self.where(local=self.view["where"]["local"])["changes"], {})
+
+    def test_where_says_what_it_holds_on_the_hub(self):
+        step = next(s for s in profile.view()["steps"] if s["id"] == "where")
+        self.assertEqual(step["summary"], "11 local places, remote")
+        self.assertNotIn("Until it's built", step["meanwhile"])
 
     # ---- the server ----
 

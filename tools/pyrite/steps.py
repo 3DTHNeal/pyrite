@@ -17,7 +17,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, factsdoc, gaps, profile, store, tomledit
+from . import checks, confirm, factsdoc, gaps, market, profile, score, store, tomledit
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -261,6 +261,7 @@ def view() -> dict[str, Any]:
                           "letter": master_blocks(texts["letter"], "letter")},
         "wording": _wording(texts["run_notes"]),
         "gaps": _gaps_view(),
+        "where": _where_view(cfg),
     }
 
 
@@ -1404,5 +1405,206 @@ def _gap_answers(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, An
     return Draft({**texts, "facts": facts}, count, notes, {})
 
 
+# ---------- Where you'll work ----------
+
+MAX_PLACE = 120
+# Prospects whose place would count differently are listed up to this many. The counts cover all of them.
+MOVES_SHOWN = 12
+MARKET_KEYS = ("state", "metro", "country")
+
+
+def _where_view(cfg: dict[str, Any]) -> dict[str, Any]:
+    """[location] and [market] as Where you'll work edits them. accept_remote and accept_relocation are as the filters
+    read them when they're left out: remote taken, relocation not."""
+    loc = cfg.get("location") or {}
+    chosen = cfg.get("market") or {}
+    patterns = lambda key: [str(p) for p in loc.get(key) or []]
+    return {
+        "places": score._plain(loc.get("places")),
+        "local": patterns("local"), "local_exact": patterns("local_exact"),
+        "accept_remote": bool(loc.get("accept_remote", True)), "accept_relocation": bool(loc.get("accept_relocation", False)),
+        "remote_home": patterns("remote_home") if loc.get("remote_home") is not None else None,
+        "remote_elsewhere": patterns("remote_elsewhere") if loc.get("remote_elsewhere") is not None else None,
+        "market": {key: str(chosen.get(key) or "") for key in MARKET_KEYS},
+    }
+
+
+def _place_kind(location: str, workplace: str, cfg: dict[str, Any], company: str = "", title: str = "") -> str:
+    """local, remote, unknown or out, as the filters judge a posting's place, or elsewhere for one kept outside your
+    area because it's in an industry kept anywhere."""
+    kind = score.classify_location(location, workplace, cfg)
+    if kind == "out" and company and score.kept_anywhere(company, title, location, cfg):
+        return score.ELSEWHERE
+    return kind
+
+
+def _why_place(location: str, cfg: dict[str, Any]) -> str:
+    """Why a place is judged as it is, in words."""
+    loc = cfg["location"]
+    for place in score._plain(loc.get("places")):
+        if re.search(score.plain_pattern(place, place=True), location, re.I):
+            return f"It matches “{place}”, one of your places."
+    for key, flags in (("local", re.I), ("local_exact", 0)):
+        for pattern in loc.get(key) or []:
+            try:
+                if re.search(pattern, location, flags):
+                    return f"It matches the pattern {pattern!r} under {key}."
+            except re.error:
+                continue
+    kind = score.classify_location(location, "", cfg)
+    remote = bool(score.REMOTE.search(location))
+    if kind == "remote":
+        return "It reads as a remote role open to you."
+    if kind == "unknown":
+        return "It names no place to judge, so it's kept." if not location.strip() or score.MULTI_LOCATION.match(location) \
+            else "It isn't one of your places, but you'll relocate, so it's kept."
+    if remote and loc.get("accept_remote", True):
+        return "It reads as a remote role open only somewhere else."
+    if remote:
+        return "It reads as remote, and you don't take remote roles."
+    return "It isn't one of your places, and you won't relocate."
+
+
+def _prospects(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any] | None:
+    """How the prospects found on the boards count now and would count with the draft, from the database read-only,
+    or None when there isn't one to read."""
+    if not store.DB_PATH.is_file():
+        return None
+    try:
+        with closing(sqlite3.connect(f"{store.DB_PATH.as_uri()}?mode=ro", uri=True)) as conn:
+            rows = conn.execute("SELECT company, title, location, workplace FROM jobs "
+                                "WHERE status = 'new' AND source_key NOT IN ('seed', 'manual')").fetchall()
+    except sqlite3.Error:
+        return None
+    kinds = ("local", "remote", "unknown", score.ELSEWHERE, "out")
+    now = dict.fromkeys(kinds, 0)
+    then = dict.fromkeys(kinds, 0)
+    moves = []
+    for company, title, location, workplace in rows:
+        args = (location or "", workplace or "")
+        was = _place_kind(*args, before, company or "", title or "")
+        will = _place_kind(*args, after, company or "", title or "")
+        now[was] += 1
+        then[will] += 1
+        if was != will:
+            moves.append({"company": company, "title": title, "location": location or "", "now": was, "after": will})
+    moves.sort(key=lambda move: (move["after"] != "out", move["company"] or "", move["title"] or ""))
+    return {"total": len(rows), "now": now, "after": then, "moved": len(moves), "moves": moves[:MOVES_SHOWN]}
+
+
+def _market_notes(chosen: dict[str, str]) -> list[str]:
+    """What the Industries tab would say is wrong with [market], judged against the BLS's list of areas when Pyrite
+    has a recent copy of it. Nothing is downloaded for a draft."""
+    if (chosen["country"] or "United States").strip().lower() not in market.US_NAMES:
+        return ["The official employment numbers cover the United States only, so the Industries tab shows what Pyrite "
+                "has seen and the researched outlook instead."] if chosen["state"] or chosen["metro"] else []
+    if not (chosen["state"] or chosen["metro"]) or not market._fresh(market.cache_dir() / "area_titles.csv", market.TITLES_DAYS):
+        return []
+    try:
+        titles = market.area_titles()
+    except market.Unavailable:
+        return []
+    notes = []
+    for key, finder in (("metro", market.find_metro), ("state", market.find_state)):
+        if chosen[key]:
+            try:
+                finder(titles, chosen[key])
+            except ValueError as err:
+                notes.append(str(err))
+    return notes
+
+
+def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
+    out = dict(texts)
+    config = texts["config"]
+    shown = _where_view(cfg)
+    loc = cfg.get("location") or {}
+    notes: list[str] = []
+    count = 0
+
+    if "places" in edits:
+        places: list[str] = []
+        for raw in _list(edits["places"], "Places"):
+            place = _one_line(raw, "A place")
+            if not place:
+                continue
+            if len(place) > MAX_PLACE:
+                raise ValueError(f"A place can be at most {MAX_PLACE} characters.")
+            if score.plain_pattern(place, place=True) == r"(?!)":
+                raise ValueError(f"“{place}” has no words in it to match a posting's location.")
+            if place.casefold() not in {p.casefold() for p in places}:
+                places.append(place)
+        before = shown["places"]
+        if set(places) != set(before):
+            if isinstance(loc.get("places"), str):  # One place written without the brackets becomes a list.
+                config = tomledit.set_value(config, "location", "places", places)
+            else:
+                config = tomledit.edit_list(config, "location", "places", remove=[p for p in before if p not in places],
+                                            add=[p for p in places if p not in before])
+            count += len(set(places) ^ set(before))
+
+    for key in ("local", "local_exact"):
+        if key not in edits:
+            continue
+        before = shown[key]
+        wanted = [_pattern(raw) if raw not in before else raw for raw in _list(edits[key], f"The patterns under {key}", str)]
+        wanted = list(dict.fromkeys(wanted))
+        if set(wanted) != set(before):
+            config = tomledit.edit_list(config, "location", key, remove=[p for p in before if p not in wanted],
+                                        add=[p for p in wanted if p not in before], literal=True)
+            count += len(set(wanted) ^ set(before))
+
+    for key in ("accept_remote", "accept_relocation"):
+        if key not in edits:
+            continue
+        value = edits[key]
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} is on or off.")
+        if value != shown[key]:
+            config = tomledit.set_value(config, "location", key, value)
+            count += 1
+
+    chosen = dict(shown["market"])
+    if "market" in edits:
+        wanted_market = edits["market"]
+        if not isinstance(wanted_market, dict):
+            raise ValueError("The area for the Industries tab should be a state, a metro area and a country.")
+        for key in MARKET_KEYS:
+            if key not in wanted_market:
+                continue
+            value = _one_line(wanted_market[key], f"The {key}")
+            if len(value) > MAX_PLACE:
+                raise ValueError(f"The {key} can be at most {MAX_PLACE} characters.")
+            if value == shown["market"][key]:
+                continue
+            config = tomledit.set_value(config, "market", key, value) if value else tomledit.delete_value(config, "market", key)
+            chosen[key] = value
+            count += 1
+    out["config"] = config
+
+    new_cfg = _config(config)
+    new_cfg["location"] = new_cfg.get("location") or {}
+    old_cfg = {**cfg, "location": loc}
+    after = _where_view(new_cfg)
+    if not after["places"] and not after["local"] and not after["local_exact"] and not after["accept_remote"] \
+            and not after["accept_relocation"]:
+        notes.append("With no places, no remote roles and no relocation, every posting that names a place is dropped.")
+    filters_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_remote", "accept_relocation"))
+    prospects = _prospects(old_cfg, new_cfg)
+    if filters_changed and prospects and prospects["moved"]:
+        notes.append("Prospects already found keep their place and score until `pyrite rescore`, which drops the ones "
+                     "that no longer pass, unless you've acted on them. `pyrite discover --fresh` gives postings dropped "
+                     "before another look.")
+    if chosen != shown["market"]:
+        notes += _market_notes(chosen)
+
+    test = _one_line(edits.get("test"), "The location to test")
+    tested = None
+    if test:
+        tested = {"location": test, "now": _place_kind(test, "", old_cfg), "after": _place_kind(test, "", new_cfg),
+                  "why": _why_place(test, new_cfg)}
+    return Draft(out, count, notes, {"test": tested, "prospects": prospects, "where": after})
+
+
 DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
-            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers}
+            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "where": _where}
