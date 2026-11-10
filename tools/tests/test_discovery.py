@@ -373,6 +373,21 @@ class DiscoveryMatching(Discovery):
                                                                  "removed": ["Acme: Principal Firmware Engineer (location)"]})
         self.assertEqual(store.get_job(self.conn, ids["2"])["status"], "applied")
 
+    def test_rescore_scores_a_posting_you_added_again_and_never_drops_it(self):
+        added = self.add(source_key="manual", source_id="m1", company="Initech", title="Principal Firmware Engineer",
+                         location="Berlin, Germany", description="firmware embedded c++ python robot hardware", score=0,
+                         score_reasons='["Added by you"]', track="Added by you", location_kind="unknown")
+        untitled = self.add(source_key="manual", source_id="m2", company="Initech", title="Test Technician", location="Madison, WI")
+        sent = self.add(source_key="manual", source_id="m3", company="Initech", title="Firmware Lead", status="applied", score=0)
+        self.assertEqual(discover.rescore(self.conn, self.cfg), {"kept": 2, "dropped": 0, "held": 0, "removed": []})
+        row = store.get_job(self.conn, added)
+        self.assertGreater(row["score"], 25)
+        self.assertEqual((row["track"], row["location_kind"]), ("Embedded, controls and simulation", "elsewhere"))
+        self.assertIn("outside your area +0", json.loads(row["score_reasons"]))
+        row = store.get_job(self.conn, untitled)
+        self.assertEqual((row["score"], row["track"], row["location_kind"]), (15, "Added by you", "local"))
+        self.assertEqual(store.get_job(self.conn, sent)["score"], 0)
+
     def test_rescore_keeps_a_prospect_you_acted_on_but_not_one_you_only_opened(self):
         stub_feed(None, [self.posting("1"), self.posting("2", title="Staff Embedded Engineer", desc="embedded c++ python robot firmware hardware two"),
                          self.posting("3", title="Staff Firmware Engineer", desc="firmware c++ python robot hardware embedded three")])

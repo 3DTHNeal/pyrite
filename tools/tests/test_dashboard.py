@@ -19,6 +19,7 @@ import support
 from support import CFG, MODEL, Base
 
 from pyrite import checks, claude_code, cli, demo, refresh, server, store
+from pyrite import score as scoring
 
 
 class Lifecycle(Base):
@@ -99,6 +100,38 @@ class Dashboard(Base):
         # One added before the place and text counted, under the old number, is still found.
         self.conn.execute("UPDATE jobs SET source_id = 'old-form' WHERE id = ?", (first,))
         self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
+
+    def added(self, title, location, description="Firmware in embedded C++ for a robot."):
+        job = server.add_manual_job(self.conn, CFG, "Initech", title, "", location, description)
+        row = store.get_job(self.conn, job)
+        return row["score"], row["track"], row["location_kind"], json.loads(row["score_reasons"])
+
+    def test_a_posting_you_add_outside_your_area_is_scored_with_nothing_for_its_place(self):
+        local, track, kind, _ = self.added("Principal Firmware Engineer", "Madison, WI")
+        score, same_track, elsewhere, reasons = self.added("Principal Firmware Engineer", "Austin, TX")
+        self.assertEqual((kind, elsewhere, same_track), ("local", "elsewhere", track))
+        self.assertEqual(score, local - 15)
+        self.assertIn("outside your area +0", reasons)
+        self.assertEqual(reasons[0], f"{track} title +25")
+        # A board's posting there is still dropped: only one you add yourself is kept.
+        self.assertEqual(scoring.evaluate("Principal Firmware Engineer", "Austin, TX", "", "Firmware.", CFG).reason, "location")
+
+    def test_a_posting_you_add_under_a_title_no_track_has_is_scored_on_the_rest(self):
+        score, track, kind, reasons = self.added("Senior Test Technician", "Madison, WI")
+        self.assertEqual((track, kind, reasons[:3]), ("Added by you", "local", ["no track for this title +0", "seniority +5", "local +15"]))
+        self.assertTrue(reasons[3].startswith("skills +"))
+        self.assertGreater(score, 20)
+        self.assertEqual(scoring.evaluate("Senior Test Technician", "Madison, WI", "", "Firmware.", CFG).reason, "title")
+
+    def test_a_posting_you_add_keeps_a_score_below_the_one_a_board_posting_needs(self):
+        score, _, _, reasons = self.added("Test Technician", "Austin, TX", "Keeps the stockroom.")
+        self.assertEqual((score, reasons), (0, ["no track for this title +0", "outside your area +0"]))
+        score, _, _, _ = self.added("Firmware Engineer", "Austin, TX", "Keeps the stockroom.")
+        self.assertTrue(0 < score < CFG["run"]["min_score"])
+
+    def test_a_posting_you_add_gets_its_pay_from_its_text(self):
+        job = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Pays $120,000 - $150,000 a year.")
+        self.assertEqual(store.get_job(self.conn, job)["comp"], "$120,000 - $150,000")
 
 
 class Outreach(Base):
