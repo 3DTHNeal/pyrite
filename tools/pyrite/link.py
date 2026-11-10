@@ -162,7 +162,7 @@ def _pay(job: dict[str, Any]) -> str:
     return f"${amount.format(low)} - ${amount.format(high)} {per}".strip()
 
 
-def _from_data(job: dict[str, Any]) -> dict[str, str]:
+def _from_data(job: dict[str, Any]) -> dict[str, Any]:
     raw = job.get("description")
     raw = raw if isinstance(raw, str) else ""
     # Some sites escape the description's HTML a second time, so it arrives as "&lt;p&gt;" with no tags at all.
@@ -211,7 +211,7 @@ class _Head(_Text):
             self._into.append(data)
 
 
-def _from_page(markup: str) -> dict[str, str]:
+def _from_page(markup: str) -> dict[str, Any]:
     """The heading and visible text of a page with no posting data. The company and place aren't marked on such a
     page, so they're left for whoever is adding it."""
     head = _Head()
@@ -230,7 +230,7 @@ def _from_page(markup: str) -> dict[str, str]:
     return {"company": "", "title": title, "location": "", "description": text if len(text) >= MIN_PAGE_TEXT else ""}
 
 
-def parse(markup: str) -> dict[str, str]:
+def parse(markup: str) -> dict[str, Any]:
     """The company, title, location and description a page gives, each empty if it doesn't say."""
     postings = _job_postings(markup)
     found = _from_data(postings[0]) if postings else {}
@@ -243,7 +243,7 @@ def parse(markup: str) -> dict[str, str]:
     return found
 
 
-def _from_workday(url: str, detail: Callable[..., Posting]) -> dict[str, str] | None:
+def _from_workday(url: str, detail: Callable[..., Posting]) -> dict[str, Any] | None:
     """A Workday posting from the endpoint its own page calls, which keeps the paragraphs and lists that the page's
     structured data flattens into one line. None if the link isn't Workday's or the endpoint doesn't answer."""
     found = WORKDAY.match(url)
@@ -259,7 +259,7 @@ def _from_workday(url: str, detail: Callable[..., Posting]) -> dict[str, str] | 
             "description": posting.description[:MAX_DESCRIPTION]}
 
 
-def read(url: str, fetch: Callable[[str], str] = fetch_page, workday: Callable[..., Posting] = workday_detail) -> dict[str, str]:
+def read(url: str, fetch: Callable[[str], str] = fetch_page, workday: Callable[..., Posting] = workday_detail) -> dict[str, Any]:
     """The posting at a link, as the fields the Add a posting form asks for."""
     url = url.strip()
     return _from_workday(url, workday) or parse(fetch(url))

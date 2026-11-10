@@ -101,12 +101,12 @@ def check_patterns(cfg: dict[str, Any]) -> None:
 
 def _is_candidate(title: str, location: str, cfg: dict[str, Any], workplace: str = "", company: str = "") -> bool:
     """Worth the slower call for a full description? A track limited to industries counts here, since the industry
-    is judged from the description this would fetch."""
+    is judged from the description this would fetch. So does a job outside your area in an industry kept anywhere."""
     if not scoring.match_track(title, cfg, {"company": company}, industry_unknown=True):
         return False
     if scoring.MULTI_LOCATION.match(location):
         return True
-    return scoring.classify_location(location, workplace, cfg) != "out"
+    return scoring.classify_location(location, workplace, cfg) != "out" or bool(scoring.kept_anywhere(company, title, location, cfg))
 
 
 def _probe_workday(spec: dict[str, Any], open_ids: list[str], hits: dict[str, Any], deadline: float) -> tuple[list[str], list[str]]:

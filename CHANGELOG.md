@@ -6,6 +6,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- **Keep jobs outside your area** on an industry's card under Settings, or `anywhere = true` on a `[[promote.industry]]`: a job elsewhere in your country that the location filter would drop is kept when its employer is listed for that industry or one of its words is in the employer's name or the title. It scores nothing for its place, is marked **Outside your area**, and Prospects can filter to those. Run `pyrite discover --fresh` to bring back ones already dropped.
 - **Settings** now holds how Pyrite runs, in a menu of its own: **Claude** (whether Claude Code is signed in, and the models), **Mail** (IMAP or the Gmail connector, how far back to read, and whether the last read worked), **Daily run** (how many postings are judged and resumes written each morning) and **Dashboard** (the reminders, and whether to look for updates). Each save changes only the keys you changed in `search.toml` and keeps every other line and comment. The cities and industries that used to fill the tab are its last section, **Cities and industries**, and work as before.
 - `model` and `effort` under a new `[claude]` table in `search.toml` choose which Claude model judges postings and writes drafts, and how hard it thinks, for the daily run, Refresh resume and Interview prep. Left out, Claude Code's own default is used. A value Claude Code wouldn't take is named when the file loads.
 - [docs/technique.md](docs/technique.md) sets out the technique behind the assay as rules you could use on another agent, with a diagram, and shows how the check is measured. `tools/tests/test_assay_probe.py` is that measurement: 124 lines, each added to the example's passing resume and letter. Run it for the table. It runs with the tests and fails if the number the assay stops in any class moves.
@@ -206,7 +207,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - A fill sheet made from a draft the assay hasn't passed, or whose pass no longer covers it, is still written, but it says at the top that its role text hasn't passed the assay and why, and so do the job's history and `pyrite fill`. `pyrite fill <folder>` says no pass was looked up.
 - Prospects says `1 posting`, not `1 postings`.
 - At about 1000px wide, Prospects' **Tailor** and **Pass** stay in view at the right edge instead of scrolling off it.
-- A posting you add yourself that a filter would refuse no longer shows a score of 0. It's scored like any other, with nothing for the part that failed: **no track for this title +0** or **outside your area +0** in **Why it scored**. Its pay is read from its text. `pyrite rescore` scores the ones you added again, and never drops one.
+- A posting you add yourself that a filter would refuse no longer shows a score of 0. It's scored like any other, with nothing for the part that failed: **no track for this title +0** or **outside your area +0** in **Why it scored**. One outside your area is marked **Outside your area** and comes up under that choice in the Prospects location filter. Its pay is read from its text. `pyrite rescore` scores the ones you added again, and never drops one.
 
 ### Security
 

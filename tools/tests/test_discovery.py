@@ -116,6 +116,37 @@ class Filtering(unittest.TestCase):
         self.assertTrue(score.evaluate(title, "Remote - US", "", "python", cfg, company="Cyberdyne Research").keep)
         self.assertFalse(score.evaluate(title, "Remote - US", "", "python", cfg, company="Initech").keep)
 
+    def test_an_industry_kept_anywhere_keeps_a_job_outside_your_area(self):
+        robotics = next(i for i in CFG["promote"]["industry"] if i["name"] == "Robotics")
+        others = [i for i in CFG["promote"]["industry"] if i["name"] != "Robotics"]
+        cfg = {**CFG, "promote": {**CFG["promote"], "industry": [{**robotics, "anywhere": True}, *others]}}
+        title, place, text = "Senior Embedded Engineer", "Boston, MA", "firmware and python"
+        self.assertEqual(score.evaluate(title, place, "", text, CFG, "Cyberdyne Research").reason, "location")  # off unless asked for
+
+        listed = score.evaluate(title, place, "", text, cfg, "Cyberdyne Research")
+        self.assertTrue(listed.keep)
+        self.assertEqual(listed.location_kind, "elsewhere")
+        self.assertIn(score.ELSEWHERE_FLAG, listed.flags)
+        self.assertIn("outside your area, kept for Robotics +0", listed.reasons)
+        # Nothing for the place, so the same job nearby or remote ranks above it.
+        self.assertGreater(score.evaluate(title, "Remote - US", "", text, cfg, "Cyberdyne Research").score, listed.score)
+        self.assertNotIn(score.ELSEWHERE_FLAG, score.evaluate(title, "Remote - US", "", text, cfg, "Cyberdyne Research").flags)
+
+        # An employer outside the list counts when the title names the industry, and not for mentions in the description.
+        self.assertTrue(score.evaluate("Senior Embedded Engineer, Robotics", place, "", text, cfg, "Initech").keep)
+        self.assertEqual(score.evaluate(title, place, "", text + " robots" * 5, cfg, "Initech").reason, "location")
+        # Another country is still out, unless the posting also names a place in yours.
+        self.assertEqual(score.evaluate(title, "Budapest, Hungary", "", text, cfg, "Cyberdyne Research").reason, "location")
+        self.assertTrue(score.evaluate(title, "Boston, MA | Budapest, Hungary", "", text, cfg, "Cyberdyne Research").keep)
+        self.assertTrue(score.evaluate(title, "Dublin, CA", "", text, cfg, "Cyberdyne Research").keep)
+        # The title still has to be one you're after.
+        self.assertEqual(score.evaluate("Robotics Technician", place, "", text, cfg, "Cyberdyne Research").reason, "title")
+
+        # A board's listing has no description yet, so the sweep decides what to fetch the same way.
+        self.assertTrue(discover._is_candidate(title, place, cfg, company="Cyberdyne Research"))
+        self.assertFalse(discover._is_candidate(title, place, cfg, company="Initech"))
+        self.assertFalse(discover._is_candidate(title, place, CFG, company="Cyberdyne Research"))
+
     def test_places_and_titles_in_plain_words(self):
         # Someone starting out writes names, not patterns. Each is whole words in any case, with any spacing or commas.
         cfg = {**CFG, "location": {"local": [], "local_exact": [], "places": ["Springfield, IL", "Oak Park"],
