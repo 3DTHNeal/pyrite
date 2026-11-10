@@ -33,6 +33,8 @@ BUILD_TIMEOUT_SECONDS = 300
 # With no workspace set, these would write into the fictional example inside this repository.
 NEEDS_WORKSPACE = {"discover", "rescore", "inbox", "triage", "folder", "finish", "refresh", "prep", "status", "outreach", "add", "brief", "serve", "seed",
                    "sweep", "run", "task", "fill", "autofill", "open"}
+# Except these, when nothing names a workspace at all: the dashboard then opens on making one, over the demo.
+SETUP_COMMANDS = {"serve", "open"}
 # Statuses that put a job in line for the daily run to judge or tailor, which a job you've sent never goes back to.
 NOT_YET_SENT = ("new", "shortlisted")
 SECOND_APPLICATION = "A second application is a new job with its own folder."
@@ -830,6 +832,12 @@ def cmd_serve(args):
     from .launch import dashboard_port
     from .server import serve
 
+    if store.NEEDS_SETUP:
+        # The page opens on making a workspace. Behind it is the demo, to look around in first.
+        conn = connect()
+        demo.load(conn, load_config())
+        conn.close()
+        print("No workspace is set yet, so the dashboard opens on making one.", flush=True)
     serve(args.port or dashboard_port(load_config()))
 
 
@@ -1341,7 +1349,7 @@ def main(argv=None):
     args, extra = parser.parse_known_args(argv)
     if extra:
         parser.error(f"unrecognized arguments: {' '.join(extra)}{_quote_hint(argv, extra)}")
-    if store.IS_EXAMPLE and args.command in NEEDS_WORKSPACE:
+    if store.IS_EXAMPLE and args.command in NEEDS_WORKSPACE and not (store.NEEDS_SETUP and args.command in SETUP_COMMANDS):
         sys.exit(
             f"No workspace is set, so `pyrite {args.command}` would write into the fictional example inside this repository.\n"
             f"`{INIT_EXAMPLE}` makes your own workspace outside it and points Pyrite there. `pyrite demo` looks around without one."

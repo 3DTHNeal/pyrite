@@ -408,7 +408,7 @@ class Restart(unittest.TestCase):
                 mock.patch("builtins.print"):
             server.serve(8790)
         stopped.server_close.assert_called_once()
-        restart.assert_called_once_with(8790)
+        restart.assert_called_once_with(8790, None)
 
     def test_a_port_still_held_is_tried_again(self):
         gone, up = mock.Mock(), mock.Mock()

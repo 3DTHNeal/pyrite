@@ -38,6 +38,14 @@ my-job-search/
   data/pyrite.db              everything Pyrite tracks. Back this up, because it can't be regenerated.
 ```
 
+### From the dashboard
+
+With no workspace set yet, open the dashboard: double-click `Pyrite.cmd` on Windows, or run `pyrite open`. It opens on **Make your workspace**, over the demo. Give your name as it goes on your resume and the folder to make, which starts as `my-job-search` beside this one, and choose to start from blank files or from a copy of the example. It can make the folder a private git repository too, as `--git` does below. **Make my workspace** does what `init` does, points this folder at the new workspace, and restarts the dashboard on it, at the Profile tab, whose **Needs you** list says what's left. **Look around the demo first** closes the box for now: **Make your workspace** at the top of the page opens it again.
+
+It only works while nothing names a workspace, so the dashboard can never make a second one or move Pyrite off the one in use. A new workspace needs no confirmation codes until its required Profile sections are set, since there's nothing in it of yours yet to loosen. See [Confirming with a code](profile.md#confirming-with-a-code).
+
+### From a terminal
+
 `init` makes one from the example's profile and points this folder at it. Put your own name in the quotes. `init` needs one, a name with a space needs the quotes, and `init` refuses a placeholder such as "Your Name":
 
 ```bash
@@ -72,7 +80,7 @@ Then ask what's left:
 
 It lists every profile file that's still the example's, the example's settings left in `search.toml`, each source under `[guard]` that isn't in your workspace, a master resume or letter that isn't in the form the assay reads, a "Do not use" name the assay can't block by name because your sources also state it as fact, and whether it found the programs Pyrite uses: python-docx, LibreOffice or Word, `pdftotext`, Claude Code and its sign-in, and a mail login. The dashboard lists the same workspace items as **Finish setup** at the top of the to-do list, and the Claude run and the tailoring batch refuse to start while `facts.md` is still the example's, so no usage goes on writing for the fictional candidate.
 
-With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder`, `finish` and `serve`, then refuse to run, so nothing real ends up inside this repository. `pyrite demo` is the way to look around without a workspace.
+With neither set, the code uses the fictional `example/` workspace, so it can't touch your data by accident. Commands that write, such as `discover`, `folder` and `finish`, then refuse to run, so nothing real ends up inside this repository. `serve` and `open` start the dashboard on **Make your workspace** instead, over the demo, which saves nothing. `pyrite demo` is the way to look around without a workspace.
 
 Where you'll work and which roles you want can be written in plain words, with no regular expressions: `places = ["Springfield, IL", "Oak Park"]` under `[location]`, and `titles = ["data engineer", "platform engineer"]` under each `[[track]]`. Each is matched as whole words in any case, with any spacing, commas, hyphens, periods or parentheses between them, so `Springfield, IL` matches "springfield il" but not "Springfield, MO", and `St. Louis` matches "St Louis". A place that ends in a US state matches the state written either way and on either side, so `Springfield, IL` also matches "Springfield, Illinois" and "US-IL-Springfield". And `data engineer` matches "Senior Data Engineer" but not "Data Engineering Manager". They work beside the `local` and `title` patterns, so add a pattern only for what plain words can't say, such as a whole state. A blank workspace starts with `places` and shows `titles` in its example track.
 

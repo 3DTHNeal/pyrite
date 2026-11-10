@@ -21,7 +21,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from . import factsdoc, notify, store
+from . import factsdoc, notify, store, workspace
 
 LIFETIME_SECONDS = 120
 TRIES = 5
@@ -195,14 +195,15 @@ def _issue(summary: list[str], fingerprint: str) -> dict[str, Any]:
 
 
 def require(changes: dict[str, str], current: dict[str, str], based_on: dict[str, Any], request_id=None, code=None) -> None:
-    """Let a write go ahead, or stop it. A change that loosens no check passes. One that does raises CodeNeeded
-    with a fresh code sent, or, when a code is given, passes only if it's the right code for exactly this change."""
+    """Let a write go ahead, or stop it. A change that loosens no check passes, and so does any change to a new
+    workspace that's still being set up. One that does raises CodeNeeded with a fresh code sent, or, when a code is
+    given, passes only if it's the right code for exactly this change."""
     for key, text in changes.items():
         refusal = file_only(key, current.get(key, ""), text)
         if refusal:
             raise ValueError(refusal)
     summary = [phrase for key, text in changes.items() for phrase in loosening(key, current.get(key, ""), text)]
-    if not summary:
+    if not summary or workspace.setting_up():
         return
     fingerprint = _fingerprint(changes, based_on)
     with _lock:
