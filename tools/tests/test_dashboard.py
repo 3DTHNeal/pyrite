@@ -419,6 +419,22 @@ class Security(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_testing_a_board_fetches_only_a_board_on_its_own_host(self):
+        with mock.patch.object(server.discover.sources, "_request", return_value={"jobs": [{"id": 1, "title": "Engineer"}]}) as fetch:
+            for body in ({"url": "https://evil.test/initech"}, {"kind": "greenhouse", "key": "evil.test/x"},
+                         {"kind": "workday", "key": "umbrella", "wd": "wd1.evil.test/", "site": "Ext"}):
+                with self.subTest(body):
+                    status, said, _ = self.post("/api/profile/test-board", json.dumps(body).encode())
+                    self.assertEqual(status, 400, said)
+            fetch.assert_not_called()
+            status, said, _ = self.post("/api/profile/test-board", b'{"url": "boards.greenhouse.io/initech"}')
+        self.assertEqual((status, json.loads(said)["count"]), (200, 1))
+        fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.args[0], "https://boards-api.greenhouse.io/v1/boards/initech/jobs")
+        status, _, _ = self.call("/api/profile/test-board", "POST", {"Origin": "https://evil.test", "Content-Type": "application/json"},
+                                 b'{"url": "boards.greenhouse.io/initech"}')
+        self.assertEqual(status, 403)
+
     def test_malformed_requests_are_refused_not_failed(self):
         self.assertEqual(self.call("/api/job/99999999999999999999999")[0], 404)
         self.assertEqual(self.post("/api/job/99999999999999999999999/action", b'{"action":"seen"}')[0], 404)

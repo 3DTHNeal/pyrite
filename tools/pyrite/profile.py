@@ -90,7 +90,6 @@ STEPS: tuple[dict[str, Any], ...] = (
      "writes": ("search.toml › [location] and [market]",)},
     {"id": "companies", "group": "Your search", "label": "Companies to watch", "required": True, "fallback": None,
      "files": ("config",),
-     "meanwhile": "Until it's built: [watch.*] and [[manual_check]] in profile/search.toml. The Sources tab shows how each board is answering.",
      "why": "Pyrite reads these companies' job boards every morning.",
      "writes": ("search.toml › [watch.*], [[manual_check]] and [workday] queries",)},
     {"id": "priorities", "group": "Your search", "label": "What comes first", "required": False, "fallback": "settings/ranking",

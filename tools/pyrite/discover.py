@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, cast
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import deadline, quality, sources
 from . import score as scoring
@@ -83,6 +84,126 @@ def watch_problem(kind: str, ident: str, spec) -> str:
 def watch_problems(cfg: dict[str, Any]) -> list[str]:
     """watch_problem for every watched company that has one."""
     return [problem for kind, ident, spec in _watchlist(cfg) if (problem := watch_problem(kind, ident, spec))]
+
+
+# The boards Pyrite reads, as the Profile tab names them.
+BOARD_KINDS = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "workday": "Workday"}
+# What a board's key may be. Each one is put into the address of its board's own feed, so nothing in it may change
+# which site that address names: no slash, colon, at sign, question mark or anything else that ends a path segment.
+BOARD_KEY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?")
+# A Workday tenant is the first label of its host, <tenant>.<wdN>.myworkdayjobs.com, so it's a host label and no more.
+WORKDAY_TENANT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+WORKDAY_WD = re.compile(r"wd\d{1,3}")
+WORKDAY_SITE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}")
+# The language a Workday careers address may start with, as in /en-US/External.
+WORKDAY_LOCALE = re.compile(r"[a-z]{2}(?:-[A-Za-z]{2})?")
+WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d{1,3})\.myworkdayjobs\.com")
+# Each board's careers page and feed hosts, and how many path parts come before the board's key on each.
+BOARD_HOSTS = {
+    "boards.greenhouse.io": ("greenhouse", 0), "job-boards.greenhouse.io": ("greenhouse", 0),
+    "boards-api.greenhouse.io": ("greenhouse", 2),  # /v1/boards/<board>/jobs
+    "jobs.lever.co": ("lever", 0), "api.lever.co": ("lever", 2),  # /v0/postings/<board>
+    "jobs.ashbyhq.com": ("ashby", 0), "api.ashbyhq.com": ("ashby", 2),  # /posting-api/job-board/<board>
+}
+
+
+def board_problem(kind: str, key: str, wd: str = "", site: str = "") -> str:
+    """What's wrong with a board's key, or a Workday site's wd and site, for the Profile tab to write it or test it, or
+    "" if nothing is. Only these parts make up the address a board is read from, so a key that passes can only name
+    that board's own site."""
+    if kind not in BOARD_KINDS:
+        return "A board is Greenhouse, Lever, Ashby or Workday."
+    if kind == "workday":
+        if not WORKDAY_TENANT.fullmatch(key):
+            return (f"“{key}” isn't a Workday tenant. It's the first part of the careers page address, as acme in "
+                    "acme.wd1.myworkdayjobs.com.")
+        if not WORKDAY_WD.fullmatch(wd):
+            return f"“{wd}” isn't a Workday server. It's the wd and a number after the tenant, as wd1 in acme.wd1.myworkdayjobs.com."
+        if not WORKDAY_SITE.fullmatch(site):
+            return (f"“{site}” isn't a Workday site. It's the part after the address's last slash, as External in "
+                    "acme.wd1.myworkdayjobs.com/External.")
+        return ""
+    if not BOARD_KEY.fullmatch(key):
+        return (f"“{key}” isn't {'an' if kind == 'ashby' else 'a'} {BOARD_KINDS[kind]} board. It's the part of the careers page address after the "
+                f"site's name, as acme in {_example_address(kind)}.")
+    return ""
+
+
+def _example_address(kind: str) -> str:
+    return {"greenhouse": "boards.greenhouse.io/acme", "lever": "jobs.lever.co/acme", "ashby": "jobs.ashbyhq.com/acme",
+            "workday": "acme.wd1.myworkdayjobs.com/External"}[kind]
+
+
+def _name_from(key: str) -> str:
+    """A first guess at a company's name from its board's key, as Acme Robotics from acme-robotics."""
+    words = [word for word in re.split(r"[-_.]+", key) if word]
+    return " ".join(word if word[:1].isupper() else word.capitalize() for word in words)
+
+
+def board_from_url(text: str) -> dict[str, str]:
+    """The board a careers page address names, as {kind, key, name}, with wd and site for Workday. The address may be a
+    job's own page, or leave out https://. Raises ValueError, saying what Pyrite can read, for any other address."""
+    raw = text.strip() if isinstance(text, str) else ""
+    if not raw:
+        raise ValueError("Paste a careers page address.")
+    if not re.match(r"[a-z][a-z0-9+.-]*://", raw, re.I):
+        raw = "https://" + raw
+    parsed = urlparse(raw)
+    try:
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        host = ""
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if parsed.scheme.lower() not in ("http", "https") or not host:
+        raise ValueError("That isn't a web address.")
+    found: dict[str, str]
+    workday = WORKDAY_HOST.fullmatch(host)
+    if workday:
+        tenant, wd = workday.groups()
+        if parts[:2] == ["wday", "cxs"] and len(parts) >= 4:
+            site = parts[3]
+        else:
+            if parts and WORKDAY_LOCALE.fullmatch(parts[0]):
+                parts = parts[1:]
+            site = parts[0] if parts else ""
+        if not site:
+            raise ValueError(f"That address has no Workday site after the slash. Open a job on it and paste that, or add the "
+                             f"site's name, as {host}/External.")
+        found = {"kind": "workday", "key": tenant, "wd": wd, "site": site}
+    elif host in BOARD_HOSTS:
+        kind, skip = BOARD_HOSTS[host]
+        key = parts[skip] if len(parts) > skip else ""
+        if kind == "greenhouse" and parts[:1] == ["embed"]:
+            key = (parse_qs(parsed.query).get("for") or [""])[0]
+        if not key:
+            raise ValueError(f"That address has no board after the slash. It looks like {_example_address(kind)}.")
+        found = {"kind": kind, "key": key}
+    else:
+        raise ValueError(f"Pyrite reads Greenhouse, Lever, Ashby and Workday job boards, and {host} isn't one of them. "
+                         "A company's own careers page often sends its Apply links to one: open a job there and paste "
+                         "where its Apply button goes. Otherwise add it under Check by hand.")
+    problem = board_problem(found["kind"], found["key"], found.get("wd", ""), found.get("site", ""))
+    if problem:
+        raise ValueError(problem)
+    return {**found, "name": _name_from(found["key"])}
+
+
+def check_source(kind: str, ident: str, spec) -> dict[str, Any]:
+    """Try one watched source once, as `pyrite sources` does, and say how many postings it lists. Nothing is saved."""
+    name = _company(ident, spec)
+    problem = watch_problem(kind, ident, spec)
+    if problem:
+        return {"source": f"{kind}:{ident}", "company": name, "ok": False, "error": problem}
+    try:
+        if kind == "workday":
+            api, _ = sources.workday_base({**spec, "tenant": ident})
+            page = cast(dict[str, Any], sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0))
+            count = page.get("total", 0)
+        else:
+            count = len(sources.FEEDS[kind](ident, name))
+        return {"source": f"{kind}:{ident}", "company": name, "ok": True, "count": count}
+    except Exception as err:
+        return {"source": f"{kind}:{ident}", "company": name, "ok": False, "error": str(err)[:120]}
 
 
 def _company(ident: str, spec) -> str:
@@ -755,25 +876,5 @@ def check_sources(cfg=None) -> list[dict[str, Any]]:
     """Try each watched source once and report how many postings it returned."""
     cfg = cfg or load_config()
     check_patterns(cfg)
-    report = []
-
-    def probe(item):
-        kind, ident, spec = item
-        name = _company(ident, spec)
-        problem = watch_problem(kind, ident, spec)
-        if problem:
-            return {"source": f"{kind}:{ident}", "company": name, "ok": False, "error": problem}
-        try:
-            if kind == "workday":
-                api, _ = sources.workday_base({**spec, "tenant": ident})
-                page = cast(dict[str, Any], sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0))
-                count = page.get("total", 0)
-            else:
-                count = len(sources.FEEDS[kind](ident, name))
-            return {"source": f"{kind}:{ident}", "company": name, "ok": True, "count": count}
-        except Exception as err:
-            return {"source": f"{kind}:{ident}", "company": name, "ok": False, "error": str(err)[:120]}
-
     with ThreadPoolExecutor(max_workers=3) as pool:
-        report = list(pool.map(probe, _watchlist(cfg)))
-    return report
+        return list(pool.map(lambda item: check_source(*item), _watchlist(cfg)))

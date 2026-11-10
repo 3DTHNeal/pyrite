@@ -30,6 +30,7 @@ from . import (
     claude_code,
     confirm,
     deadline,
+    discover,
     doctor,
     facts,
     fill,
@@ -886,6 +887,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad request"}, 400)
 
         path = urlparse(self.path).path
+        if path == "/api/profile/test-board":
+            try:
+                return self._json(_test_board(body))
+            except ValueError as err:
+                return self._json({"error": str(err)}, 400)
         if path in PROFILE_WRITES:
             try:
                 return self._json(PROFILE_WRITES[path](body))
@@ -1077,6 +1083,31 @@ def _profile_page() -> dict[str, Any]:
 def _draft_profile(body: dict[str, Any]) -> dict[str, Any]:
     """What a section's form would write, worked out by the same code a save uses. Nothing is written."""
     return steps.draft(str(body.get("step") or ""), body.get("edits"), body.get("based_on"))
+
+
+def _test_board(body: dict[str, Any]) -> dict[str, Any]:
+    """Companies to watch's Test: read one board once, as `pyrite sources` does, and say whether it answers and how many
+    postings it lists. Nothing is saved. The request names a board by its kind and key, or by a careers page address,
+    never by the address to fetch: only the key goes into the address of that board's own feed, and a key that could
+    name any other site is refused before anything is fetched."""
+    if body.get("url") is not None:
+        board = discover.board_from_url(_text(body, "url", "The address", MAX_LINK))
+    else:
+        board = {part: body.get(part) or "" for part in ("kind", "key", "wd", "site", "name")}
+        if not all(isinstance(value, str) for value in board.values()):
+            raise ValueError("Say which board to test.")
+        board = {part: value.strip() for part, value in board.items()}
+    kind, key = board["kind"], board["key"]
+    problem = discover.board_problem(kind, key, board.get("wd", ""), board.get("site", ""))
+    if problem:
+        raise ValueError(problem)
+    name = board.get("name") or key
+    spec: Any = {"name": name, "wd": board["wd"], "site": board["site"]} if kind == "workday" else name
+    found = discover.check_source(kind, key, spec)
+    if not found["ok"] and re.search(r"\b404\b", found["error"]):
+        found["hint"] = (f"No {discover.BOARD_KINDS[kind]} board answers at that address. Check it against the careers "
+                         "page, or the company may use another board.")
+    return {**found, "board": {**board, "kind": kind, "key": key}}
 
 
 def _back_up(body: dict[str, Any]) -> dict[str, Any]:
