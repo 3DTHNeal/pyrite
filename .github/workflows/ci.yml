@@ -8,18 +8,28 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run still going on the one before it. Runs on main all finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
+          cache: pip
+          cache-dependency-path: tools/requirements*.txt
       - run: python -m pip install -r tools/requirements.txt -r tools/requirements-dev.txt
       # Settings for both are in pyproject.toml.
       - run: python -m ruff check tools
       - run: python -m mypy
+      # Each pull request's changelog note is a file in changelog.d/. This holds every one to a shape that folds.
+      - run: python tools/changelog.py --check
       # The README offers `pip install -e .` for a `pyrite` command. This holds the command it adds to working.
       - name: The installed pyrite command runs
         run: |
@@ -30,32 +40,83 @@ jobs:
   test:
     # The oldest Python Pyrite supports and the newest, on every system it's run on.
     name: test (${{ matrix.os }}, ${{ matrix.python }})
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.11", "3.14"]
+        # One cell gets a browser, so the autofill tests run against the saved Workday page instead of skipping. It
+        # judges coverage too, since it's where every optional test runs.
+        include:
+          - os: ubuntu-latest
+            python: "3.14"
+            browser: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      # A key for what the tests can read: every tracked file except the Markdown outside tools/ and example/, which
+      # leaves out the changelog notes and the docs. CHANGELOG.md stays in, since a test reads it.
+      - id: code
+        shell: bash
+        run: |
+          key=$({ git ls-files -s -- . ':(exclude)*.md'; git ls-files -s -- 'tools/*.md' 'example/*.md' CHANGELOG.md; } | git hash-object --stdin)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      # When the same code already passed in this cell, on this pull request or on main, the rest is skipped. A push
+      # that only adds a changelog note or edits the docs passes in seconds. One that brings in new code from main runs
+      # everything, since that combination hasn't been tested.
+      - id: passed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tested
+          key: tested-${{ matrix.os }}-${{ matrix.python }}-${{ steps.code.outputs.key }}
+          lookup-only: true
+      - if: steps.passed.outputs.cache-hit == 'true'
+        run: echo "This code already passed in this cell, so its tests are skipped."
+      - if: steps.passed.outputs.cache-hit != 'true'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -r tools/requirements.txt -r tools/requirements-autofill.txt -r tools/requirements-dev.txt
+          cache: pip
+          cache-dependency-path: tools/requirements*.txt
+      - if: steps.passed.outputs.cache-hit != 'true'
+        run: python -m pip install -r tools/requirements.txt -r tools/requirements-autofill.txt -r tools/requirements-dev.txt
       # Lets the privacy check's tests read a real PDF. Windows runners get pdftotext with Git.
-      # Linux also gets a browser, so the autofill tests run against the saved Workday page instead of skipping.
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils && python -m playwright install --with-deps chromium
-      - if: runner.os == 'macOS'
+      - if: steps.passed.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - if: steps.passed.outputs.cache-hit != 'true' && runner.os == 'macOS'
         run: brew install poppler
-      - run: python -m coverage run -m unittest discover -s tools/tests
-      # Judged where every optional test runs. The floor is fail_under in pyproject.toml.
-      - if: runner.os == 'Linux'
+      - id: playwright
+        if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
+        run: echo "version=$(python -c 'import importlib.metadata as m; print(m.version("playwright"))')" >> "$GITHUB_OUTPUT"
+      - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      # With the browser restored from the cache, this only installs the system libraries it needs.
+      - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
+        run: python -m playwright install --with-deps chromium
+      - if: steps.passed.outputs.cache-hit != 'true' && !matrix.browser
+        run: python -m unittest discover -s tools/tests
+      - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
+        run: python -m coverage run -m unittest discover -s tools/tests
+      # The floor is fail_under in pyproject.toml.
+      - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
         run: python -m coverage report
+      - if: steps.passed.outputs.cache-hit != 'true'
+        shell: bash
+        run: mkdir -p .tested && echo "${{ steps.code.outputs.key }}" > .tested/key
+      - if: steps.passed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tested
+          key: tested-${{ matrix.os }}-${{ matrix.python }}-${{ steps.code.outputs.key }}
 
   # The README promises `python tools/pyrite.py demo` works with nothing installed. This holds it to that.
   bare-demo:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -75,8 +136,10 @@ jobs:
           set -e
           python -c "import json; v = json.load(open('verdict.json')); assert not v['ok'] and v['errors'], v"
 
+  # Never skipped, since a changelog note or a docs page is public too.
   privacy:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Gitleaks lists a pull request's commits to scan them, which needs read access to pull requests.
     permissions:
       contents: read
@@ -95,3 +158,17 @@ jobs:
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The one check main's ruleset needs to require. It fails when any job above failed or was cancelled, so adding,
+  # renaming or dropping a job or a matrix cell needs no change to the ruleset.
+  all-passed:
+    if: always()
+    needs: [lint, test, bare-demo, privacy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "A job failed or was cancelled: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - run: echo "Every job passed."
