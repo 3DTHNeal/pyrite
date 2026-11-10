@@ -75,6 +75,10 @@ class Dashboard(Base):
                               (key, key, ts, ts))
         listed = [row["source_key"] for row in server.build_state(self.conn, CFG)["sources"]]
         self.assertEqual(sorted(listed), ["greenhouse:anthropic", "inbox:gmail"])
+        # The demo's boards are made up, so the example's search.toml doesn't watch them, and the demo lists them all.
+        with mock.patch.object(server, "IS_EXAMPLE", True):
+            listed = [row["source_key"] for row in server.build_state(self.conn, CFG)["sources"]]
+        self.assertEqual(sorted(listed), ["greenhouse:anthropic", "inbox:gmail", "workday:dropped"])
 
     def test_numbers_and_orders_put_new_listings_first(self):
         today = date.today()

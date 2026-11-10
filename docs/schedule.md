@@ -21,11 +21,43 @@ model = "opus"   # a name or alias Claude Code knows
 effort = "high"  # low, medium, high, xhigh or max
 ```
 
+## What the daily run judges and tailors
+
+Two scores under `[run]` in `search.toml` bound what Claude sees. A posting the pan scores under `min_score` isn't stored at all, so it never reaches Prospects. A judged posting is tailored only if it scores `tailor_min_score` or more, unless you picked it. Neither is on the Settings tab, since both change what's kept.
+
+**Judging.** The run reads up to `triage_per_day` new postings and gives each a fit verdict, with one sentence of why, which shows as **Fit** on the job's panel and on its card:
+
+| Verdict | Means | What happens |
+|---|---|---|
+| **Strong** | It would plausibly clear a recruiter screen: the core of the job matches your record | Moves to Being tailored |
+| **Good** | Most of the job matches, with a gap you can address | Moves to Being tailored |
+| **Stretch** | A real shot, with one significant gap | Moves to Being tailored, but the daily run doesn't write it unless you picked it. **Tailor these now** does |
+| **Skip** | Wrong level or field, a hard requirement you can't meet, a location that doesn't work, or scam signs | Passed, with the reason on its timeline. **Undo pass** puts it back |
+
+Your own picks come first, then postings whose deadline is within `decide_days`, then the rest in Priority order. A posting whose firm deadline has gone by, or that's **Too low to bother** on pay, isn't judged unless you picked it.
+
+**Tailoring.** The run then writes up to `tailor_per_day` drafts from Being tailored: your picks first, then the ones closing within `decide_days`, then strong before good, then by Priority. A draft that has failed the assay `fix_attempts` times is left alone until you ask for it again.
+
+**Your pick.** **Tailor this one first** on a job, or **T** in its panel, marks it as yours. It shows **Your pick** on its card. The next run judges and writes it ahead of everything else, whatever its score, pay, verdict or failed tries. `pyrite queue` lists what the next run will work on, in this order.
+
 ## Locking down the daily run
 
 `pyrite run` is the daily run with its limits built in. The code does every step that changes anything: it records each verdict, makes each folder, builds the documents and runs the assay. Claude is started once per posting to judge it, with tools that can only read, and once per application to write it, able to change only that application's `resume.md`, `cover-letter.md` and `notes.md`. It never gets a shell or web access, so an instruction hidden in a posting has nothing to reach. Your fact bank and the rest of `profile/`, the database and the workspace's `.claude/` settings are denied outright, so even a workspace `.claude/settings.json` that allowed more couldn't open them to a run, and if anything in `profile/` changes while a draft is written, the run puts that draft back and stops. Judging gets Pyrite's own possible-ghost and scam-sign markings for each posting, outside the posting's fence. The run says what it's doing before every Claude call and every build, so a long job never looks stopped while it works. Its instructions are `tools/pyrite/triage.md` and `tools/pyrite/tailor.md`, and the field report is written by the code from what the run did.
 
 A writing run gets everything it needs in its prompt: `profile/facts.md`, `profile/run-notes.md`, `profile/approved-terms.txt`, the model documents the run notes name in backticks (a folder means its `resume.md`, `cover-letter.md` and `notes.md`; a file path means that file), the job's `posting.md` and any draft already in its folder. That saves the six or seven turns a run used to spend reading them, each of which re-sent the whole conversation. The posting goes in fenced as job-board data, as it is everywhere else. **Refresh resume** gets the same.
+
+### When your profile changes during a run
+
+A run checks `profile/` after each draft it writes. If any file there changed while Claude was writing, the run puts that draft back as it was and stops, since the draft was written against facts that no longer hold. The status line at the top says which files changed and, for `facts.md`, `approved-terms.txt` or `search.toml`, what the change lets drafts say that they couldn't before. The job's timeline keeps it too.
+
+An edit of your own on the Profile or Facts tab is the usual cause, so the status line offers two answers:
+
+- **I made this change** clears the warning. The job's timeline keeps that you said so.
+- **I made it, run Claude again** (or **I made it, tailor again** after a tailoring batch) clears it and starts the same run again. It waits while the other writing run is going.
+
+Neither changes a file: what drafts may say is decided by the files under `profile/`, and a change that loosened them asked for its code when it was saved. If you didn't make the change, look at the Profile tab's History before starting another run. To avoid it, don't edit `profile/` while a run or tailoring batch is going.
+
+## The older way
 
 The older way is a Claude Code session of your own following `tools/pyrite/daily_run.md`. That session has a shell, so its rules are only instructions, and its limits are yours to set. If you use it, give it permissions that:
 
