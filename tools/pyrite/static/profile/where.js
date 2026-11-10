@@ -179,7 +179,7 @@ profileStep("where", {
       h("section", { class: "panel stack", "aria-label": "Your prospects" },
         h("h3", { class: "profile-sub" }, "Your prospects"),
         h("small", { class: "muted" }, "The postings from the boards still new under Prospects, judged by place with these settings."),
-        counted),
+        counted, profileRescore()),
       h("section", { class: "panel stack", "aria-label": "Area for the Industries tab" },
         h("h3", { class: "profile-sub" }, "Area for the Industries tab"),
         h("small", { class: "muted" }, "Where the Industries tab looks up official employment numbers. Use the names the BLS uses. Either can be left empty. This doesn't change which jobs are kept."),

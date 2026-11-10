@@ -52,6 +52,7 @@ from . import (
     store,
     tasks,
     update,
+    words,
     workday,
     workspace,
 )
@@ -860,6 +861,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"tools": doctor.tool_checks(load_config(), options.claude_status(fresh))})
             if path == "/api/profile/workspace":
                 return self._json(backup.about(store.ROOT))
+            if path == "/api/profile/rescore":
+                return self._json(_rescore_state())
             if path == "/api/profile/kept":
                 query = parse_qs(urlparse(self.path).query)
                 try:
@@ -1193,6 +1196,42 @@ def _back_up(body: dict[str, Any]) -> dict[str, Any]:
     return {**backup.about(store.ROOT), "made": made}
 
 
+def _rescore_state() -> dict[str, Any]:
+    """What Rescore now needs, under Your prospects in Roles you want and Where you'll work: what a rescore would change
+    now, why it can't run if it can't, and when the latest pan started, since the next one rescores too."""
+    with closing(connect()) as conn:
+        going = tasks.going(conn)
+        row = conn.execute("SELECT started_at FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        try:
+            due: dict[str, Any] = discover.rescore_due(conn, load_config())
+        except ValueError as err:
+            due = {"error": f"Pyrite couldn't score your prospects with your settings ({err})."}
+    why_not = (_RESCORE_DEMO if store.IS_EXAMPLE else _rescore_busy(going) if going else "")
+    return {"due": due, "why_not": why_not, "last_pan": row["started_at"] if row else None}
+
+
+_RESCORE_DEMO = "This is the demo, so its prospects can't be scored again."
+
+
+def _rescore_busy(running: str) -> str:
+    return f"A {running} is going, and a rescore could drop a prospect it's working on. Rescore once it's done."
+
+
+def _rescore_now(body: dict[str, Any]) -> dict[str, Any]:
+    """Rescore now: copy data/pyrite.db into data/backups, as Back up now does, then score the prospects again as
+    `pyrite rescore` does, and say what that did. Refused in the demo, and while any run is going, as an update is."""
+    if store.IS_EXAMPLE:
+        raise ValueError(_RESCORE_DEMO)
+    with closing(connect()) as conn:
+        running = tasks.going(conn)
+        if running:
+            raise ValueError(_rescore_busy(running))
+        made = backup.make(store.ROOT)  # First, so a rescore never drops anything there's no copy of.
+        result = discover.rescore(conn, load_config())
+    return {**result, "said": words.rescore(result), "backup": {**made, "folder": backup.FOLDER.as_posix()},
+            **_rescore_state()}
+
+
 def _profile_code(body: dict[str, Any]) -> dict[str, Any]:
     """Send a waiting change's code again, or give up on it."""
     if body.get("action") == "resend":
@@ -1214,6 +1253,7 @@ PROFILE_WRITES = {
     "/api/profile/put-back": _put_back,
     "/api/profile/code": _profile_code,
     "/api/profile/backup": _back_up,
+    "/api/profile/rescore": _rescore_now,
     "/api/gaps": _gap_question,
 }
 

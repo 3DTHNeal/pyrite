@@ -439,6 +439,8 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 
 SCORING_VERSION = "scoring_version"
+# The search.toml settings the prospects were scored with, as `score.settings_key` gives them.
+SCORING_SETTINGS = "scoring_settings"
 
 
 def get_meta(conn, key: str) -> str | None:

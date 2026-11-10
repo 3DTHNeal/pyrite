@@ -5,19 +5,22 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import deadline, quality, sources
+from . import backup, deadline, quality, sources, store
 from . import score as scoring
 from .store import (
     ACTIVE,
     REPLY_DETECTED,
     ROOT,
+    SCORING_SETTINGS,
     SCORING_VERSION,
     STATUSES,
     ConfigError,
     get_job,
+    get_meta,
     load_config,
     log_event,
     now,
@@ -732,7 +735,7 @@ def rescore(conn, cfg=None) -> dict[str, Any]:
     rejected, unless you've acted on it: then it's left as it was and counted as held. `removed` names the dropped ones,
     since the record of each is gone. A posting you added is scored again too, and never dropped. Jobs past new, and
     ones you imported, keep the score they were decided on.
-    Records that the prospects now have this code's scoring, so the next sweep doesn't do it again.
+    Records that the prospects now have this code's scoring and these settings, so the next sweep doesn't do it again.
     """
     cfg = cfg or load_config()
     check_patterns(cfg)
@@ -775,30 +778,84 @@ def rescore(conn, cfg=None) -> dict[str, Any]:
         )
         kept += 1
     set_meta(conn, SCORING_VERSION, str(scoring.VERSION))
+    set_meta(conn, SCORING_SETTINGS, scoring.settings_key(cfg))
     conn.commit()
     return {"kept": kept, "dropped": dropped, "held": held, "removed": removed}
 
 
+def rescore_due(conn, cfg: dict[str, Any]) -> dict[str, int]:
+    """What `rescore` would do now, worked out without doing it: of the prospects it scores, how many would get another
+    score, role type or place, how many would be dropped, and how many you've acted on would be kept though they no
+    longer pass. The Profile tab offers Rescore now from this once a save leaves prospects out of step. Changes nothing."""
+    check_patterns(cfg)
+    found = {"total": 0, "changed": 0, "dropped": 0, "held": 0}
+    for row in conn.execute("SELECT * FROM jobs WHERE status = 'new' AND source_key NOT IN ('seed', 'manual')").fetchall():
+        found["total"] += 1
+        verdict, reason = judge(row, cfg)
+        if reason:
+            found["held" if acted_on(conn, row) else "dropped"] += 1
+        elif (verdict.score, verdict.track, verdict.location_kind) != (row["score"], row["track"], row["location_kind"]):
+            found["changed"] += 1
+    for row in conn.execute("SELECT * FROM jobs WHERE status = 'new' AND source_key = 'manual'").fetchall():
+        found["total"] += 1
+        verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"],
+                                   added=True)
+        if (verdict.score, verdict.track or scoring.ADDED_TRACK, verdict.location_kind) != (row["score"], row["track"], row["location_kind"]):
+            found["changed"] += 1
+    return found
+
+
 def rescore_if_outdated(conn, cfg: dict[str, Any]) -> dict[str, Any] | None:
-    """Rescore when this code scores postings differently from the scoring the database's prospects were given.
-    Returns what `rescore` did and the versions, or None when the scores are already current."""
+    """Rescore when the prospects were scored otherwise than they would be now: by an older version of this code, or
+    with search.toml settings that have changed since, as a save in Roles you want or Where you'll work changes them.
+    Returns what `rescore` did, the versions, and whether the settings had changed, or None when the scores are current.
+
+    A database from before the settings were recorded takes the ones in search.toml now as the ones it was scored with,
+    so an update alone doesn't rescore it."""
     before = scoring_version(conn)
-    if before >= scoring.VERSION:
+    key, had = scoring.settings_key(cfg), get_meta(conn, SCORING_SETTINGS)
+    if had is None:
+        set_meta(conn, SCORING_SETTINGS, key)
+        had = key
+    if before >= scoring.VERSION and had == key:
         return None
-    return {**rescore(conn, cfg), "from": before, "to": scoring.VERSION}
+    copy = None
+    if rescore_due(conn, cfg)["dropped"]:
+        # Dropping prospects can't be undone and the database can't be made again, so keep a copy first, as Rescore now
+        # does. A copy that can't be made puts the rescore off to the next pan rather than drop anything without one.
+        try:
+            copy = _backup_first(conn)
+        except ValueError:
+            return None
+    return {**rescore(conn, cfg), "from": before, "to": scoring.VERSION, "settings": had != key, "backup": copy}
+
+
+def _backup_first(conn) -> str | None:
+    """Copy the workspace's database into data/backups before a pan's own rescore, and return the copy's name. Only
+    the workspace's own data/pyrite.db is copied: a connection to any other database, as tests use, makes no copy."""
+    row = conn.execute("PRAGMA database_list").fetchone()
+    path = row[2] if row else ""
+    if store.IS_EXAMPLE or not path or Path(path).resolve() != store.DB_PATH.resolve():
+        return None
+    return str(backup.make(store.ROOT)["name"])
 
 
 def rescore_summary(result: dict[str, Any], names: int = 10) -> str:
-    """What a sweep's automatic rescore did, naming the prospects it dropped, since nothing else of them is left."""
+    """What a sweep's own rescore did, naming the prospects it dropped, since nothing else of them is left."""
     def count(number: int) -> str:
         return f"{number} prospect{'' if number == 1 else 's'}"
 
-    said = [f"Scoring changed in this version, so {count(result['kept'])} got new scores."]
+    if result.get("settings") and result.get("from") == result.get("to"):
+        said = [f"Your search settings changed since the prospects were scored, so {count(result['kept'])} got new scores."]
+    else:
+        said = [f"Scoring changed in this version, so {count(result['kept'])} got new scores."]
     if result["dropped"]:
         named = result["removed"][:names] + ([f"{len(result['removed']) - names} more"] if len(result["removed"]) > names else [])
         said.append(f"Dropped {count(result['dropped'])} that no longer pass: {'; '.join(named)}.")
     if result.get("held"):
         said.append(f"Kept {count(result['held'])} you've acted on that no longer pass.")
+    if result.get("backup"):
+        said.append(f"The database from before is in data/backups/{result['backup']}.")
     return " ".join(said)
 
 

@@ -1970,9 +1970,10 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
                                                                "accept_relocation", *WHERE_REMOTE_LISTS))
     prospects = _place_prospects(old_cfg, new_cfg)
     if filters_changed and prospects and prospects["moved"]:
-        notes.append("Prospects already found keep their place and score until `pyrite rescore`, which drops the ones "
-                     "that no longer pass, unless you've acted on them. `pyrite discover --fresh` gives postings dropped "
-                     "before another look.")
+        notes.append("Prospects already found keep their place and score until they're scored again: by Rescore now "
+                     "under Your prospects once you've saved, or else by the next pan, before it reads the boards. Either "
+                     "drops the ones that no longer pass, unless you've acted on them, as `pyrite rescore` does. "
+                     "`pyrite discover --fresh` gives postings dropped before another look.")
     notes += _where_remote_notes(after)
     # Named when the edit changes which onsite places count, so a change to remote roles or the area doesn't repeat it.
     onsite_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_relocation"))
@@ -2531,8 +2532,10 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
     if any(w["needs_level"] for w in wanted) and not levels["level_top"] and not levels["level_mid"]:
         notes.append("A role type that needs a senior title takes nothing while there are no top-level or senior words.")
     if changed:
-        notes.append("Saving changes search.toml, not your prospects. `pyrite rescore` scores them again as the preview "
-                     "shows, and postings dropped before come back only with `pyrite discover --fresh`.")
+        notes.append("Saving changes search.toml, not your prospects. Once it's saved, Rescore now under Your prospects "
+                     "scores them again as the preview shows. Left alone, they're scored again by the next pan, before it "
+                     "reads the boards, or by `pyrite rescore`. Postings dropped before come back only with "
+                     "`pyrite discover --fresh`.")
     test = _one_line(edits.get("test"), "The title to try")
     return Draft(out, count, notes, {
         "test": try_title(test, new_cfg) if test else None,
