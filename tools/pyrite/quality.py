@@ -63,7 +63,7 @@ SCAM_TEXT = (
 DENIAL = re.compile(r"\b(?:never|not|no|without|nor)\b|n['’]t\b", re.I)
 
 
-def _says(pattern: re.Pattern, text: str) -> bool:
+def _says(pattern: re.Pattern[str], text: str) -> bool:
     """Whether the text says it, rather than saying it never would."""
     for match in pattern.finditer(text):
         sentence = re.split(r"[.!?\n]", text[max(0, match.start() - 60):match.start()])[-1]

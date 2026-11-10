@@ -2303,6 +2303,51 @@ $("run-sweep").addEventListener("click", () => startRun("sweep"));
 $("run-claude").addEventListener("click", () => startRun("claude"));
 $("add-open").addEventListener("click", () => { $("add-error").textContent = ""; $("add-dialog").showModal(); });
 $("add-cancel").addEventListener("click", () => $("add-dialog").close());
+
+// A link put in the Add a posting form is read for the posting it leads to. Only boxes still empty are filled, so
+// nothing typed is replaced, and a link that can't be read just says so: the posting can still be added by hand.
+const ADD_FILLS = ["company", "title", "location", "description"];
+const listed = (names) => (names.length < 3 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+let addReads = 0;  // Counts the reads asked for, so an answer to an earlier link is dropped.
+let addLinkRead = "";  // The link last read, so leaving the box doesn't read it again.
+
+async function readAddLink() {
+  const url = $("add-url").value.trim();
+  if (!/^https?:\/\/\S+$/i.test(url) || url === addLinkRead) return;
+  addLinkRead = url;
+  const mine = ++addReads;
+  const note = $("add-read");
+  note.textContent = "Reading the posting at that link…";
+  try {
+    const found = await api("/api/jobs/read", { url });
+    if (mine !== addReads) return;
+    const filled = ADD_FILLS.filter((name) => {
+      const box = $(`add-${name}`);
+      if (box.value.trim() || !found[name]) return false;
+      box.value = found[name];
+      return true;
+    });
+    const missing = ["company", "title"].filter((name) => !$(`add-${name}`).value.trim());
+    note.textContent = (filled.length
+      ? `Filled in the ${listed(filled)} from the link. Check ${filled.length === 1 ? "it" : "them"} before adding.`
+      : "Read the link, and it had nothing for the boxes still empty.")
+      + (missing.length ? ` The page doesn't name the ${listed(missing)}, so type ${missing.length === 1 ? "it" : "them"} in.` : "");
+  } catch (err) {
+    if (mine === addReads) note.textContent = err.message;
+  }
+}
+
+function forgetAddLink() {
+  addReads += 1;
+  addLinkRead = "";
+  $("add-read").textContent = "";
+}
+
+$("add-url").addEventListener("change", readAddLink);
+// The pasted text isn't in the box until the paste has finished.
+$("add-url").addEventListener("paste", () => setTimeout(readAddLink));
+$("add-form").addEventListener("reset", forgetAddLink);
+$("add-dialog").addEventListener("close", () => { if (!$("add-url").value.trim()) forgetAddLink(); });
 // A form, so Enter in any one-line box adds the posting, and Company and Title are asked for before anything is sent.
 $("add-form").addEventListener("submit", async (e) => {
   e.preventDefault();

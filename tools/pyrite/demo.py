@@ -5,6 +5,7 @@ search. The fact checker's verdict on the blocked draft is real: it runs on that
 """
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from . import checks
 from .store import REPLY_DETECTED, ROOT, log_event, set_status
@@ -115,7 +116,7 @@ def _add_job(conn, cfg, row, index) -> int:
     return job_id
 
 
-def load(conn, cfg: dict) -> str:
+def load(conn, cfg: dict[str, Any]) -> str:
     """Replace whatever the database holds with the demo. Callers must have checked this is the example."""
     _clear(conn)
     ids = {row[0]: _add_job(conn, cfg, row, index) for index, row in enumerate(JOBS, start=1)}

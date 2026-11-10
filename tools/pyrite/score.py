@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
+from typing import Any
 
 from . import quality
 
@@ -69,8 +70,8 @@ class Verdict:
     score: int = 0
     track: str = ""
     location_kind: str = ""
-    reasons: list = field(default_factory=list)
-    flags: list = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
 
 
 def parse_date(value) -> date | None:
@@ -86,12 +87,12 @@ def _named(name: str) -> str:
 
 
 @lru_cache(maxsize=20000)
-def _mentions(terms: tuple, text: str) -> int:
+def _mentions(terms: tuple[str, ...], text: str) -> int:
     """Cached because the dashboard ranks every job on every refresh, and descriptions rarely change."""
     return sum(len(re.findall(term, text, re.I)) for term in terms)
 
 
-def _in_industry(industry: dict, job: dict, mentions_needed: int) -> bool:
+def _in_industry(industry: dict[str, Any], job: dict[str, Any], mentions_needed: int) -> bool:
     """Postings have no industry field, so this judges from the employer and the text.
 
     A passing mention isn't enough: "customers in automotive and aerospace" doesn't make
@@ -107,7 +108,7 @@ def _in_industry(industry: dict, job: dict, mentions_needed: int) -> bool:
     return _mentions(tuple(terms), job.get("description") or "") >= mentions_needed
 
 
-def promotion(job: dict, cfg: dict) -> tuple[int, list, list]:
+def promotion(job: dict[str, Any], cfg: dict[str, Any]) -> tuple[int, list[str], list[str]]:
     """Priority points for the cities and industries you named under [promote].
 
     Returns (points, the names that matched, reasons). Each list counts once, at its best
@@ -135,7 +136,7 @@ def promotion(job: dict, cfg: dict) -> tuple[int, list, list]:
     return points, names, reasons
 
 
-def freshness(job: dict, cfg: dict, today: date, swept_at: str | None = None) -> dict:
+def freshness(job: dict[str, Any], cfg: dict[str, Any], today: date, swept_at: str | None = None) -> dict[str, Any]:
     """How new a listing is, how often it has come back, whether it's a real opening, and the priority that gives it.
 
     This only orders what you see. Whether a posting is kept stays with the filter score.
@@ -247,12 +248,12 @@ def _plain(value) -> list[str]:
     return [value] if isinstance(value, str) else [str(item) for item in value or []]
 
 
-def local_patterns(loc_cfg: dict) -> list[str]:
+def local_patterns(loc_cfg: dict[str, Any]) -> list[str]:
     """[location]'s patterns under `local`, and its plain place names under `places`, as patterns."""
     return list(loc_cfg.get("local", [])) + [plain_pattern(place, place=True) for place in _plain(loc_cfg.get("places"))]
 
 
-def title_patterns(track: dict) -> list[str]:
+def title_patterns(track: dict[str, Any]) -> list[str]:
     """A [[track]]'s patterns under `title`, and its plain job-title words under `titles`, as patterns."""
     return list(track.get("title", [])) + [plain_pattern(words) for words in _plain(track.get("titles"))]
 
@@ -269,7 +270,7 @@ def _foreign(text: str) -> bool:
     return False
 
 
-def classify_location(location: str, workplace: str, cfg: dict) -> str:
+def classify_location(location: str, workplace: str, cfg: dict[str, Any]) -> str:
     """Return local, remote, unknown or out."""
     loc_cfg = cfg["location"]
     text = location or ""
@@ -296,7 +297,7 @@ def classify_location(location: str, workplace: str, cfg: dict) -> str:
     return "unknown" if loc_cfg.get("accept_relocation") else "out"
 
 
-def _in_any_industry(names: list, job: dict, cfg: dict) -> bool:
+def _in_any_industry(names: list[str], job: dict[str, Any], cfg: dict[str, Any]) -> bool:
     """Whether the job is in one of the named [[promote.industry]] entries."""
     rules = cfg.get("promote", {})
     needed = rules.get("mentions_needed", 3)
@@ -306,7 +307,7 @@ def _in_any_industry(names: list, job: dict, cfg: dict) -> bool:
 ELSEWHERE_FLAG = "Outside your area"
 
 
-def _abroad(location: str, loc_cfg: dict) -> bool:
+def _abroad(location: str, loc_cfg: dict[str, Any]) -> bool:
     """Whether every place a posting names is in another country, by the lists that decide it for a remote role."""
     home, elsewhere = loc_cfg.get("remote_home"), loc_cfg.get("remote_elsewhere")
     if home is not None or elsewhere is not None:
@@ -315,7 +316,7 @@ def _abroad(location: str, loc_cfg: dict) -> bool:
     return bool(places) and all(_foreign(place) for place in places)
 
 
-def kept_anywhere(company: str, title: str, location: str, cfg: dict) -> list[str]:
+def kept_anywhere(company: str, title: str, location: str, cfg: dict[str, Any]) -> list[str]:
     """The industries marked `anywhere = true` that a posting is plainly in, which keep it wherever in your country
     the job is. A job abroad stays dropped.
 
@@ -330,7 +331,7 @@ def kept_anywhere(company: str, title: str, location: str, cfg: dict) -> list[st
             if i.get("anywhere") is True and _in_industry(i, job, 1)]
 
 
-def level(title: str, cfg: dict) -> str:
+def level(title: str, cfg: dict[str, Any]) -> str:
     """How senior a title reads: "top" for a level_top word, "mid" for a level_mid one, or "" for neither."""
     scoring = cfg["scoring"]
     # Grouped, so a pattern with alternatives such as "principal|staff" is whole words too, not "Principality".
@@ -339,7 +340,7 @@ def level(title: str, cfg: dict) -> str:
     return "mid" if _any([rf"\b(?:{p})\b\.?" for p in scoring["level_mid"]], title or "") else ""
 
 
-def match_track(title: str, cfg: dict, job: dict | None = None, industry_unknown: bool = False) -> tuple[str, int] | None:
+def match_track(title: str, cfg: dict[str, Any], job: dict[str, Any] | None = None, industry_unknown: bool = False) -> tuple[str, int] | None:
     """Return (track name, seniority points) for an eligible title, else None.
 
     A track with `industries` applies only to postings in one of those industries, judged
@@ -365,12 +366,12 @@ def match_track(title: str, cfg: dict, job: dict | None = None, industry_unknown
     return None
 
 
-def _tables(value) -> list[dict]:
+def _tables(value) -> list[dict[str, Any]]:
     """The tables in a list from search.toml, passing over anything else written there."""
     return [item for item in value or [] if isinstance(item, dict)]
 
 
-def _setting_patterns(cfg: dict) -> list[tuple[str, str]]:
+def _setting_patterns(cfg: dict[str, Any]) -> list[tuple[str, str]]:
     """Every pattern search.toml gives the filters and the ranking, as (where it's set, the pattern as it's used)."""
     loc, scoring, promote = cfg.get("location") or {}, cfg.get("scoring") or {}, cfg.get("promote") or {}
     found = [(f"{key} under [location]", p) for key in ("local", "local_exact", "remote_home", "remote_elsewhere")
@@ -387,7 +388,7 @@ def _setting_patterns(cfg: dict) -> list[tuple[str, str]]:
     return found
 
 
-def pattern_problems(cfg: dict) -> list[str]:
+def pattern_problems(cfg: dict[str, Any]) -> list[str]:
     """Each pattern in search.toml that isn't a valid regular expression, naming its setting. One bad pattern would
     otherwise stop every posting from being judged, and look like every job board failing."""
     problems = []
@@ -400,7 +401,7 @@ def pattern_problems(cfg: dict) -> list[str]:
     return problems
 
 
-def _matched_words(found: re.Match) -> str:
+def _matched_words(found: re.Match[str]) -> str:
     """The words a keyword matched, widened to whole words, as the score reason shows them.
 
     Showing the posting's own words rather than the pattern keeps a bad match visible:
@@ -414,7 +415,7 @@ def _matched_words(found: re.Match) -> str:
     return " ".join(text[start:end].split()).lower()[:40]
 
 
-def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict, company: str = "") -> Verdict:
+def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict[str, Any], company: str = "") -> Verdict:
     matched = match_track(title, cfg, {"company": company, "description": description})
     if not matched:
         return Verdict(False, "title")

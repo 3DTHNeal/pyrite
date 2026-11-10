@@ -18,6 +18,7 @@ import functools
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 
 from support import CFG, LETTER, LETTER_ROLE, RESUME, SOURCES
 
@@ -201,7 +202,7 @@ STOPPED = {
 def stops(line: str, gate: str) -> bool:
     """Whether the assay blocks a draft with this line added, wherever its class says it must."""
     resume, _ = checks.check_text(RESUME + f"\n{line}\n", "resume", CFG, SOURCES, "Acme", "Principal Engineer")
-    sentence = line[2:] if line.startswith("- ") else line
+    sentence = line.removeprefix("- ")
     letter, _ = checks.check_text(LETTER.rstrip() + f"\n\n{sentence}\n", "letter", CFG, SOURCES, *LETTER_ROLE)
     if gate == "both":
         return bool(resume) and bool(letter)
@@ -209,7 +210,7 @@ def stops(line: str, gate: str) -> bool:
 
 
 @functools.cache
-def results() -> list[dict]:
+def results() -> list[dict[str, Any]]:
     """Each class with its lines, as (line, stopped on the first run, stopped now). Worked out once: it's 248 checks."""
     return [{"name": name, "gate": gate, "lines": [(line, first, stops(line, gate)) for line, first in lines]}
             for name, gate, lines in PROBES]
@@ -235,7 +236,7 @@ class Probe(unittest.TestCase):
         self.assertEqual([line for line, _first, stopped in honest["lines"] if stopped], [])
 
 
-def table(groups: list[dict]) -> str:
+def table(groups: list[dict[str, Any]]) -> str:
     rows = [f"{'class':40} {'gate':7} {'first run':>9} {'now':>4} {'of':>4}"]
     for group in groups:
         first = sum(first for _line, first, _stopped in group["lines"])
@@ -247,7 +248,7 @@ def table(groups: list[dict]) -> str:
     return "\n".join(rows)
 
 
-def chart(groups: list[dict]) -> str:
+def chart(groups: list[dict[str, Any]]) -> str:
     """The promised classes as an SVG, one square to a line: stopped on the first run, stopped now, or still through."""
     ink, soft, brass, good, bad = "#f3eee3", "#a39a89", "#d2b04e", "#6fc790", "#f28b7b"
     sans = "Segoe UI, system-ui, -apple-system, sans-serif"

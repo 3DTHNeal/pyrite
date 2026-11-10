@@ -21,6 +21,7 @@ from datetime import date, datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import (
@@ -33,6 +34,7 @@ from . import (
     fill,
     gaps,
     launch,
+    link,
     mail,
     market,
     options,
@@ -118,6 +120,7 @@ MAX_NOTE = 2000  # The note that goes with a status change.
 MAX_NOTES = 5000  # Your notes on a job.
 MAX_NEXT_STEP = 300
 MAX_NAME = 200  # A company, title or location you add by hand.
+MAX_LINK = 2000  # A posting's web address. Anything longer was pasted into the wrong box.
 # A job's or an alert's number. Longer ones can't be one, and SQLite can't even look them up.
 JOB_ID = r"(\d{1,18})"
 # Tells this server from the one that replaces it after an update, so the page knows when to reload.
@@ -144,7 +147,7 @@ def tracked_by_url(conn, url: str):
     return next((row for row in rows if _same_posting(row["url"]) == wanted), None)
 
 
-def _text(body: dict, key: str, label: str, limit: int) -> str:
+def _text(body: dict[str, Any], key: str, label: str, limit: int) -> str:
     """A text field from a request, trimmed. Anything but text, or text over `limit`, is refused rather than stored
     some other way or cut short."""
     value = body.get(key)
@@ -195,8 +198,8 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     return cursor.lastrowid
 
 
-def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept_at: str | None = None,
-            context: signals.Context | None = None) -> dict:
+def _enrich(row, cfg: dict[str, Any], today: str, include_description: bool = False, swept_at: str | None = None,
+            context: signals.Context | None = None) -> dict[str, Any]:
     """One job as the page shows it. `context` is what judging pay and rarity needs to know about the other jobs:
     without it, those two are left out."""
     job = job_dict(row, include_description)
@@ -225,7 +228,7 @@ def _enrich(row, cfg: dict, today: str, include_description: bool = False, swept
     return job
 
 
-def _changed_since_check(job: dict, cfg: dict) -> list[str]:
+def _changed_since_check(job: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
     """Files that changed after the fact checker passed a draft you haven't sent, so the pass no longer covers them.
     The fact bank and the [guard] rules count too: a pass against a fact since taken back says nothing now."""
     result = job["check_result"] or {}
@@ -235,9 +238,9 @@ def _changed_since_check(job: dict, cfg: dict) -> list[str]:
     return checks.changed_since(ROOT / job["app_folder"], checked) + checks.sources_changed(cfg, result.get("checked_sources"))
 
 
-def _scam_alerts(alerts: list[dict]) -> dict[int, dict]:
+def _scam_alerts(alerts: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
     """The latest open scam warning that names each job's company, by job id."""
-    by_job: dict[int, dict] = {}
+    by_job: dict[int, dict[str, Any]] = {}
     for alert in alerts:
         if alert["job_id"] is not None:
             by_job.setdefault(alert["job_id"], alert)
@@ -254,15 +257,15 @@ def _title_key(title: str) -> str:
     return " ".join("senior" if w == "sr" else w for w in words)
 
 
-def _applied_by_company(conn) -> dict[str, list[dict]]:
+def _applied_by_company(conn) -> dict[str, list[dict[str, Any]]]:
     """Every application sent so far, grouped by employer, oldest first."""
-    history: dict[str, list[dict]] = {}
+    history: dict[str, list[dict[str, Any]]] = {}
     for row in conn.execute("SELECT id, company, title, applied_at FROM jobs WHERE applied_at IS NOT NULL ORDER BY applied_at"):
         history.setdefault(_company_key(row["company"]), []).append(dict(row))
     return history
 
 
-def _attach_history(job: dict, history: dict, limit: int) -> None:
+def _attach_history(job: dict[str, Any], history: dict[str, Any], limit: int) -> None:
     """How many times you've applied to this employer, and whether one of them was this same job under another listing."""
     sent = [a for a in history.get(_company_key(job["company"]), []) if a["id"] != job["id"]]
     job["applied_here"] = len(sent)
@@ -285,7 +288,7 @@ def _status_before_pass(conn, job_id: int) -> str | None:
     return before if before in NOT_SENT else None
 
 
-def _deadline_text(job: dict) -> str:
+def _deadline_text(job: dict[str, Any]) -> str:
     days = job["days_to_deadline"]
     if days is None:
         return ""
@@ -301,7 +304,7 @@ def _deadline_text(job: dict) -> str:
     return f"Apply by {label}, in {days} days."
 
 
-def _history_text(job: dict) -> str:
+def _history_text(job: dict[str, Any]) -> str:
     same = job.get("same_title_applied")
     if same:
         sent = date.fromisoformat(same["applied_at"][:10])
@@ -311,7 +314,8 @@ def _history_text(job: dict) -> str:
     return ""
 
 
-def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: dict, scams: dict | None = None) -> None:
+def _attach_runs(job: dict[str, Any], replies: dict[int, dict[str, Any]], refreshes: dict[int, dict[str, Any]],
+                 preps: dict[int, dict[str, Any]], tries: dict[int, int], scams: dict[int, dict[str, Any]] | None = None) -> None:
     job["possible_reply"] = replies.get(job["id"])
     job["scam_alert"] = (scams or {}).get(job["id"])
     job["refresh"] = refreshes.get(job["id"])
@@ -321,7 +325,7 @@ def _attach_runs(job: dict, replies: dict, refreshes: dict, preps: dict, tries: 
         job["changed_since_check"] = []  # A refresh rewrites the draft in place and checks it when it's done.
 
 
-def _gone_text(job: dict, ghost_days: int) -> str:
+def _gone_text(job: dict[str, Any], ghost_days: int) -> str:
     """What happens to a sent application whose posting came down, and when."""
     down = quiet_days_since(job["posting_closed_at"]) or 0
     since = {0: "today", 1: "yesterday"}.get(down, f"{down} days ago")
@@ -333,7 +337,7 @@ def _gone_text(job: dict, ghost_days: int) -> str:
             "unless you log a reply or set a next step.")
 
 
-def _reach_out_order(waiting: list[dict]) -> dict:
+def _reach_out_order(waiting: list[dict[str, Any]]) -> dict[str, Any]:
     """One to-do item for every application due a note to the hiring manager, so a busy week of applying doesn't fill
     the list with them. It names the one whose window closes first and counts the rest."""
     waiting = sorted(waiting, key=lambda j: (-j["days_since_applied"], j["applied_at"] or ""))
@@ -347,11 +351,11 @@ def _reach_out_order(waiting: list[dict]) -> dict:
     return {"rank": 3, "kind": "Reach out", "job_id": first["id"], "text": f"{first['company']}: {first['title']}", "detail": detail}
 
 
-def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Sequence[dict] = (), ghost_days: int = 0,
-            reach_out: bool = True) -> list[dict]:
+def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Sequence[dict[str, Any]] = (), ghost_days: int = 0,
+            reach_out: bool = True) -> list[dict[str, Any]]:
     """Today's to-do list, most urgent first. `reach_out` False leaves out the reminders to write to hiring managers."""
     orders = []
-    reach: list[dict] = []
+    reach: list[dict[str, Any]] = []
     for alert in alerts:
         # The sender and subject were written by whoever sent the mail, so the page shows them as text only.
         orders.append({"rank": 0, "kind": "Possible scam", "job_id": alert["job_id"], "alert_id": alert["id"],
@@ -414,7 +418,7 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
     listed = {o["job_id"] for o in orders}
     # Within [run] decide_days, so there's time to tailor before it closes. A prospect not yet judged needs that first.
     closing = sorted((j for j in jobs if j["status"] in ("new", "shortlisted", "needs_fix") and j.get("decide_soon") and j["id"] not in listed),
-                     key=lambda j: (j["days_to_deadline"] if j["days_to_deadline"] >= 0 else 0, -j["rank"]))
+                     key=lambda j: (max(j["days_to_deadline"], 0), -j["rank"]))
     for job in closing[:5]:
         decide = "Tailor it now or pass." if job["status"] != "new" else "Decide now: use Tailor this one first, or pass."
         orders.append({"rank": 1 if soon(job) else 2, "kind": "Closing soon", "job_id": job["id"], "text": f"{job['company']}: {job['title']}",
@@ -437,7 +441,7 @@ def _orders(jobs: list[dict], fix_limit: int = DEFAULT_FIX_ATTEMPTS, alerts: Seq
     return sorted(orders, key=lambda o: o["rank"])
 
 
-def _gaps_order(found: dict) -> list[dict]:
+def _gaps_order(found: dict[str, Any]) -> list[dict[str, Any]]:
     """One to-do item for the gaps that keep coming up, once one has come up in gaps.ORDER_FROM applications."""
     asked = gaps.questions(found)
     if not asked or asked[0]["count"] < gaps.ORDER_FROM:
@@ -453,7 +457,7 @@ def _days(count: int) -> str:
     return f"{count} day{'' if count == 1 else 's'}"
 
 
-def _setup_orders(cfg: dict) -> list[dict]:
+def _setup_orders(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """What a new workspace still has to change, first on the to-do list. The demo is the example on purpose, so it has none."""
     if IS_EXAMPLE:
         return []
@@ -463,7 +467,7 @@ def _setup_orders(cfg: dict) -> list[dict]:
             for todo in doctor.workspace_todos(ROOT, cfg)]
 
 
-def build_state(conn, cfg) -> dict:
+def build_state(conn, cfg) -> dict[str, Any]:
     today = date.today().isoformat()
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
     last_run = last_full_sweep(conn)
@@ -560,7 +564,7 @@ def build_state(conn, cfg) -> dict:
     }
 
 
-def job_detail(conn, job_id: int, cfg: dict) -> dict:
+def job_detail(conn, job_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
     last_run = last_full_sweep(conn)
     job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True,
                   swept_at=last_run["started_at"] if last_run else None, context=signals.context(conn, cfg, date.today()))
@@ -602,7 +606,7 @@ def job_detail(conn, job_id: int, cfg: dict) -> dict:
     return job
 
 
-def _reopen_target(job, cfg: dict) -> str:
+def _reopen_target(job, cfg: dict[str, Any]) -> str:
     """Where a reopened job goes back to. Ready only if the assay's last verdict was a pass and nothing has changed since:
     having once been ready says nothing about the draft on disk now."""
     if job["applied_at"]:
@@ -614,7 +618,7 @@ def _reopen_target(job, cfg: dict) -> str:
     return "needs_fix" if checks.not_covered(ROOT / job["app_folder"], cfg, job["check_result"]) else "ready"
 
 
-def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
+def apply_action(conn, job_id: int, body: dict[str, Any], cfg: dict[str, Any]) -> None:
     action = body.get("action")
     note = _text(body, "note", "The note", MAX_NOTE)
     follow_up = cfg["run"]["follow_up_days"]
@@ -703,7 +707,7 @@ def apply_action(conn, job_id: int, body: dict, cfg: dict) -> None:
         raise ValueError(f"Unknown action {action!r}")
 
 
-def allowed_hosts(cfg: dict) -> set[str]:
+def allowed_hosts(cfg: dict[str, Any]) -> set[str]:
     """The extra names under [dashboard] allowed_hosts, in lower case. Only a list of names counts: a single string
     would let any piece of it match, so it allows nothing, and `pyrite doctor` says so."""
     dashboard = cfg.get("dashboard", {})
@@ -767,7 +771,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Something went wrong on the server, so that didn't work. The details are in the window "
                                  "the dashboard is running in."}, 500)
 
-    def _send(self, status: int, body: bytes, content_type: str, extra: dict | None = None) -> None:
+    def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, Any] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -896,6 +900,9 @@ class Handler(BaseHTTPRequestHandler):
                 if known:
                     return self._json({"id": job_id, "existing": True, "status": known["status"]}, 200)
                 return self._json({"id": job_id}, 201)
+            if path == "/api/jobs/read":
+                # What the posting at a link says, so the Add a posting form can fill itself in. Nothing is saved.
+                return self._json(link.read(_text(body, "url", "The link", MAX_LINK)))
             if path == "/api/run":
                 tasks.start(conn, str(body.get("kind") or ""))
                 return self._json({"ok": True}, 202)
@@ -931,7 +938,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _update(self, conn, cfg: dict, switch: bool) -> None:
+    def _update(self, conn, cfg: dict[str, Any], switch: bool) -> None:
         """Update Pyrite's code to GitHub's main, then restart on it once the page has heard what happened. `switch`
         says the page offered to switch the code folder to main, so a folder on another branch may be."""
         # The page hides the button then, but `check_updates = false` promises GitHub is never asked, so this keeps it.
@@ -948,12 +955,12 @@ class Handler(BaseHTTPRequestHandler):
             restart()
 
 
-def updates_on(cfg: dict) -> bool:
+def updates_on(cfg: dict[str, Any]) -> bool:
     """Whether the dashboard may ask GitHub for a newer Pyrite: anything but `check_updates = false` under [dashboard]."""
     return cfg.get("dashboard", {}).get("check_updates", True) is not False
 
 
-def update_state(cfg: dict) -> dict:
+def update_state(cfg: dict[str, Any]) -> dict[str, Any]:
     """What the Update available button needs: whether GitHub's main is ahead of this copy, and anything stopping the
     update. `check_updates = false` under [dashboard] means GitHub is never asked."""
     if not updates_on(cfg):
@@ -970,22 +977,22 @@ def update_state(cfg: dict) -> dict:
     return found
 
 
-def _settings_page() -> dict:
+def _settings_page() -> dict[str, Any]:
     """Everything the Settings tab shows: how Pyrite runs, and the cities and industries to see first."""
     return {**settings.view(), "options": options.view()}
 
 
-def _save_settings(body: dict) -> dict:
+def _save_settings(body: dict[str, Any]) -> dict[str, Any]:
     settings.save(body)
     return _settings_page()
 
 
-def _save_options(body: dict) -> dict:
+def _save_options(body: dict[str, Any]) -> dict[str, Any]:
     options.save(body)
     return _settings_page()
 
 
-def _save_facts(body: dict) -> dict:
+def _save_facts(body: dict[str, Any]) -> dict[str, Any]:
     """The Facts tab's save. Approving a term or unlisting a "Do not use" item needs a code, as on the Profile tab."""
     # The demo refuses every save, so it shouldn't send a code first.
     if not store.IS_EXAMPLE:
@@ -998,7 +1005,7 @@ def _save_facts(body: dict) -> dict:
     return facts.save(body)
 
 
-def _save_profile(body: dict) -> dict:
+def _save_profile(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("step") != "gaps":
         return _write_profile(body.get("changes"), body.get("based_on"), body, str(body.get("reason") or ""), body.get("step"))
     # Answers to gaps also keep which questions were answered and flag the drafts that raised them. What's kept follows
@@ -1010,7 +1017,7 @@ def _save_profile(body: dict) -> dict:
     return _profile_page()
 
 
-def _gap_question(body: dict) -> dict:
+def _gap_question(body: dict[str, Any]) -> dict[str, Any]:
     """Stop asking about a gap that doesn't apply, or ask about one again. Neither changes a file the assay reads."""
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so its questions can't be answered.")
@@ -1025,7 +1032,7 @@ def _gap_question(body: dict) -> dict:
     return _profile_page()
 
 
-def _put_back(body: dict) -> dict:
+def _put_back(body: dict[str, Any]) -> dict[str, Any]:
     """History's Put back: the copy a file had before an earlier save, or with `whole`, every file that save changed.
     The copies are read here rather than sent by the page, and written like any other save, so one that loosens a
     check still needs a code."""
@@ -1036,7 +1043,7 @@ def _put_back(body: dict) -> dict:
     return _write_profile(texts, body.get("based_on"), body, profile.put_back_reason(list(texts), stamp), None)
 
 
-def _write_profile(changes, based_on, body: dict, reason: str, step) -> dict:
+def _write_profile(changes, based_on, body: dict[str, Any], reason: str, step) -> dict[str, Any]:
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so the fictional candidate's profile can't be changed.")
     if not isinstance(changes, dict) or not changes or not isinstance(based_on, dict):
@@ -1051,17 +1058,17 @@ def _write_profile(changes, based_on, body: dict, reason: str, step) -> dict:
     return _profile_page()
 
 
-def _profile_page() -> dict:
+def _profile_page() -> dict[str, Any]:
     """Everything the Profile tab shows: the files as the sections read them, and History."""
     return {**profile.view(), **steps.view(), "history": profile.history()}
 
 
-def _draft_profile(body: dict) -> dict:
+def _draft_profile(body: dict[str, Any]) -> dict[str, Any]:
     """What a section's form would write, worked out by the same code a save uses. Nothing is written."""
     return steps.draft(str(body.get("step") or ""), body.get("edits"), body.get("based_on"))
 
 
-def _profile_code(body: dict) -> dict:
+def _profile_code(body: dict[str, Any]) -> dict[str, Any]:
     """Send a waiting change's code again, or give up on it."""
     if body.get("action") == "resend":
         return confirm.resend(body.get("request_id"))

@@ -12,6 +12,7 @@ import re
 import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from . import doctor, factsdoc, gaps, score, settings, store
 
@@ -37,7 +38,7 @@ DIFF_LINES = 400
 # writes, and `required` ones must be set before Pyrite can do its job. Until a section's own editor is built,
 # `meanwhile` says where to change it instead, and `fallback` names the tab that edits it, if one does, with the
 # section of that tab after a slash.
-STEPS: tuple[dict, ...] = (
+STEPS: tuple[dict[str, Any], ...] = (
     {"id": "basics", "group": "About you", "label": "Name and contact", "required": True, "fallback": "facts",
      "files": ("config", "facts", "resume", "letter"),
      "meanwhile": "Until it's built: your name and contact on the Facts tab, and [candidate] name in profile/search.toml.",
@@ -147,7 +148,7 @@ def versions() -> dict[str, str]:
     return {key: version(read(key)) for key in FILES}
 
 
-def known_titles(cfg: dict) -> tuple[str, ...]:
+def known_titles(cfg: dict[str, Any]) -> tuple[str, ...]:
     """Job titles from the resume every draft's headings must match, which settle where a title with a comma ends."""
     source = cfg.get("guard", {}).get("heading_source", "")
     path = store.ROOT / source if source else None
@@ -160,7 +161,7 @@ def _terms(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
-def view() -> dict:
+def view() -> dict[str, Any]:
     """What the Profile tab shows: each file's version, and the parts of them it edits."""
     texts = {key: read(key) for key in FILES}
     cfg = tomllib.loads(texts["config"]) if texts["config"] else {}
@@ -209,19 +210,19 @@ def _plural(count: int, one: str, many: str = "") -> str:
     return f"{count} {one if count == 1 else many or one + 's'}"
 
 
-def _watched(cfg: dict) -> int:
+def _watched(cfg: dict[str, Any]) -> int:
     return sum(len(board) for board in cfg.get("watch", {}).values() if isinstance(board, dict))
 
 
-def _questions(found: dict) -> str:
+def _questions(found: dict[str, Any]) -> str:
     asked = gaps.questions(found)
     if asked:
         return f"{_plural(len(asked), 'question')} from {_plural(found['applications'], 'application')}"
     return "Nothing keeps coming up" if found["applications"] else "No applications yet"
 
 
-def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict],
-               found: dict | None = None) -> dict[str, tuple[bool, str]]:
+def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: list[dict[str, Any]],
+               found: dict[str, Any] | None = None) -> dict[str, tuple[bool, str]]:
     """Each section's one-line summary, and whether it's set at all."""
     name = str(cfg.get("candidate", {}).get("name", "")).strip()
     contact = factsdoc.Doc(texts["facts"]).contact()
@@ -268,10 +269,10 @@ def _summaries(texts: dict[str, str], cfg: dict, employers, sections: list[dict]
     }
 
 
-def needs(cfg: dict | None, unread: list[int], asked: int = 0) -> list[dict]:
+def needs(cfg: dict[str, Any] | None, unread: list[int], asked: int = 0) -> list[dict[str, Any]]:
     """What the Profile tab asks you to look at, most important first: what setup still needs and anything the tab
     couldn't read. Each names the section that fixes it, when one does."""
-    found: list[dict] = []
+    found: list[dict[str, Any]] = []
     if not store.IS_EXAMPLE:  # The demo is the example on purpose, so it has nothing left to set up.
         for todo in doctor.workspace_todos(store.ROOT, cfg):
             step = todo.get("step") if todo.get("step") in STEP_IDS else None
@@ -288,7 +289,7 @@ def needs(cfg: dict | None, unread: list[int], asked: int = 0) -> list[dict]:
     return sorted(found, key=lambda item: rank.get(item["severity"], 1))
 
 
-def hub(texts: dict[str, str], cfg: dict | None, employers, sections: list[dict], unread: list[int]) -> dict:
+def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: list[dict[str, Any]], unread: list[int]) -> dict[str, Any]:
     """Each section with its state and summary, and the list of what needs you."""
     found = gaps.view()
     waiting = needs(cfg, unread, len(gaps.questions(found)))
@@ -362,7 +363,7 @@ def keep(before: dict[str, str], reason: str) -> None:
         _keep(stamp, key, text, reason, None)
 
 
-def refuse_stale(current: dict[str, str], based_on: dict) -> None:
+def refuse_stale(current: dict[str, str], based_on: dict[str, Any]) -> None:
     """Raise Conflict if any file changed since the version the page read."""
     for key, text in current.items():
         if based_on.get(key) != version(text):
@@ -370,7 +371,7 @@ def refuse_stale(current: dict[str, str], based_on: dict) -> None:
                            "Reload to see the latest, then make your change again.")
 
 
-def write(changes: dict, based_on: dict, reason: str, step: str | None = None) -> dict:
+def write(changes: dict[str, Any], based_on: dict[str, Any], reason: str, step: str | None = None) -> dict[str, Any]:
     """Write several profile files at once, each only if it hasn't changed since `based_on` says it was read.
 
     Every file's earlier text is kept in data/history first. If one write fails, the ones already made are put back,
@@ -410,7 +411,7 @@ def write(changes: dict, based_on: dict, reason: str, step: str | None = None) -
     return versions()
 
 
-def history(limit: int = 100) -> list[dict]:
+def history(limit: int = 100) -> list[dict[str, Any]]:
     """Earlier copies, newest first, with why each file changed."""
     log = _history_dir() / "log.jsonl"
     if not log.exists():
@@ -429,7 +430,7 @@ def history(limit: int = 100) -> list[dict]:
     return entries[::-1][:limit]
 
 
-def compare(key: str, stamp: str) -> dict:
+def compare(key: str, stamp: str) -> dict[str, Any]:
     """What putting back the copy kept at `stamp` would change in the file as it is now, as diff lines."""
     old, now = kept(key, stamp), read(key)
     lines = list(difflib.unified_diff(now.splitlines(), old.splitlines(), "now", "put back", n=2, lineterm=""))[2:]

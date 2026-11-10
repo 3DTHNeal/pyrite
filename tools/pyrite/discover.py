@@ -58,7 +58,7 @@ def dedupe_key(company: str, title: str, description: str) -> str:
     return hashlib.sha1(norm.encode(), usedforsecurity=False).hexdigest()
 
 
-def _watchlist(cfg: dict) -> list[tuple]:
+def _watchlist(cfg: dict[str, Any]) -> list[tuple[str, str, Any]]:
     watch = cfg.get("watch", {})
     out = []
     for kind in sources.FEEDS:
@@ -80,7 +80,7 @@ def watch_problem(kind: str, ident: str, spec) -> str:
     return f'[watch.{kind}] {ident} in profile/search.toml should be the company\'s name, written as {ident} = "Company".'
 
 
-def watch_problems(cfg: dict) -> list[str]:
+def watch_problems(cfg: dict[str, Any]) -> list[str]:
     """watch_problem for every watched company that has one."""
     return [problem for kind, ident, spec in _watchlist(cfg) if (problem := watch_problem(kind, ident, spec))]
 
@@ -92,14 +92,14 @@ def _company(ident: str, spec) -> str:
     return str(spec or ident)
 
 
-def check_patterns(cfg: dict) -> None:
+def check_patterns(cfg: dict[str, Any]) -> None:
     """Stop before reading any board when a pattern in search.toml can't be read, since it would fail every posting."""
     problems = scoring.pattern_problems(cfg)
     if problems:
         raise ConfigError(" ".join(problems) + " Fix it, then try again.")
 
 
-def _is_candidate(title: str, location: str, cfg: dict, workplace: str = "", company: str = "") -> bool:
+def _is_candidate(title: str, location: str, cfg: dict[str, Any], workplace: str = "", company: str = "") -> bool:
     """Worth the slower call for a full description? A track limited to industries counts here, since the industry
     is judged from the description this would fetch. So does a job outside your area in an industry kept anywhere."""
     if not scoring.match_track(title, cfg, {"company": company}, industry_unknown=True):
@@ -109,7 +109,7 @@ def _is_candidate(title: str, location: str, cfg: dict, workplace: str = "", com
     return scoring.classify_location(location, workplace, cfg) != "out" or bool(scoring.kept_anywhere(company, title, location, cfg))
 
 
-def _probe_workday(spec: dict, open_ids: list, hits: dict, deadline: float) -> tuple[list, list]:
+def _probe_workday(spec: dict[str, Any], open_ids: list[str], hits: dict[str, Any], deadline: float) -> tuple[list[str], list[str]]:
     """Ask Workday about each tracked posting its search left out. Returns the paths that are gone, and those still up.
 
     This runs with the other network calls, before anything is saved, so a slow board never
@@ -129,7 +129,8 @@ def _probe_workday(spec: dict, open_ids: list, hits: dict, deadline: float) -> t
     return closed, live
 
 
-def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: float, open_ids: list | None = None) -> dict:
+def _fetch_one(item: tuple[str, str, Any], cfg: dict[str, Any], known: set[str], rejected: set[str], deadline: float,
+               open_ids: list[str] | None = None) -> dict[str, Any]:
     kind, ident, spec = item
     source_key = f"{kind}:{ident}"
     company = _company(ident, spec)
@@ -187,7 +188,7 @@ def _fetch_one(item: tuple, cfg: dict, known: set, rejected: set, deadline: floa
     return result
 
 
-def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minutes: float = 45) -> dict:
+def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minutes: float = 45) -> dict[str, Any]:
     cfg = cfg or load_config()
     check_patterns(cfg)
     started = now()
@@ -202,15 +203,15 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
     known_rows = conn.execute(
         "SELECT source_key, source_id FROM jobs UNION SELECT source_key, source_id FROM listings"
     ).fetchall()
-    known: dict[str, set] = {}
+    known: dict[str, set[str]] = {}
     for row in known_rows:
         known.setdefault(row["source_key"], set()).add(row["source_id"])
-    rejected: dict[str, set] = {}
+    rejected: dict[str, set[str]] = {}
     for row in conn.execute("SELECT source_key, source_id FROM rejected"):
         rejected.setdefault(row["source_key"], set()).add(row["source_id"])
 
     # Postings each source should still have up. Workday is asked about the ones its search doesn't return.
-    open_ids: dict[str, list] = {}
+    open_ids: dict[str, list[str]] = {}
     for row in conn.execute(
         f"SELECT source_key, source_id FROM jobs WHERE posting_closed_at IS NULL AND status IN ({','.join('?' * len(ACTIVE))})", ACTIVE
     ):
@@ -258,7 +259,7 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
     return stats
 
 
-def ghost_after_days(cfg: dict) -> int:
+def ghost_after_days(cfg: dict[str, Any]) -> int:
     return cfg["run"].get("ghost_after_down_days", DEFAULT_GHOST_AFTER_DOWN_DAYS)
 
 
@@ -268,7 +269,7 @@ def waiting_on_gone(job) -> bool:
             and (job["next_action"] or "") in ("", "Follow up"))
 
 
-def settle_gone(conn, cfg: dict) -> list[int]:
+def settle_gone(conn, cfg: dict[str, Any]) -> list[int]:
     """Mark ghosted each sent application whose posting has been down for the set days with nothing heard.
 
     Mail the inbox flagged that you haven't dealt with yet holds a job back, since it may be the reply.
@@ -377,7 +378,7 @@ def _job_id_for_listing(conn, key: str, source_id: str) -> int | None:
     return row["id"] if row else None
 
 
-def _count_repost(conn, job_id: int, ts: str, detail: str, stats: dict) -> None:
+def _count_repost(conn, job_id: int, ts: str, detail: str, stats: dict[str, Any]) -> None:
     conn.execute("UPDATE jobs SET reposts = reposts + 1, last_reposted_at = ? WHERE id = ?", (ts, job_id))
     log_event(conn, job_id, "reposted", detail)
     stats["reposted"] += 1
@@ -395,7 +396,7 @@ def _reopen_if_closed(conn, job, ts: str) -> None:
         set_status(conn, job["id"], "applied", "The posting is back up, so this is waiting to hear again")
 
 
-def _mark_seen(conn, key: str, source_id: str, ts: str, cfg: dict, stats: dict) -> None:
+def _mark_seen(conn, key: str, source_id: str, ts: str, cfg: dict[str, Any], stats: dict[str, Any]) -> None:
     job_id = _job_id_for_listing(conn, key, source_id)
     if job_id is None:
         return
@@ -408,7 +409,7 @@ def _mark_seen(conn, key: str, source_id: str, ts: str, cfg: dict, stats: dict) 
     conn.execute("UPDATE jobs SET last_seen = ?, posting_closed_at = NULL WHERE id = ?", (ts, job_id))
 
 
-def _note_redates(conn, result: dict, cfg: dict, ts: str, stats: dict) -> None:
+def _note_redates(conn, result: dict[str, Any], cfg: dict[str, Any], ts: str, stats: dict[str, Any]) -> None:
     """A listing whose posted date jumps forward is being made to look new."""
     key = result["source_key"]
     tolerance = cfg["freshness"]["redate_tolerance_days"]
@@ -436,7 +437,7 @@ def _note_redates(conn, result: dict, cfg: dict, ts: str, stats: dict) -> None:
             stats["redated"] += 1
 
 
-def _fill_in(conn, row, cfg: dict) -> None:
+def _fill_in(conn, row, cfg: dict[str, Any]) -> None:
     """Applications added before the sweep saw them have no score, track or fingerprint, so work those out from their text."""
     if not row["description"]:
         return
@@ -454,7 +455,7 @@ def _fill_in(conn, row, cfg: dict) -> None:
         )
 
 
-def _fill_in_existing(conn, cfg: dict) -> None:
+def _fill_in_existing(conn, cfg: dict[str, Any]) -> None:
     for row in conn.execute("SELECT * FROM jobs WHERE score = 0 OR dedupe_key IS NULL").fetchall():
         _fill_in(conn, row, cfg)
 
@@ -551,7 +552,7 @@ def _near_twin(conn, posting, started: str):
     return None
 
 
-def _add_listing(conn, job, posting, fingerprint: str, ts: str, key: str, started: str, baseline: bool, stats: dict) -> None:
+def _add_listing(conn, job, posting, fingerprint: str, ts: str, key: str, started: str, baseline: bool, stats: dict[str, Any]) -> None:
     """Another listing for a job already tracked: either the same job in another place, or a repost."""
     record_listing(conn, job["id"], key, posting.source_id, posting.location, posting.posted_at, ts)
     found_together = job["first_seen"] >= started
@@ -596,7 +597,7 @@ def acted_on(conn, job) -> bool:
     return False
 
 
-def rescore(conn, cfg=None) -> dict:
+def rescore(conn, cfg=None) -> dict[str, Any]:
     """Re-apply the current scoring and filters to prospects: jobs still new, found on a board.
 
     Each one that passes gets its score and reasons again. One that no longer passes is dropped and remembered as
@@ -641,7 +642,7 @@ def rescore(conn, cfg=None) -> dict:
     return {"kept": kept, "dropped": dropped, "held": held, "removed": removed}
 
 
-def rescore_if_outdated(conn, cfg: dict) -> dict | None:
+def rescore_if_outdated(conn, cfg: dict[str, Any]) -> dict[str, Any] | None:
     """Rescore when this code scores postings differently from the scoring the database's prospects were given.
     Returns what `rescore` did and the versions, or None when the scores are already current."""
     before = scoring_version(conn)
@@ -650,7 +651,7 @@ def rescore_if_outdated(conn, cfg: dict) -> dict | None:
     return {**rescore(conn, cfg), "from": before, "to": scoring.VERSION}
 
 
-def rescore_summary(result: dict, names: int = 10) -> str:
+def rescore_summary(result: dict[str, Any], names: int = 10) -> str:
     """What a sweep's automatic rescore did, naming the prospects it dropped, since nothing else of them is left."""
     def count(number: int) -> str:
         return f"{number} prospect{'' if number == 1 else 's'}"
@@ -740,7 +741,7 @@ def _close_missing(conn, result, cfg, started, stats, ts):
             )
 
 
-def check_sources(cfg=None) -> list[dict]:
+def check_sources(cfg=None) -> list[dict[str, Any]]:
     """Try each watched source once and report how many postings it returned."""
     cfg = cfg or load_config()
     check_patterns(cfg)
@@ -755,7 +756,7 @@ def check_sources(cfg=None) -> list[dict]:
         try:
             if kind == "workday":
                 api, _ = sources.workday_base({**spec, "tenant": ident})
-                page = cast(dict, sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0))
+                page = cast(dict[str, Any], sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0))
                 count = page.get("total", 0)
             else:
                 count = len(sources.FEEDS[kind](ident, name))

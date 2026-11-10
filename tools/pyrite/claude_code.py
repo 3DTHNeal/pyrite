@@ -16,6 +16,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .store import CODE_ROOT, now
 
@@ -94,7 +95,7 @@ def defang(text: str) -> str:
         text = cleaned
 
 
-def posting_block(board: dict, description: str) -> str:
+def posting_block(board: dict[str, Any], description: str) -> str:
     """Everything a job board supplied about one job, fenced off as data. The posting can't close the fence early."""
     return "\n".join([
         "<untrusted_posting>",
@@ -178,7 +179,7 @@ NEVER_READ = (
 NEVER_WRITE = tuple(f"{tool}(./{path})" for path in ("profile/**", "data/**", ".claude/**", "CLAUDE.md") for tool in ("Edit", "Write"))
 
 
-def model_args(cfg: dict | None) -> list[str]:
+def model_args(cfg: dict[str, Any] | None) -> list[str]:
     """Which model judges and writes, and how hard it thinks: `model` and `effort` under [claude] in search.toml.
 
     Left unset, a run gets Claude Code's default for each. Your own Claude Code settings don't decide it, since a run
@@ -191,7 +192,7 @@ def model_args(cfg: dict | None) -> list[str]:
             for part in (flag, str(chosen[key]))]
 
 
-def command(claude: str, editable: list[str], cfg: dict | None = None) -> list[str]:
+def command(claude: str, editable: list[str], cfg: dict[str, Any] | None = None) -> list[str]:
     """Reading and writing only. dontAsk refuses anything these rules don't allow, and your user settings can't widen them.
 
     With nothing editable, Claude gets no tools at all, so everything it needs must be in the prompt. The workspace's
@@ -300,7 +301,7 @@ def profile_section(root: Path, paths: tuple[str, ...]) -> str:
     return "\n## The files\n\nEach file below is given in full, under its path. Any file that isn't here doesn't exist.\n\n" + "\n".join(blocks)
 
 
-def latest(conn, names: dict[str, str], stale_minutes: int, stale_detail: str) -> dict[int, dict]:
+def latest(conn, names: dict[str, str], stale_minutes: int, stale_detail: str) -> dict[int, dict[str, Any]]:
     """Each job's latest run of one kind, by job id. `names` maps that kind's events to running, done and failed."""
     kinds = tuple(names)
     rows = conn.execute(
@@ -331,7 +332,7 @@ def spawn_worker(subcommand: str, job_id: int, cwd: Path) -> None:
 STREAM_EVENTS = {"system", "assistant", "user"}
 
 
-def _events(output: str) -> tuple[list[dict], str]:
+def _events(output: str) -> tuple[list[dict[str, Any]], str]:
     """The events of a stream-json run, one a line, and any lines that weren't one."""
     events, plain = [], []
     for line in output.splitlines():
@@ -345,7 +346,7 @@ def _events(output: str) -> tuple[list[dict], str]:
     return events, "\n".join(plain).strip()
 
 
-def _read_result(output: str) -> tuple[str, dict]:
+def _read_result(output: str) -> tuple[str, dict[str, Any]]:
     """Claude Code's closing message and its JSON result, from `json` output or the last event of `stream-json`.
     Plain text, from a failure that printed no JSON, has no result."""
     text = output.strip()
@@ -366,7 +367,7 @@ def _read_result(output: str) -> tuple[str, dict]:
     return str(data.get("result") or data.get("subtype") or "").strip(), data
 
 
-def startup(output: str) -> dict | None:
+def startup(output: str) -> dict[str, Any] | None:
     """What a stream-json run started with: its tools and the state of each MCP server. None for `json` output, which
     doesn't say."""
     events, _ = _events(output)
@@ -377,7 +378,7 @@ def _count(value) -> float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def record(conn, job_id: int | None, kind: str, result: dict, seconds: float, ok: bool) -> int:
+def record(conn, job_id: int | None, kind: str, result: dict[str, Any], seconds: float, ok: bool) -> int:
     """Keep what one run used, and return its row. Committed straight away, so a run that fails and rolls back is still counted."""
     raw_usage = result.get("usage")
     usage = raw_usage if isinstance(raw_usage, dict) else {}
@@ -396,7 +397,7 @@ class Answer(str):
     """A run's closing message, which remembers the row that counts the run, so that row can be marked failed later,
     and, for a stream-json run, what the run started with."""
     run_id: int | None = None
-    init: dict | None = None
+    init: dict[str, Any] | None = None
 
 
 def mark_failed(conn, answer: str) -> None:
@@ -410,7 +411,7 @@ def mark_failed(conn, answer: str) -> None:
         conn.commit()
 
 
-def _kill_tree(process: subprocess.Popen) -> None:
+def _kill_tree(process: subprocess.Popen[str]) -> None:
     """End a run and everything it started. On Windows `claude` is often an npm .cmd shim, so killing the process
     itself would end only cmd.exe and leave Claude Code running on in node."""
     try:
@@ -423,7 +424,8 @@ def _kill_tree(process: subprocess.Popen) -> None:
     process.kill()
 
 
-def run_process(cmd: list[str], input: str, cwd: Path, timeout: float, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def run_process(cmd: list[str], input: str, cwd: Path, timeout: float,
+                env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """subprocess.run with a time limit, except that running out of time ends the whole process tree, not just its top.
     `env` is added to this process's environment, not put in place of it."""
     process = subprocess.Popen(
@@ -474,7 +476,7 @@ def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Pat
     return answer
 
 
-def _totals(row) -> dict:
+def _totals(row) -> dict[str, Any]:
     return {
         "runs": row["runs"] or 0,
         "failed": row["failed"] or 0,
@@ -485,7 +487,7 @@ def _totals(row) -> dict:
     }
 
 
-def usage(conn) -> dict:
+def usage(conn) -> dict[str, Any]:
     """What the Claude runs Pyrite started have used: the daily run, Refresh resume, Interview prep and checking mail.
     A Claude Code session of your own, such as one following daily_run.md, isn't one of them, so it isn't counted."""
     sums = """COUNT(*) AS runs, SUM(ok = 0) AS failed, SUM(seconds) AS seconds, SUM(input_tokens) AS input_tokens,
