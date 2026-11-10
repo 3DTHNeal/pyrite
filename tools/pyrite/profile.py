@@ -84,7 +84,7 @@ STEPS: tuple[dict[str, Any], ...] = (
      "files": ("config", "run_notes"),
      "meanwhile": "By hand: [[track]] and [scoring] in profile/search.toml hold the same settings.",
      "why": "The kinds of role Pyrite keeps from the boards. Everything else is dropped before you see it.",
-     "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Emphasis by track")},
+     "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Roles so far and Emphasis by track")},
     {"id": "where", "group": "Your search", "label": "Where you'll work", "required": True, "fallback": None,
      "files": ("config",),
      "meanwhile": "By hand: [location] and [market] in profile/search.toml hold the same settings.",
@@ -248,8 +248,13 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
     master = master if has_master else "Still the blank form" if blank else "No master resume yet"
     tracks = [str(track.get("name", "")) for track in cfg.get("track", []) if isinstance(track, dict)]
     location = cfg.get("location", {})
-    places = len(score.local_patterns(location)) + len(location.get("local_exact", []))
-    where = [_plural(places, "local place")] if places else []
+    # Places are plain names. Patterns are written by hand, and one may be a whole state, so they're counted apart.
+    named = len(score._plain(location.get("places")))
+    patterns = len(location.get("local", [])) + len(location.get("local_exact", []))
+    places = named + patterns
+    counted = ([_plural(named, "place")] if named else []) + \
+        ([_plural(patterns, "pattern" if named else "location pattern")] if patterns else [])
+    where = [" and ".join(counted)] if counted else []
     where += ["remote" if location.get("accept_remote", True) else "no remote"]  # Taken unless it's turned off.
     where += ["will relocate"] if location.get("accept_relocation") else []
     watched, by_hand = _watched(cfg), len(cfg.get("manual_check", []))

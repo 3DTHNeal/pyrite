@@ -1510,16 +1510,53 @@ def _watching(cfg: dict[str, Any]) -> dict[tuple[str, str], Any]:
     return found
 
 
-def _board_form(kind: str, key: str, spec) -> dict[str, str]:
-    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, and every other
-    board is its company's name."""
+def _board_form(kind: str, key: str, spec) -> dict[str, Any]:
+    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, a Lever board on
+    Lever's EU site a table of name and eu, and every other board its company's name."""
     if kind == "workday":
         table = spec if isinstance(spec, dict) else {"name": spec}
         name, wd, site = (table.get(part) for part in ("name", "wd", "site"))
+    elif isinstance(spec, dict):
+        name, wd, site = spec.get("name"), "", ""
     else:
         name, wd, site = spec, "", ""
     text = lambda value: value if isinstance(value, str) else ""
-    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site)}
+    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site),
+            "eu": kind == "lever" and discover.lever_eu(spec)}
+
+
+def _companies_eu(raw: dict[str, Any], kind: str, old) -> bool:
+    """Whether the form puts a Lever board on Lever's EU site. A form that doesn't say keeps what the board had."""
+    if kind != "lever":
+        return False
+    eu = raw.get("eu")
+    if eu is None:
+        return discover.lever_eu(old)
+    if not isinstance(eu, bool):
+        raise ValueError("Whether a Lever board is on its EU site should be true or false.")
+    return eu
+
+
+def _companies_lever(name: str, eu: bool) -> Any:
+    """A Lever board's entry: its company's name, or a table with eu = true for a board on Lever's EU site."""
+    return {"name": name, "eu": True} if eu else name
+
+
+def _companies_pages(cfg: dict[str, Any]) -> Any:
+    """[workday] max_pages as search.toml has it, or the number read when it isn't set."""
+    workday = cfg.get("workday")
+    return workday.get("max_pages", discover.DEFAULT_WORKDAY_PAGES) if isinstance(workday, dict) else discover.DEFAULT_WORKDAY_PAGES
+
+
+def _companies_max_pages(config: str, cfg: dict[str, Any], raw) -> tuple[str, int]:
+    """[workday] max_pages as the form has it, within discover.WORKDAY_PAGES. A number outside them already in the file
+    stays while it isn't changed."""
+    if raw == _companies_pages(cfg):
+        return config, 0
+    low, high = discover.WORKDAY_PAGES
+    if not isinstance(raw, int) or isinstance(raw, bool) or not low <= raw <= high:
+        raise ValueError(f"Pages per Workday search is a whole number from {low} to {high}.")
+    return tomledit.set_value(config, "workday", "max_pages", raw), 1
 
 
 def _manual(cfg: dict[str, Any]) -> list[Any]:
@@ -1559,6 +1596,8 @@ def _companies_view(cfg: dict[str, Any]) -> dict[str, Any]:
         "manual": [{**_manual_form(entry), "at": at} for at, entry in enumerate(_manual(cfg))],
         "queries": [query for query in _queries(cfg) if isinstance(query, str)],
         "kinds": discover.BOARD_KINDS,
+        "max_pages": _companies_pages(cfg),
+        "pages_range": list(discover.WORKDAY_PAGES),
     }
 
 
@@ -1585,9 +1624,10 @@ def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str]
         kind = raw.get("kind")
         if not isinstance(kind, str) or kind not in discover.BOARD_KINDS:
             raise ValueError("A board is Greenhouse, Lever, Ashby or Workday.")
-        form = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
+        form: dict[str, Any] = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
                 "wd": _one_line(raw.get("wd"), "A Workday server") if kind == "workday" else "",
-                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else ""}
+                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else "",
+                "eu": _companies_eu(raw, kind, current.get(old_id) if old_id else None)}
         if old_id is None and not any(form[part] for part in ("key", "name", "wd", "site")):
             continue  # A row just added and not yet typed in.
         ident = (kind, form["key"])
@@ -1606,6 +1646,8 @@ def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str]
         if kind == "workday":
             # Anything else its table holds stays as it was.
             spec = {**(old if isinstance(old, dict) else {}), "name": form["name"], "wd": form["wd"], "site": form["site"]}
+        elif kind == "lever":
+            spec = _companies_lever(form["name"], form["eu"])
         wanted[ident] = (spec, old_id, True)
 
     gone = [ident for ident in current if ident not in kept]
@@ -1630,11 +1672,116 @@ def _and(names: list[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
+def _manual_entries(text: str, count: int) -> list[dict[str, str]]:
+    """Each [[manual_check]] in search.toml as written: its header line, its keys, the comment and blank lines after
+    its keys (`tail`), and those just above its header (`lead`, the one before's tail), which are about it."""
+    headers = [item for item in tomledit.scan(text) if isinstance(item, tomledit.Header)]
+    entries: list[dict[str, str]] = []
+    for at, header in enumerate(headers):
+        if header.name[:1] != ("manual_check",):
+            continue
+        if header.name != ("manual_check",) or not header.array:
+            raise ValueError("search.toml has a table inside [[manual_check]], which this section can't change. "
+                             "Change it in the file.")
+        stop = headers[at + 1].start if at + 1 < len(headers) else len(text)
+        lines = text[header.end:stop].splitlines(keepends=True)
+        keep = len(lines)
+        while keep and (not lines[keep - 1].strip() or lines[keep - 1].lstrip().startswith("#")):
+            keep -= 1
+        entries.append({"header": text[header.start:header.end], "body": "".join(lines[:keep]),
+                        "tail": "".join(lines[keep:]), "lead": entries[-1]["tail"] if entries else ""})
+    if len(entries) != count:
+        raise ValueError("search.toml's companies to check by hand aren't each written under a [[manual_check]] line, so "
+                         "this section can't change them. Change them in the file.")
+    return entries
+
+
+def _manual_body(body: str, old: dict[str, Any], new: dict[str, Any]) -> str:
+    """One [[manual_check]]'s keys with the form's changes made a key at a time, read as a file of its own, so its
+    comments and any key the form doesn't show stay as they were."""
+    for part in MANUAL_FIELDS:
+        if new.get(part) == old.get(part):
+            continue
+        body = (tomledit.set_value(body, (), part, new[part]) if part in new else tomledit.delete_value(body, (), part))
+    return body
+
+
+def _manual_new(entry: dict[str, Any], eol: str) -> str:
+    return f"[[manual_check]]{eol}" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}{eol}"
+                                              for part, value in entry.items())
+
+
+def _manual_replaced(text: str, start: int, end: int, block: str, expected: list[Any]) -> str | None:
+    """The text with text[start:end] replaced by `block`, if it then reads as before with [[manual_check]] as
+    `expected`, or None."""
+    new = text[:start] + block + text[end:]
+    try:
+        before, after = tomllib.loads(text), tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return None
+    got = after.pop("manual_check", None)
+    before.pop("manual_check", None)
+    return new if got == expected and before == after else None
+
+
+def _manual_in_place_of_example(text: str, block: str, expected: list[Any]) -> str | None:
+    """The text with the commented-out [[manual_check]] left when the last one was taken off turned into `block`, so a
+    list emptied and filled again stays where it was. None if there's no such example."""
+    lines = text.splitlines(keepends=True)
+    for at, line in enumerate(lines):
+        if not re.fullmatch(r"\s*#\s*\[\[\s*manual_check\s*\]\]\s*", line):
+            continue
+        stop = at + 1
+        while stop < len(lines) and re.match(r"\s*#\s*[A-Za-z0-9_-]+\s*=", lines[stop]):
+            stop += 1
+        start = len("".join(lines[:at]))
+        found = _manual_replaced(text, start, start + len("".join(lines[at:stop])), block, expected)
+        if found is not None:
+            return found
+    return None
+
+
+def _manual_write(config: str, old: list[Any], wanted: list[tuple[int | None, dict[str, Any]]]) -> str:
+    """search.toml with [[manual_check]] as `wanted`, each (where it was in the list, or None for a new one, and its
+    table). An entry that's unchanged and still next to the one before it is written back exactly as it was, a changed
+    one is changed a key at a time, a new one goes after the last, and one taken off goes with its own lines: its keys
+    and the comments just above it."""
+    expected = [entry for _, entry in wanted]
+    eol = "\r\n" if "\r\n" in config else "\n"
+    if not wanted:
+        return tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
+    if not old:
+        block = eol.join(_manual_new(entry, eol) for entry in expected)
+        placed = _manual_in_place_of_example(config, block, expected)
+        return placed if placed is not None else tomledit.replace_table(config, "manual_check", block, expected)
+    entries = _manual_entries(config, len(old))
+    pieces: list[str] = []
+    previous: int | None = None
+    for at, (index, entry) in enumerate(wanted):
+        if index is None:
+            if pieces and not pieces[-1].endswith("\n"):
+                pieces[-1] += eol
+            pieces.append(eol + _manual_new(entry, eol))
+            continue
+        written = entries[index]
+        lead = written["lead"]
+        if at == 0:
+            lead = lead.lstrip("\r\n")
+        elif previous is None or index != previous + 1:
+            lead = lead if lead.startswith(("\n", "\r\n")) else eol + lead
+        pieces.append(lead + written["header"] + _manual_body(written["body"], old[index], entry))
+        previous = index
+    if pieces[0].startswith(("\n", "\r\n")):  # Every entry before a new first one was taken off.
+        pieces[0] = pieces[0].lstrip("\r\n")
+    return tomledit.replace_table(config, "manual_check", "".join(pieces), expected)
+
+
 def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
-    """[[manual_check]] as the form has it. It's a list of tables, so a change writes the whole list again: comments
-    between its entries go, and the ones above and below it stay."""
+    """[[manual_check]] as the form has it, changed an entry at a time, so comments between entries stay with them.
+    A new one goes after the last."""
     old = _manual(cfg)
-    new: list[Any] = []
+    kept: list[tuple[int, dict[str, Any]]] = []
+    added: list[tuple[None, dict[str, Any]]] = []
     seen: set[int] = set()
     for raw in _list(raws, "Companies to check by hand"):
         if not isinstance(raw, dict):
@@ -1649,7 +1796,7 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
                                  "Reload and try again.")
             seen.add(at)
             if _manual_form(old[at]) == fields:
-                new.append(old[at])
+                kept.append((at, old[at]))
                 continue
         if not fields["name"]:
             raise ValueError("Every company to check by hand needs a name.")
@@ -1665,22 +1812,23 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
                 entry[part] = value
             else:
                 entry.pop(part, None)
-        new.append(entry)
+        if at is None:
+            added.append((None, entry))
+        else:
+            kept.append((at, entry))
+    wanted: list[tuple[int | None, dict[str, Any]]] = [*kept, *added]
+    new = [entry for _, entry in wanted]
     if new == old:
         return config, 0
-    if new:
-        block = "\n".join("[[manual_check]]\n" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}\n"
-                                                         for part, value in entry.items()) for entry in new)
-        config = tomledit.replace_table(config, "manual_check", block, expected=new)
-    else:
-        config = tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
-    changed = sum(entry not in old for entry in new) + sum(entry not in new for entry in old)
-    return config, max(changed, 1)
+    changed = len(added) + (len(old) - len(kept)) + sum(entry != old[at] for at, entry in kept)
+    changed += [at for at, _ in kept] != sorted(at for at, _ in kept)
+    return _manual_write(config, old, wanted), max(changed, 1)
 
 
 @drafter("companies")
 def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
-    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for.
+    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for
+    and how many pages of each search it reads.
     A pasted careers page address is read as the board it names, for the page to offer to add."""
     out = dict(texts)
     config = texts["config"]
@@ -1705,6 +1853,16 @@ def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]
         if remove or add:
             config = tomledit.edit_list(config, "workday", "queries", remove=remove, add=add, literal=True)
             count += len(remove) + len(add)
+    if "max_pages" in edits:
+        before = _companies_pages(cfg)
+        config, changed = _companies_max_pages(config, cfg, edits["max_pages"])
+        count += changed
+        if changed and (not isinstance(before, int) or edits["max_pages"] > before):
+            sites = sum(kind == "workday" for kind, _ in watched)
+            notes.append(f"Each page is a request to every watched Workday site, for every Workday search: with "
+                         f"{sites} site{'' if sites == 1 else 's'} and {len(queries)} search{'' if len(queries) == 1 else 'es'}, "
+                         f"up to {sites * len(queries) * edits['max_pages']} requests each run, before the postings "
+                         "themselves are read. A site that's asked too often may stop answering for a while.")
     # tomledit changes a key it finds and passes over one it doesn't, such as a company written as a table of its own.
     if _watching(_config(config)) != watched:
         raise ValueError("search.toml writes [watch] in a way this section can't change a key at a time, such as a "
@@ -1729,6 +1887,8 @@ MAX_PLACE = 120
 # Prospects whose place would count differently are listed up to this many. The counts cover all of them.
 MOVES_SHOWN = 12
 MARKET_KEYS = ("state", "metro", "country")
+# The lists that replace the built-in reading of a remote role's place, which assumes you're in the US.
+WHERE_REMOTE_LISTS = ("remote_home", "remote_elsewhere")
 
 
 def _where_view(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -1771,6 +1931,10 @@ def _why_place(location: str, cfg: dict[str, Any]) -> str:
                 continue
     kind = score.classify_location(location, "", cfg)
     remote = bool(score.REMOTE.search(location))
+    if remote and loc.get("accept_remote", True):
+        mine = _where_remote_why(location, loc)
+        if mine:
+            return mine
     if kind == "remote":
         return "It reads as a remote role open to you."
     if kind == "unknown":
@@ -1781,6 +1945,54 @@ def _why_place(location: str, cfg: dict[str, Any]) -> str:
     if remote:
         return "It reads as remote, and you don't take remote roles."
     return "It isn't one of your places, and you won't relocate."
+
+
+def _where_remote_why(location: str, loc: dict[str, Any]) -> str | None:
+    """Why a remote role is open to you or not by your own remote_home and remote_elsewhere, or None when neither is
+    set and the built-in lists judge it."""
+    home, elsewhere = loc.get("remote_home"), loc.get("remote_elsewhere")
+    if home is None and elsewhere is None:
+        return None
+    for key, said in (("remote_home", "so it's a remote role open to you"),
+                      ("remote_elsewhere", "and nothing under remote_home, so it's open only somewhere else")):
+        for pattern in loc.get(key) or []:
+            try:
+                if re.search(pattern, location, re.I):
+                    return f"It matches the pattern {pattern!r} under {key}, {said}."
+            except re.error:
+                continue
+    return "It matches nothing under remote_home or remote_elsewhere, so it's taken as a remote role open to you."
+
+
+def _where_remote_notes(where: dict[str, Any]) -> list[str]:
+    """What's off when one remote list is set without the other. Either replaces the built-in lists, so the one left
+    empty matches nothing rather than falling back to them."""
+    home, elsewhere = where["remote_home"], where["remote_elsewhere"]
+    if not where["accept_remote"] or (home is None and elsewhere is None) or bool(home) == bool(elsewhere):
+        return []
+    if home:
+        return ["remote_home is set and remote_elsewhere isn't. Either list replaces the built-in reading of a remote "
+                "role's place, so with nothing under remote_elsewhere, no remote role is dropped for where it's open. "
+                "Add the places that aren't open to you there."]
+    return ["remote_elsewhere is set and remote_home isn't. Either list replaces the built-in reading of a remote "
+            "role's place, so a remote role naming one of these is dropped even when it also names a place open to "
+            "you. Add the places that are open to you under remote_home."]
+
+
+def _where_promoted_out(cfg: dict[str, Any]) -> list[str]:
+    """The cities under [promote] that [location] drops an onsite posting from, judged by each one's name as the
+    filters judge a posting's place."""
+    cities = (cfg.get("promote") or {}).get("cities") or []
+    names = [str(city.get("name") or "").strip() for city in cities if isinstance(city, dict)]
+    return [name for name in dict.fromkeys(names) if name and score.classify_location(name, "", cfg) == "out"]
+
+
+def _where_promoted_note(names: list[str]) -> str:
+    if len(names) == 1:
+        return (f"{names[0]} is promoted under Settings › Cities and industries, but isn't one of your places, so its "
+                "onsite postings are dropped before promotion counts. Add it as a place, or change it there.")
+    return (f"{_and(names)} are promoted under Settings › Cities and industries, but aren't among your places, so "
+            "their onsite postings are dropped before promotion counts. Add them as places, or change them there.")
 
 
 def _place_prospects(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any] | None:
@@ -1862,15 +2074,19 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
                                             add=[p for p in places if p not in before])
             count += len(set(places) ^ set(before))
 
-    for key in ("local", "local_exact"):
+    for key in ("local", "local_exact", *WHERE_REMOTE_LISTS):
         if key not in edits:
             continue
-        before = shown[key]
+        before = shown[key] or []
         wanted = [_pattern(raw) if raw not in before else raw for raw in _list(edits[key], f"The patterns under {key}", str)]
         wanted = list(dict.fromkeys(wanted))
         if set(wanted) != set(before):
-            config = tomledit.edit_list(config, "location", key, remove=[p for p in before if p not in wanted],
-                                        add=[p for p in wanted if p not in before], literal=True)
+            if not wanted and key in WHERE_REMOTE_LISTS:
+                # An empty list would still replace the built-in one, so taking off the last pattern takes the key.
+                config = tomledit.delete_value(config, "location", key)
+            else:
+                config = tomledit.edit_list(config, "location", key, remove=[p for p in before if p not in wanted],
+                                            add=[p for p in wanted if p not in before], literal=True)
             count += len(set(wanted) ^ set(before))
 
     for key in ("accept_remote", "accept_relocation"):
@@ -1908,12 +2124,20 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
     if not after["places"] and not after["local"] and not after["local_exact"] and not after["accept_remote"] \
             and not after["accept_relocation"]:
         notes.append("With no places, no remote roles and no relocation, every posting that names a place is dropped.")
-    filters_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_remote", "accept_relocation"))
+    filters_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_remote",
+                                                               "accept_relocation", *WHERE_REMOTE_LISTS))
     prospects = _place_prospects(old_cfg, new_cfg)
     if filters_changed and prospects and prospects["moved"]:
-        notes.append("Prospects already found keep their place and score until `pyrite rescore`, which drops the ones "
-                     "that no longer pass, unless you've acted on them. `pyrite discover --fresh` gives postings dropped "
-                     "before another look.")
+        notes.append("Prospects already found keep their place and score until they're scored again: by Rescore now "
+                     "under Your prospects once you've saved, or else by the next pan, before it reads the boards. Either "
+                     "drops the ones that no longer pass, unless you've acted on them, as `pyrite rescore` does. "
+                     "`pyrite discover --fresh` gives postings dropped before another look.")
+    notes += _where_remote_notes(after)
+    # Named when the edit changes which onsite places count, so a change to remote roles or the area doesn't repeat it.
+    onsite_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_relocation"))
+    promoted_out = _where_promoted_out(new_cfg) if onsite_changed else []
+    if promoted_out:
+        notes.append(_where_promoted_note(promoted_out))
     if chosen != shown["market"]:
         notes += _market_notes(chosen)
 
@@ -1922,7 +2146,7 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
     if test:
         tested = {"location": test, "now": _place_kind(test, "", old_cfg), "after": _place_kind(test, "", new_cfg),
                   "why": _why_place(test, new_cfg)}
-    return Draft(out, count, notes, {"test": tested, "prospects": prospects, "where": after})
+    return Draft(out, count, notes, {"test": tested, "prospects": prospects, "where": after, "promoted_out": promoted_out})
 
 
 # ---------- Roles you want ----------
@@ -1930,6 +2154,8 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
 # The "**Emphasis by track:**" bullet in run-notes.md, and one track's line under it: "  - *AI systems:* the agents lead."
 EMPHASIS = re.compile(r"(?P<indent>[ \t]*)[-*][ \t]+\*\*Emphasis by track:?\*\*:?")
 EMPHASIS_LINE = re.compile(r"(?P<lead>[ \t]+[-*][ \t]+)\*(?P<name>[^*\r\n]+?):?\*:?[ \t]*(?P<text>.*)")
+# The "**Roles so far:**" bullet in run-notes.md, prose about the kinds of role you've gone for.
+ROLES_SO_FAR = re.compile(r"(?P<head>(?P<indent>[ \t]*)[-*][ \t]+\*\*Roles so far:?\*\*:?)(?P<text>.*)")
 # What [scoring] lists the section edits, as it names them. Each is matched as whole words, in any case.
 TITLE_LISTS = {"level_top": "Top-level words", "level_mid": "Senior words", "exclude_titles": "Never these titles"}
 MAX_POINTS = 100
@@ -2051,6 +2277,71 @@ def _set_emphasis(text: str, kept: list[tuple[str | None, str, str | None]], rem
     return doc.render(), count
 
 
+def _roles_so_far(text: str) -> dict[str, Any]:
+    """The Roles so far bullet in run-notes.md: its line, its text, and how many lines sit under it, which the section
+    leaves as they are."""
+    doc = factsdoc.Doc(text)
+    for index in range(len(doc.lines)):
+        match = ROLES_SO_FAR.fullmatch(doc.bare(index))
+        if not match:
+            continue
+        end = index + 1
+        while end < len(doc.lines) and doc.bare(end).strip() and \
+                len(doc.bare(end)) - len(doc.bare(end).lstrip()) > len(match["indent"]):
+            end += 1
+        return {"line": index, "text": match["text"].strip(), "more": end - index - 1}
+    return {"line": None, "text": "", "more": 0}
+
+
+def _roles_so_far_set(text: str, want: str) -> tuple[str, int]:
+    """run-notes.md with the Roles so far bullet saying `want`, and whether that's a change. The bullet is added above
+    Emphasis by track if it isn't there, and emptied rather than taken out, so the daily run still sees where it goes.
+    Its text unchanged leaves the file exactly as it was."""
+    found = _roles_so_far(text)
+    if want == found["text"]:
+        return text, 0
+    doc = factsdoc.Doc(text)
+    if found["line"] is not None:
+        match = ROLES_SO_FAR.fullmatch(doc.bare(found["line"]))
+        assert match is not None  # It was found by this pattern.
+        doc.set_line(found["line"], match["head"] + (f" {want}" if want else ""))
+    elif not text.strip():
+        return f"# Run notes\n\n- **Roles so far:** {want}\n", 1
+    else:
+        at, indent = len(doc.lines), ""
+        line = _emphasis(text)["line"]
+        heading = EMPHASIS.match(doc.bare(line)) if line is not None else None
+        if heading:
+            at, indent = line, heading["indent"]
+        doc.insert(at, [f"{indent}- **Roles so far:** {want}"])
+    return doc.render(), 1
+
+
+def _track_industry_names(cfg: dict[str, Any]) -> list[str]:
+    """The industries a role type can be limited to: the names under [[promote.industry]], which Settings › Cities and
+    industries edits. The scorer matches a track's industries to these exactly."""
+    found = _table(cfg, "promote").get("industry")
+    tables = found if isinstance(found, list) else []
+    return list(dict.fromkeys(str(i["name"]) for i in tables if isinstance(i, dict) and i.get("name")))
+
+
+def _track_industries(raws, before: list[str], known: list[str]) -> list[str]:
+    """The industries a role type asks for, each spelled as it is under [[promote.industry]]. A name the track already
+    has stays even if no industry is called that, so an unchanged role type saves unchanged; the notes point it out."""
+    names: list[str] = []
+    for value in (_one_line(raw, "An industry") for raw in _list(raws, "Industries")):
+        if value and value not in before:
+            match = next((name for name in known if name.lower() == value.lower()), None)
+            if match is None:
+                raise ValueError(f"“{value}” isn't an industry under Settings › Cities and industries. "
+                                 + (f"Pick one of {', '.join(known)}, or add it there first." if known
+                                    else "Add it there first, then pick it here."))
+            value = match
+        if value:
+            names.append(value)
+    return list(dict.fromkeys(names))
+
+
 def _track_entries(text: str, tracks: list[Any]) -> list[dict[str, str]]:
     """Each [[track]] in search.toml as written: its header line, its keys, and the comment lines just above it, which
     are about it. The first one's comments are about every track, so they aren't its own."""
@@ -2076,11 +2367,11 @@ def _track_entries(text: str, tracks: list[Any]) -> list[dict[str, str]]:
 
 def _track_body(body: str, old: dict[str, Any] | None, new: dict[str, Any]) -> str:
     """A [[track]]'s keys with the form's changes made a key at a time, read as a file of their own, so comments and
-    keys this section doesn't edit, such as `industries`, stay as they were."""
+    keys this section doesn't edit stay as they were."""
     was = old or {}
     if new["name"] != was.get("name"):
         body = tomledit.set_value(body, (), "name", new["name"])
-    for key, literal in (("titles", False), ("title", True)):
+    for key, literal in (("titles", False), ("title", True), ("industries", False)):
         before, want = _strings(was.get(key)), new[key]
         if want == before:
             continue
@@ -2096,8 +2387,9 @@ def _track_body(body: str, old: dict[str, Any] | None, new: dict[str, Any]) -> s
     return body
 
 
-def _track_form(raws, old_tracks: list[Any]) -> list[dict[str, Any]]:
-    """The role types the form asks for, in order, each checked. A new one left blank is left out."""
+def _track_form(raws, old_tracks: list[Any], industries: list[str]) -> list[dict[str, Any]]:
+    """The role types the form asks for, in order, each checked. A new one left blank is left out. A role type sent
+    without `industries` keeps the ones it has; `industries` are the names it may pick from."""
     wanted: list[dict[str, Any]] = []
     seen: set[int] = set()
     names: set[str] = set()
@@ -2126,12 +2418,15 @@ def _track_form(raws, old_tracks: list[Any]) -> list[dict[str, Any]]:
         if not titles and not patterns:
             raise ValueError(f"{name} needs at least one job title, or it takes no postings at all.")
         emphasis = raw.get("emphasis")
+        had = _strings(old.get("industries"))
+        limited = _track_industries(raw["industries"], had, industries) if "industries" in raw else had
         if index is not None:
             seen.add(index)
         names.add(name.lower())
         wanted.append({
             "index": index, "name": name,
             "titles": _ordered(_strings(old.get("titles")), titles), "title": _ordered(before, patterns),
+            "industries": _ordered(had, limited),
             "needs_level": bool(raw.get("needs_level", old.get("needs_level", False))),
             "emphasis": None if emphasis is None else _one_line(emphasis, f"What {name} drafts lead with"),
         })
@@ -2145,7 +2440,7 @@ def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[
     """search.toml with [[track]] as the form has it, how many edits that is, the role types wanted, and the names of
     the ones taken out. A track that's unchanged and still next to the one before it is written back exactly as it was."""
     old_tracks = _tracks(cfg)
-    wanted = _track_form(raws, old_tracks)
+    wanted = _track_form(raws, old_tracks, _track_industry_names(cfg))
     kept = [w["index"] for w in wanted if w["index"] is not None]
     removed = [str(t.get("name", "")) for i, t in enumerate(old_tracks) if i not in kept and isinstance(t, dict)]
     count = len(removed) + sum(w["index"] is None for w in wanted) + (kept != sorted(kept))
@@ -2154,7 +2449,7 @@ def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[
             continue
         old = old_tracks[w["index"]]
         count += (w["name"] != old.get("name")) + (w["needs_level"] != bool(old.get("needs_level", False)))
-        count += len(set(w["titles"]) ^ set(_strings(old.get("titles")))) + len(set(w["title"]) ^ set(_strings(old.get("title"))))
+        count += sum(len(set(w[key]) ^ set(_strings(old.get(key)))) for key in ("titles", "title", "industries"))
     if not count:
         return text, 0, wanted, removed
     entries = _track_entries(text, old_tracks)
@@ -2173,7 +2468,7 @@ def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[
         pieces.append(lead + entry["header"] + _track_body(entry["body"], old, w))
         track = dict(old or {})
         track["name"] = w["name"]
-        for key in ("titles", "title"):
+        for key in ("titles", "title", "industries"):
             if w[key] != _strings(track.get(key)):
                 if w[key]:
                     track[key] = w[key]
@@ -2272,7 +2567,8 @@ def _prospects(before: dict[str, Any], cfg: dict[str, Any], changed: bool) -> di
 
 
 def _roles_view(cfg: dict[str, Any], texts: dict[str, str]) -> dict[str, Any]:
-    """The role types and [scoring] lists as the section edits them, with each track's emphasis from run-notes.md."""
+    """The role types and [scoring] lists as the section edits them, with each track's emphasis and the Roles so far
+    line from run-notes.md, and the industries a role type can be limited to."""
     found = _emphasis(texts["run_notes"])
     emphasis = found["tracks"]
     scoring = _table(cfg, "scoring")
@@ -2291,6 +2587,8 @@ def _roles_view(cfg: dict[str, Any], texts: dict[str, str]) -> dict[str, Any]:
         "flags": [list(row) for row in scoring.get("flags", []) if isinstance(row, list)],
         "min_score": (cfg.get("run") or {}).get("min_score", 0),
         "emphasis_found": found["line"] is not None,
+        "industry_names": _track_industry_names(cfg),
+        "roles_so_far": _roles_so_far(texts["run_notes"]),
     }
 
 
@@ -2347,6 +2645,9 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
         moves = [(old_names.get(w["index"]) if w["index"] is not None else None, w["name"], w["emphasis"]) for w in wanted]
         out["run_notes"], said = _set_emphasis(texts["run_notes"], moves, removed)
         count += said
+    if "roles_so_far" in edits:
+        out["run_notes"], said = _roles_so_far_set(out["run_notes"], _one_line(edits["roles_so_far"], "Roles so far"))
+        count += said
     for key, label in TITLE_LISTS.items():
         if key not in edits:
             continue
@@ -2382,12 +2683,17 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
                 notes.append(f"“{title}” has {blocked!r} in it, which is under Never these titles, so {w['name']} will never take it.")
             elif earlier:
                 notes.append(f"{earlier} takes “{title}” first, since a title goes to the first role type that matches it.")
+    for track, name, same in score.unknown_industries(new_cfg):
+        notes.append(f"“{name}” isn't an industry under Settings › Cities and industries"
+                     f"{f', which has “{same}”' if same else ''}, so {track} takes no posting for it.")
     levels = _with_scoring(new_cfg)["scoring"]
     if any(w["needs_level"] for w in wanted) and not levels["level_top"] and not levels["level_mid"]:
         notes.append("A role type that needs a senior title takes nothing while there are no top-level or senior words.")
     if changed:
-        notes.append("Saving changes search.toml, not your prospects. `pyrite rescore` scores them again as the preview "
-                     "shows, and postings dropped before come back only with `pyrite discover --fresh`.")
+        notes.append("Saving changes search.toml, not your prospects. Once it's saved, Rescore now under Your prospects "
+                     "scores them again as the preview shows. Left alone, they're scored again by the next pan, before it "
+                     "reads the boards, or by `pyrite rescore`. Postings dropped before come back only with "
+                     "`pyrite discover --fresh`.")
     test = _one_line(edits.get("test"), "The title to try")
     return Draft(out, count, notes, {
         "test": try_title(test, new_cfg) if test else None,

@@ -1,4 +1,6 @@
 """Deterministic filtering and ranking. Claude only judges what gets through here."""
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -11,7 +13,7 @@ from . import quality
 # `quality.rejection` or `discover.gate` returns for a posting already stored: its score, reasons, flags, track, or whether
 # it's kept. The next sweep then rescores the prospects nobody has acted on, so none keeps an old score or a reason in old
 # words. Changes to `freshness`, `promotion` and `signals` don't need it, since the dashboard works those out afresh on
-# every load.
+# every load. A change to search.toml needs nothing here either: `settings_key` notices it.
 VERSION = 4
 
 FOREIGN = re.compile(
@@ -313,6 +315,20 @@ def _in_any_industry(names: list[str], job: dict[str, Any], cfg: dict[str, Any])
     return any(_in_industry(i, job, needed) for i in rules.get("industry", []) if i["name"] in names)
 
 
+def unknown_industries(cfg: dict[str, Any]) -> list[tuple[str, str, str | None]]:
+    """Each industry a [[track]] names that no [[promote.industry]] is called, as (the track, the name, and the
+    industry it differs from only in case, if one does). Names are matched exactly, so a track takes no posting for
+    such a name, and one that names no other takes nothing at all."""
+    names = [str(i.get("name", "")) for i in _tables((cfg.get("promote") or {}).get("industry"))]
+    found = []
+    for track in _tables(cfg.get("track")):
+        wanted = track.get("industries")
+        for name in map(str, [wanted] if isinstance(wanted, str) else wanted if isinstance(wanted, list) else []):
+            if name not in names:
+                found.append((str(track.get("name", "?")), name, next((n for n in names if n.lower() == name.lower()), None)))
+    return found
+
+
 ELSEWHERE_FLAG = "Outside your area"
 
 
@@ -488,3 +504,15 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
     if score < cfg["run"]["min_score"] and not added:
         return Verdict(False, "score", score=score, track=track, location_kind=kind)
     return Verdict(True, "", score, track, kind, reasons, flags)
+
+
+def settings_key(cfg: dict[str, Any]) -> str:
+    """A short fingerprint of the search.toml settings `evaluate` reads: the places, the role types, [scoring], the
+    industries that let a role type or a place through, and min_score. The database keeps the one its prospects were
+    scored with, so the next sweep rescores them after any of these change. Settings that only order what you see,
+    such as [freshness] or the points for a city, aren't in it, so changing them drops nothing."""
+    promote = cfg.get("promote") or {}
+    used = {"location": cfg.get("location"), "scoring": cfg.get("scoring"), "track": cfg.get("track"),
+            "industry": promote.get("industry"), "mentions_needed": promote.get("mentions_needed"),
+            "min_score": (cfg.get("run") or {}).get("min_score")}
+    return hashlib.sha256(json.dumps(used, sort_keys=True, default=str).encode()).hexdigest()[:16]

@@ -1,7 +1,9 @@
 "use strict";
 // Roles you want: the kinds of role Pyrite keeps from the boards. Each is a [[track]] in search.toml with plain job
 // titles, and any patterns written by hand, which stay as they are. [scoring] holds the words that make a title senior,
-// the titles never kept, and the points for skills and flags. What drafts lead with for each goes in run-notes.md.
+// the titles never kept, and the points for skills and flags. What drafts lead with for each goes in run-notes.md, as
+// does Roles so far, a line of prose about the kinds of role you've gone for. A role type can be limited to some of the
+// industries under [[promote.industry]], picked from the names there.
 // Every change is scored against your prospects by the real scorer, so the section shows what would be dropped first.
 
 profileStep("roles", {
@@ -12,7 +14,8 @@ profileStep("roles", {
     if (!memo.form) {
       memo.form = {
         tracks: data.tracks.map((t) => ({ index: t.index, name: t.name, titles: [...t.titles], patterns: [...t.patterns],
-          needs_level: t.needs_level, emphasis: t.emphasis, removed: false })),
+          needs_level: t.needs_level, industries: [...t.industries], emphasis: t.emphasis, removed: false })),
+        roles_so_far: data.roles_so_far.text,
         level_top: [...data.level_top], level_mid: [...data.level_mid], exclude_titles: [...data.exclude_titles],
         keywords: data.keywords.map((row) => [...row]), flags: data.flags.map((row) => [...row]),
         test: "",
@@ -34,7 +37,8 @@ profileStep("roles", {
     });
     const changed = (now) => send({
       tracks: form.tracks.filter((t) => !t.removed).map((t) => ({ index: t.index, name: t.name, titles: t.titles,
-        patterns: t.patterns, needs_level: t.needs_level, emphasis: t.emphasis })),
+        patterns: t.patterns, needs_level: t.needs_level, industries: t.industries, emphasis: t.emphasis })),
+      roles_so_far: form.roles_so_far,
       level_top: form.level_top, level_mid: form.level_mid, exclude_titles: form.exclude_titles,
       keywords: form.keywords, flags: form.flags, test: form.test,
     }, now);
@@ -55,6 +59,7 @@ profileStep("roles", {
               if (going) current.push(value);
               else current.splice(current.indexOf(value), 1);
               draw();
+              if (opts.onChange) opts.onChange();
               changed(true);
             } }, "✕"));
         }) : h("span", { class: "muted" }, opts.empty));
@@ -120,6 +125,36 @@ profileStep("roles", {
         placeholder: "Such as: the evaluation harness and the pilot results lead" });
       emphasis.addEventListener("input", () => { track.emphasis = emphasis.value; changed(); });
       const hasPatterns = track.patterns.length || was.patterns.length;
+      // Picked from the industries under Settings › Cities and industries, the only names the scorer can match.
+      const industries = () => {
+        const names = data.industry_names;
+        if (!names.length && !track.industries.length && !was.industries.length) return null;
+        const pick = h("select", { "aria-label": `Add an industry to ${track.name || "this role type"}`, disabled: off });
+        const warn = h("div", {});
+        // The menu offers the industries not picked yet. A name no industry has, written by hand, can only be taken off.
+        const refresh = () => {
+          const left = names.filter((n) => !track.industries.includes(n));
+          fill(pick, h("option", { value: "" }, !names.length ? "No industries yet" : left.length ? "Add an industry…" : "Every industry is added"),
+            left.map((n) => h("option", { value: n }, n)));
+          pick.disabled = off || !left.length;
+          const unknown = track.industries.filter((n) => !names.includes(n));
+          fill(warn, unknown.length ? h("small", { class: "error" }, `${unknown.join(", ")} ${unknown.length === 1 ? "isn't an industry" : "aren't industries"} under Settings › Cities and industries, so this role type takes no posting for ${unknown.length === 1 ? "it" : "them"}.`) : null);
+        };
+        const [box, draw] = chips(track.industries, track.index === null ? [] : was.industries,
+          { empty: "Any industry.", onChange: refresh });
+        pick.addEventListener("change", () => {
+          if (pick.value && !track.industries.includes(pick.value)) track.industries.push(pick.value);
+          draw();
+          refresh();
+          changed(true);
+        });
+        refresh();
+        // Not a <label>, which would pass a click on its text to the first chip's button.
+        return h("div", { class: "profile-field" }, h("span", {}, "Only in these industries"), box, pick, warn,
+          h("small", { class: "muted" }, names.length
+            ? "With any picked, this role type takes only postings in them, judged as Cities and industries judges them. With none, it takes any."
+            : "Add industries under Settings › Cities and industries to pick from them here."));
+      };
       return h("div", { class: "profile-employer" },
         h("div", { class: "row" }, h("small", { class: "muted" }, `${live + 1}.`), name, h("span", { class: "spacer" }),
           move(-1, "Move up", "↑"), move(1, "Move down", "↓"), remove),
@@ -136,7 +171,7 @@ profileStep("roles", {
             changed(true);
           })),
         h("label", { class: "profile-choice" }, level, "Needs a senior title"),
-        was.industries.length ? h("small", { class: "muted" }, `Only for postings in ${was.industries.join(", ")}. Change that in search.toml.`) : null,
+        industries(),
         profileField("What drafts lead with", emphasis, "Saved under Emphasis by track in run-notes.md, which the daily run reads."));
     };
     const drawTracks = () => {
@@ -145,11 +180,17 @@ profileStep("roles", {
       focusNew = null;
     };
     const addTrack = h("button", { class: "btn", type: "button", disabled: off, onclick: () => {
-      const track = { index: null, name: "", titles: [], patterns: [], needs_level: false, emphasis: "", removed: false };
+      const track = { index: null, name: "", titles: [], patterns: [], needs_level: false, industries: [], emphasis: "", removed: false };
       form.tracks.push(track);
       focusNew = track;
       drawTracks();
     } }, "+ Add a role type");
+    // Prose, not a list, so it's yours to word: it isn't kept in step with the role types' names.
+    const sofar = h("textarea", { rows: "2", "aria-label": "Roles so far", disabled: off,
+      placeholder: "Such as: staff data engineering and analytics platform roles" });
+    sofar.value = form.roles_so_far;
+    sofar.addEventListener("input", () => { form.roles_so_far = sofar.value.replace(/\s*[\r\n]+\s*/g, " "); changed(); });
+    const more = data.roles_so_far.more;
 
     // ---- Skill points and flags ----
     const grid = (columns) => `display: grid; grid-template-columns: ${columns}; gap: 6px; align-items: center;`;
@@ -228,7 +269,8 @@ profileStep("roles", {
       h("section", { class: "panel stack", "aria-label": "Role types" },
         h("h3", { class: "profile-sub" }, "Role types"),
         h("small", { class: "muted" }, "A posting's title goes to the first role type that matches it, from the top. A title none of them match is dropped."),
-        list, h("div", {}, addTrack)),
+        list, h("div", {}, addTrack),
+        profileField("Roles so far", sofar, `Saved as Roles so far in run-notes.md: the kinds of role you've gone for, in your words, which the daily run reads.${more ? ` The ${more === 1 ? "line" : `${more} lines`} under it there stay as they are.` : ""}`)),
       h("div", { class: "profile-pair" },
         h("section", { class: "panel stack", "aria-label": "Senior titles" },
           h("h3", { class: "profile-sub" }, "Senior titles"),
@@ -242,7 +284,7 @@ profileStep("roles", {
       h("section", { class: "panel stack", "aria-label": "Try a title" },
         h("h3", { class: "profile-sub" }, "Try a title"), title, tested),
       h("section", { class: "panel stack", "aria-label": "Your prospects" },
-        h("h3", { class: "profile-sub" }, "Your prospects with these changes"), prospects),
+        h("h3", { class: "profile-sub" }, "Your prospects with these changes"), prospects, profileRescore()),
       h("details", { class: "profile-advanced" }, h("summary", {}, "Advanced: points for skills, and flags"),
         h("p", { class: "muted" }, `A posting scores 25 for its role type, up to 10 for seniority, 15 for local or 10 for remote, and the points for each skill pattern it mentions, up to 40 in all. Flags take points off and mark the card. Below ${data.min_score} it isn't kept.`),
         h("b", {}, "Skill points"), rowsBox,
@@ -260,7 +302,7 @@ profileStep("roles", {
       aside: h("div", { class: "panel stack" }, h("h2", {}, "How a title is read"),
         h("p", {}, "A plain title such as “data engineer” matches as whole words in any case, so it takes “Senior Data Engineer, Platform” but not “Data Engineering Manager”."),
         h("p", {}, "Order matters: a title goes to the first role type that takes it, and that decides what its drafts lead with."),
-        h("p", { class: "muted" }, "Saving changes search.toml, not the prospects you have. `pyrite rescore` scores them again, as the preview shows, and `pyrite discover --fresh` looks again at postings dropped before.")),
+        h("p", { class: "muted" }, "Saving changes search.toml, not the prospects you have. Rescore now, under Your prospects once you've saved, scores them again as the preview shows, or the next pan does before it reads the boards. `pyrite discover --fresh` looks again at postings dropped before.")),
     };
   },
 });

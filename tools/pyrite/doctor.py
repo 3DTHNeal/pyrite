@@ -254,6 +254,12 @@ def workspace_todos(root: Path, cfg: dict[str, Any] | None) -> list[dict[str, An
                       "fix": "Add a [[track]] for each kind of role you want, with the title words that name it in plain words, "
                              "such as titles = [\"data engineer\"]. A blank search.toml shows the form in a comment where "
                              "they go.", "step": "roles"})
+    for track, name, spelled in score.unknown_industries(cfg):
+        todos.append({"what": f"The role type {track} in profile/search.toml is only for postings in “{name}”, but no "
+                              "[[promote.industry]] is called that, so it takes no posting for it.",
+                      "fix": f"Write it as “{spelled}”: the names must match exactly, case and all." if spelled else
+                             "Pick its industries under Roles you want on the Profile tab, which offers the ones under "
+                             "Settings › Cities and industries, or add the industry there.", "step": "roles"})
     if not any(isinstance(board, dict) and board for board in cfg.get("watch", {}).values()):
         todos.append({"what": "profile/search.toml watches no companies, so a pan reads no job boards.",
                       "fix": 'Add each company under [watch.greenhouse], [watch.lever], [watch.ashby] or [watch.workday]. See '

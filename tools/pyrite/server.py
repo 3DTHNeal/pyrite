@@ -52,6 +52,7 @@ from . import (
     store,
     tasks,
     update,
+    words,
     workday,
     workspace,
 )
@@ -860,6 +861,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"tools": doctor.tool_checks(load_config(), options.claude_status(fresh))})
             if path == "/api/profile/workspace":
                 return self._json(backup.about(store.ROOT))
+            if path == "/api/profile/rescore":
+                return self._json(_rescore_state())
             if path == "/api/profile/kept":
                 query = parse_qs(urlparse(self.path).query)
                 try:
@@ -1174,12 +1177,16 @@ def _test_board(body: dict[str, Any]) -> dict[str, Any]:
         if not all(isinstance(value, str) for value in board.values()):
             raise ValueError("Say which board to test.")
         board = {part: value.strip() for part, value in board.items()}
+        if board["kind"] == "lever" and body.get("eu") is True:
+            board["eu"] = True  # Lever's EU site: the same key, read from its EU feed.
     kind, key = board["kind"], board["key"]
     problem = discover.board_problem(kind, key, board.get("wd", ""), board.get("site", ""))
     if problem:
         raise ValueError(problem)
     name = board.get("name") or key
     spec: Any = {"name": name, "wd": board["wd"], "site": board["site"]} if kind == "workday" else name
+    if kind == "lever" and board.get("eu") is True:
+        spec = {"name": name, "eu": True}
     found = discover.check_source(kind, key, spec)
     if not found["ok"] and re.search(r"\b404\b", found["error"]):
         found["hint"] = (f"No {discover.BOARD_KINDS[kind]} board answers at that address. Check it against the careers "
@@ -1191,6 +1198,42 @@ def _back_up(body: dict[str, Any]) -> dict[str, Any]:
     """Copy data/pyrite.db into data/backups. It adds a file and changes none, so it needs no code."""
     made = backup.make(store.ROOT)
     return {**backup.about(store.ROOT), "made": made}
+
+
+def _rescore_state() -> dict[str, Any]:
+    """What Rescore now needs, under Your prospects in Roles you want and Where you'll work: what a rescore would change
+    now, why it can't run if it can't, and when the latest pan started, since the next one rescores too."""
+    with closing(connect()) as conn:
+        going = tasks.going(conn)
+        row = conn.execute("SELECT started_at FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        try:
+            due: dict[str, Any] = discover.rescore_due(conn, load_config())
+        except ValueError as err:
+            due = {"error": f"Pyrite couldn't score your prospects with your settings ({err})."}
+    why_not = (_RESCORE_DEMO if store.IS_EXAMPLE else _rescore_busy(going) if going else "")
+    return {"due": due, "why_not": why_not, "last_pan": row["started_at"] if row else None}
+
+
+_RESCORE_DEMO = "This is the demo, so its prospects can't be scored again."
+
+
+def _rescore_busy(running: str) -> str:
+    return f"A {running} is going, and a rescore could drop a prospect it's working on. Rescore once it's done."
+
+
+def _rescore_now(body: dict[str, Any]) -> dict[str, Any]:
+    """Rescore now: copy data/pyrite.db into data/backups, as Back up now does, then score the prospects again as
+    `pyrite rescore` does, and say what that did. Refused in the demo, and while any run is going, as an update is."""
+    if store.IS_EXAMPLE:
+        raise ValueError(_RESCORE_DEMO)
+    with closing(connect()) as conn:
+        running = tasks.going(conn)
+        if running:
+            raise ValueError(_rescore_busy(running))
+        made = backup.make(store.ROOT)  # First, so a rescore never drops anything there's no copy of.
+        result = discover.rescore(conn, load_config())
+    return {**result, "said": words.rescore(result), "backup": {**made, "folder": backup.FOLDER.as_posix()},
+            **_rescore_state()}
 
 
 def _profile_code(body: dict[str, Any]) -> dict[str, Any]:
@@ -1214,6 +1257,7 @@ PROFILE_WRITES = {
     "/api/profile/put-back": _put_back,
     "/api/profile/code": _profile_code,
     "/api/profile/backup": _back_up,
+    "/api/profile/rescore": _rescore_now,
     "/api/gaps": _gap_question,
 }
 
