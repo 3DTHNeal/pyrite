@@ -155,6 +155,16 @@ class Steps(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.draft("priorities", {})
 
+    def test_each_drafter_registers_itself_once_for_a_real_section(self):
+        self.assertLessEqual(set(steps.DRAFTERS), profile.STEP_IDS)
+        # Two merged branches each registering one section must stop Pyrite loading, not quietly keep the second.
+        with self.assertRaises(RuntimeError) as caught:
+            steps.drafter("roles")(lambda texts, cfg, edits: steps.Draft(texts, 0))
+        self.assertIn("Two drafters for the 'roles' section", str(caught.exception))
+        self.assertEqual(steps.DRAFTERS["roles"].__name__, "_roles")
+        with self.assertRaises(RuntimeError):
+            steps.drafter("no-such-section")
+
     # ---- Name and contact ----
 
     def test_name_and_contact_go_everywhere_they_appear(self):
@@ -622,7 +632,7 @@ class Steps(unittest.TestCase):
         self.assertEqual(lead["emphasis"], "team management, hiring and launches lead.")
         self.assertIn("junior", roles["exclude_titles"])
         self.assertNotIn("Until it's built", next(s for s in profile.STEPS if s["id"] == "roles")["meanwhile"])
-        self.assertIn('src="/static/profile/roles.js"', (server.STATIC / "index.html").read_text(encoding="utf-8"))
+        self.assertIn(b'src="/static/profile/roles.js"', server.page())
 
     def test_an_unchanged_roles_form_leaves_every_file_byte_for_byte(self):
         before = {key: (self.root / path).read_bytes() for key, path in profile.FILES.items() if (self.root / path).exists()}
