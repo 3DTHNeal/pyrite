@@ -64,6 +64,9 @@ from pyrite import checks, claude_code, cli, daily, doctor, prep, refresh, serve
 WORKSPACE_TODOS, FACTS_STILL_EXAMPLE = doctor.workspace_todos, tasks._facts_still_example
 doctor.workspace_todos = lambda root, cfg: []
 tasks._facts_still_example = lambda: False
+# Whether this computer has Word or LibreOffice isn't the suite's business either, so a missing one needs no one here.
+PROGRAM_TODOS = doctor.program_todos
+doctor.program_todos = lambda: []
 
 CFG = store.load_config()
 MODEL = store.ROOT / "applications" / "2026-11-acme-principal-robotics-software-engineer"

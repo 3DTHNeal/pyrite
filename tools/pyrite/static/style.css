@@ -549,6 +549,19 @@ textarea { width: 100%; resize: vertical; }
 .profile-chip.new { border-style: dashed; background: color-mix(in srgb, var(--good) 10%, transparent); }
 .profile-chip.going > span { text-decoration: line-through; color: var(--ink-3); }
 .profile-chip.going { border-style: dashed; }
+/* Tools check and Workspace and backup: what's on this computer, and where your data is. */
+.profile-tool .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.profile-tool .top .profile-sub { margin: 0; }
+.profile-tool > p { margin: 0; }
+.profile-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.profile-facts dt { color: var(--ink-3); }
+.profile-facts dd { margin: 0; overflow-wrap: anywhere; }
+.profile-fix { white-space: pre-line; }
+.profile-path, .profile-commands { font: 12px var(--mono); overflow-wrap: anywhere; }
+.profile-commands { background: var(--surface-2); padding: 8px 10px; border-radius: 4px; margin: 0; white-space: pre-wrap; }
+.profile-copies { margin: 0; padding-left: 18px; font-size: 13px; }
+.profile-copies .muted { overflow-wrap: anywhere; }
+@media (max-width: 560px) { .profile-facts { grid-template-columns: 1fr; } .profile-facts dd { margin-bottom: 6px; } }
 .profile-add { display: flex; gap: 6px; }
 .profile-add input { flex: 1; min-width: 0; }
 .profile-testline { margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; line-height: 1.9; overflow-wrap: anywhere; }

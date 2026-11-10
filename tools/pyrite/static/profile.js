@@ -16,6 +16,7 @@ const profileSteps = {};
 // answers. After a save or Discard the section is drawn again.
 // ctx.memo is the section's own object for its form: it lasts while there are unsaved edits, so drawing the section
 // again keeps them, and starts empty after a save or Discard.
+// def.readOnly marks a section that only shows what it finds, such as Tools check, so its footer has no Save.
 function profileStep(id, def) {
   profileSteps[id] = def;
 }
@@ -162,6 +163,12 @@ function profileNeeds() {
     h("h2", {}, `Needs you · ${items.length}`), h("ul", {}, list));
 }
 
+// A section set on the Settings tab for good opens it there, as a link would. The rest open here.
+function profileOpen(step) {
+  if (step.settings && !profileSteps[step.id]) showTab(step.fallback);
+  else profileGo(step.id);
+}
+
 function profileCards() {
   const groups = [];
   for (const step of profileData.steps) {
@@ -172,11 +179,12 @@ function profileCards() {
   return groups.map((group) => h("section", { class: "profile-group", "aria-label": group.name },
     h("h3", {}, group.name),
     h("div", { class: "profile-cards" }, group.steps.map((step) => h("button", {
-      class: "profile-card", type: "button", onclick: () => profileGo(step.id),
+      class: "profile-card", type: "button", onclick: () => profileOpen(step),
     },
     h("span", { class: "top" }, h("b", {}, step.label), profileStatusPill(step)),
     h("span", { class: "sum" }, step.summary),
-    h("small", {}, step.changed ? `Changed ${profileWhen(step.changed)}` : step.required ? "Required" : "Optional"))))));
+    h("small", {}, step.settings ? `On the Settings tab, under ${step.settings} →`
+      : step.changed ? `Changed ${profileWhen(step.changed)}` : step.required ? "Required" : "Optional"))))));
 }
 
 // Several files saved together share a stamp, so they show as one save.
@@ -328,6 +336,14 @@ function profileRail(current) {
 function profileFallback(step) {
   // A fallback may name a section of its tab, as settings/ranking does.
   const tab = PROFILE_TABS[String(step.fallback || "").split("/")[0]];
+  if (step.settings) {
+    // Set on the Settings tab for good, so it's a way there rather than a section waiting for its editor.
+    return h("div", { class: "stack profile-fallback" },
+      h("p", {}, h("b", {}, "Now: "), step.summary),
+      h("p", {}, step.meanwhile),
+      h("div", {}, h("button", { class: "btn primary", type: "button", onclick: () => showTab(step.fallback) },
+        `Open ${step.settings} on the Settings tab`)));
+  }
   return h("div", { class: "stack profile-fallback" },
     h("p", {}, h("b", {}, "Now: "), step.summary),
     h("div", { class: "callout info" }, h("b", {}, "This section's editor isn't built yet."), h("p", {}, step.meanwhile)),
@@ -393,7 +409,8 @@ async function profileSave(step, foot, button, error) {
 
 function renderProfileStep(root, step) {
   const def = profileSteps[step.id];
-  const foot = profileFoot(step, Boolean(def));
+  // A section that only shows what it finds, such as Tools check, has nothing to save.
+  const foot = profileFoot(step, Boolean(def) && !def.readOnly);
   let drawn = { main: profileFallback(step) };
   if (def) {
     if (!profilePending || profileMemo.step !== step.id) profileMemo = { step: step.id };

@@ -2,15 +2,19 @@
 byte, saving profile files together with their history, and the hub that shows each section and what needs you."""
 import re
 import shutil
+import sqlite3
+import subprocess
 import tempfile
 import tomllib
 import unittest
 import unittest.mock as mock
+from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import support  # Points Pyrite at a throwaway workspace before it loads.
 
-from pyrite import factsdoc, profile, server, settings, store, tomledit
+from pyrite import backup, doctor, factsdoc, profile, server, settings, store, tomledit
 
 EXAMPLE_PROFILE = store.EXAMPLE_ROOT / "profile"
 
@@ -418,8 +422,9 @@ class Hub(Profile):
         self.assertEqual(self.section("basics")["summary"], "Alex Rivera, Madison, WI")
         self.assertEqual(self.section("history")["summary"], "4 roles at 2 employers")
         self.assertEqual(self.section("masters")["summary"], "Resume and letter written")
-        self.assertEqual({s["status"] for s in steps if s["id"] != "tools"}, {"set"})
-        self.assertEqual(self.section("tools")["status"], "unknown")
+        # Tools check depends on this computer, and Workspace and backup on a copy no test has made yet.
+        self.assertEqual({s["status"] for s in steps if s["id"] not in ("tools", "workspace")}, {"set"})
+        self.assertEqual((self.section("workspace")["status"], self.section("workspace")["summary"]), ("not_set", "No backup here yet"))
 
     def test_a_section_with_nothing_in_it_is_not_set(self):
         profile.write({"terms": "# none yet\n"}, profile.versions(), "Emptied")
@@ -496,6 +501,110 @@ class Hub(Profile):
             profile.keep({"terms": terms}, "Changed on the Facts tab")
         entry = profile.history()[0]
         self.assertEqual((entry["reason"], entry.get("step"), profile.kept("terms", entry["stamp"])), ("Changed on the Facts tab", None, terms))
+
+
+class ToolsAndWorkspace(Profile):
+    """The two sections that only show what they find: the programs on this computer, and the workspace and its backups."""
+
+    PROGRAMS = [{"id": "docx", "ok": True, "what": "python-docx, which builds the documents", "fix": ""},
+                {"id": "pdf", "ok": True, "what": "Word, which makes the PDFs", "fix": ""},
+                {"id": "pdftotext", "ok": None, "what": "poppler's pdftotext", "fix": "Optional."}]
+
+    def programs(self, **ok):
+        found = [{**check, "ok": ok.get(check["id"], check["ok"])} for check in self.PROGRAMS]
+        if ok.get("pdf") is False:
+            found[1]["fix"] = "Install LibreOffice and put `soffice` on PATH."
+        return mock.patch.object(doctor, "program_checks", return_value=[{**c, **doctor.TOOLS_ABOUT[c["id"]]} for c in found])
+
+    def section(self, step_id):
+        return next(s for s in profile.view()["steps"] if s["id"] == step_id)
+
+    def database(self):
+        with closing(store.connect(self.root / "data" / "pyrite.db")) as conn:
+            conn.execute("INSERT INTO meta (key, value) VALUES ('backed_up', 'kept')")
+            conn.commit()
+
+    def test_every_tool_says_what_its_for_and_what_works_without_it(self):
+        with mock.patch.object(doctor, "claude_check", return_value={"ok": True, "what": "Claude Code, signed in", "fix": ""}):
+            tools = doctor.tool_checks({})
+        self.assertEqual([t["id"] for t in tools], ["docx", "pdf", "pdftotext", "claude", "mail"])
+        self.assertTrue(all(t["name"] and t["for"] and t["without"] for t in tools))
+        self.assertEqual({t["id"]: t.get("settings") for t in tools if t.get("settings")},
+                         {"claude": "settings/claude", "mail": "settings/mail"})
+        # The answer Settings has already asked for is used, rather than asking Claude Code again.
+        with mock.patch.object(doctor, "claude_check") as asked:
+            doctor.tool_checks({}, {"ok": False, "what": "not signed in", "fix": "log in"})
+        asked.assert_not_called()
+
+    def test_a_missing_program_every_draft_needs_opens_tools_check(self):
+        with self.programs(pdf=False):
+            todos = support.PROGRAM_TODOS()
+            self.assertEqual([(t["step"], t["severity"]) for t in todos], [("tools", "bad")])
+            self.assertIn("LibreOffice or Word isn't on this computer", todos[0]["what"])
+            self.assertEqual(self.section("tools")["summary"], "Missing LibreOffice or Word")
+            with mock.patch.object(doctor, "program_todos", support.PROGRAM_TODOS):
+                self.assertEqual(self.section("tools")["status"], "attention")
+        with self.programs():
+            self.assertEqual(support.PROGRAM_TODOS(), [])
+            self.assertEqual((self.section("tools")["status"], self.section("tools")["summary"]), ("set", "python-docx and Word found"))
+        # An optional one missing is no one's to-do.
+        with self.programs(pdftotext=None):
+            self.assertEqual(support.PROGRAM_TODOS(), [])
+
+    def test_sections_set_on_the_settings_tab_say_where(self):
+        for step_id, where in (("priorities", "settings/ranking"), ("schedule", "settings/run")):
+            step = self.section(step_id)
+            self.assertEqual(step["fallback"], where)
+            self.assertTrue(step["settings"])
+            self.assertNotIn("Until it's built", step["meanwhile"])
+
+    def test_a_backup_copies_the_database_whole_and_keeps_the_newest(self):
+        self.database()
+        with mock.patch.object(backup, "KEEP", 3):
+            made = [backup.make(self.root) for _ in range(5)]
+        kept = backup.copies(self.root)
+        self.assertEqual([c["name"] for c in kept], [m["name"] for m in made[:-4:-1]])
+        self.assertFalse(list((self.root / "data" / "backups").glob("*.partial")))
+        with closing(sqlite3.connect(self.root / "data" / "backups" / kept[0]["name"])) as copy:
+            self.assertEqual(copy.execute("SELECT value FROM meta WHERE key = 'backed_up'").fetchall(), [("kept",)])
+        self.assertEqual(self.section("workspace")["status"], "set")
+        self.assertTrue(self.section("workspace")["summary"].startswith("Last backup "))
+
+    def test_an_old_backup_isnt_recent(self):
+        self.database()
+        backup.make(self.root)
+        later = datetime.now(UTC) + timedelta(days=backup.FRESH_DAYS + 1)
+        self.assertFalse(backup.is_fresh(self.root, later))
+        self.assertTrue(backup.is_fresh(self.root))
+
+    def test_nothing_to_back_up_says_so(self):
+        with self.assertRaisesRegex(ValueError, "no data/pyrite.db yet"):
+            backup.make(self.root)
+        with self.assertRaisesRegex(ValueError, "demo"):
+            backup.make(store.EXAMPLE_ROOT)
+        self.assertFalse((self.root / "data" / "backups").exists())
+
+    def test_the_section_names_the_folder_and_whether_git_keeps_the_database(self):
+        self.database()
+        about = server._back_up({})
+        self.assertEqual(about["folder"], str(self.root))
+        self.assertEqual(about["made"]["name"], about["backups"]["copies"][0]["name"])
+        self.assertTrue(about["database"]["exists"])
+        # A temporary folder is in no repository, or in one further up that isn't its own.
+        self.assertFalse(about["git"]["repo"])
+        self.assertFalse(about["git"]["tracked"])
+
+    def test_a_git_workspace_that_keeps_the_database_says_when_it_was_committed(self):
+        if not shutil.which("git"):
+            self.skipTest("git isn't installed")
+        self.database()
+        git = ["git", "-C", str(self.root), "-c", "user.name=Test", "-c", "user.email=test@example.com"]
+        subprocess.run([*git, "init", "-q"], check=True)
+        subprocess.run([*git, "add", "data/pyrite.db"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "Back up"], check=True)
+        state = backup.about(self.root)["git"]
+        self.assertEqual((state["repo"], state["tracked"], state["changed"], state["remote"]), (True, True, False, False))
+        self.assertTrue(state["committed"].startswith("20"))
 
 
 class PageScripts(unittest.TestCase):
