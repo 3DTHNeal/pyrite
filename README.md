@@ -119,7 +119,9 @@ This project runs on my real job search, and it has to be public without showing
 
 ## Running it yourself
 
-Make a venv with Python 3.11 or newer, and install what builds the documents. These are the Windows commands. Elsewhere, it's `python3 -m venv .venv` and then `.venv/bin/python` wherever these say `.venv/Scripts/python.exe`:
+On Windows, with Python 3.11 or newer installed, double-click `Pyrite.cmd`. The first time, it makes the venv and installs what Pyrite needs, then the dashboard opens on making your workspace and walks you through setting it up, a section at a time, with nothing to type in a terminal or a text editor. [The guided way](docs/setup.md#the-guided-way) says what to expect.
+
+To do it from a terminal instead, make a venv with Python 3.11 or newer, and install what builds the documents. These are the Windows commands. Elsewhere, it's `python3 -m venv .venv` and then `.venv/bin/python` wherever these say `.venv/Scripts/python.exe`:
 
 ```bash
 py -3 -m venv .venv

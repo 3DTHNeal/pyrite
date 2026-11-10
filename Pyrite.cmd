@@ -5,9 +5,10 @@ rem The workspace comes from PYRITE_HOME or .pyrite-home, and the port from port
 rem (8787 if unset). With no workspace yet, the dashboard opens on making one. See docs/dashboard.md.
 cd /d "%~dp0"
 
-rem A fresh clone has no venv yet, so this says how to make one rather than failing to find Python.
-if not exist ".venv\Scripts\python.exe" goto novenv
+rem A fresh clone has no venv yet, so the first double-click makes one, with nothing to type.
+if not exist ".venv\Scripts\python.exe" goto makevenv
 
+:open
 ".venv\Scripts\python.exe" tools\pyrite.py open
 rem Anything it had to say, such as that the workspace named can't be found or another program holds the port, stays on screen.
 if errorlevel 1 (
@@ -16,10 +17,40 @@ if errorlevel 1 (
 )
 exit /b 0
 
-:novenv
-echo Pyrite isn't set up in this folder yet: there's no .venv here. From this folder, run:
-echo     py -3 -m venv .venv
-echo     .venv\Scripts\python.exe -m pip install -r tools\requirements.txt
-echo Then double-click Pyrite.cmd again. The dashboard opens on making your workspace. See docs\setup.md.
+:makevenv
+echo Setting Pyrite up in this folder for the first time. This takes a minute or two, and only happens once.
+rem `py -3` picks the newest Python installed, which matters where `python` is an older one.
+where py >nul 2>nul
+if errorlevel 1 (
+    python -m venv .venv
+) else (
+    py -3 -m venv .venv
+)
+if not exist ".venv\Scripts\python.exe" goto nopython
+".venv\Scripts\python.exe" -c "import sys; sys.exit(sys.version_info < (3, 11))"
+if errorlevel 1 goto oldpython
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r tools\requirements.txt
+if errorlevel 1 goto noinstall
+echo Done. Opening Pyrite, which starts on making your workspace.
+goto open
+
+:nopython
+echo Pyrite needs Python 3.11 or newer, and this computer has none Pyrite could find.
+echo Install it from https://www.python.org/downloads/, then double-click Pyrite.cmd again. See docs\setup.md.
+pause
+exit /b 1
+
+:oldpython
+rem Taken away again, so the next double-click tries afresh once a newer Python is installed.
+rmdir /s /q .venv
+echo Pyrite needs Python 3.11 or newer, and the newest this computer has is older.
+echo Install a newer one from https://www.python.org/downloads/, then double-click Pyrite.cmd again. See docs\setup.md.
+pause
+exit /b 1
+
+:noinstall
+rmdir /s /q .venv
+echo Pyrite couldn't install what it needs, as pip says above. It needs the internet for this, once.
+echo Double-click Pyrite.cmd again to try again, or follow docs\setup.md to do it by hand.
 pause
 exit /b 1

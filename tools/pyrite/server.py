@@ -573,6 +573,8 @@ def build_state(conn, cfg) -> dict[str, Any]:
         "not_ready": {kind: why for kind in tasks.LABELS if (why := tasks.not_ready(kind))},
         "demo": IS_EXAMPLE,
         "setup": setup_info(),
+        # How far a new workspace's guided setup has got, for the rail. None when no setup is going.
+        "guide": profile.progress(),
     }
 
 

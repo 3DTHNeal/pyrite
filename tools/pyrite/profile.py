@@ -35,61 +35,64 @@ STAMP = re.compile(r"\d{8}T\d{12}Z")
 DIFF_LINES = 400
 
 # The Profile tab's sections, in the order it shows them. Setup walks the same ones. `files` are the keys a section
-# writes, and `required` ones must be set before Pyrite can do its job. Until a section's own editor is built,
-# `meanwhile` says where to change it instead, and `fallback` names the tab that edits it, if one does, with the
-# section of that tab after a slash. A section with `settings` is set on the Settings tab for good, in the section of
-# that name, so it says so and opens it rather than calling itself unbuilt.
+# writes, and `required` ones must be set before Pyrite can do its job. `meanwhile` is the way to make the same change
+# without the dashboard, for people who'd rather edit the files, and `fallback` names the tab that edits it, if one
+# does, with the section of that tab after a slash. A section with `settings` is set on the Settings tab for good, in
+# the section of that name, so it says so and opens it rather than calling itself unbuilt.
 STEPS: tuple[dict[str, Any], ...] = (
     {"id": "basics", "group": "About you", "label": "Name and contact", "required": True, "fallback": "facts",
      "files": ("config", "facts", "resume", "letter"),
-     "meanwhile": "Until it's built: your name and contact on the Facts tab, and [candidate] name in profile/search.toml.",
+     "meanwhile": "By hand: [candidate] name in profile/search.toml, the Contact line in profile/facts.md, and the name "
+                  "and contact lines at the top of resume.md and cover-letter.md.",
      "why": "These go at the top of every resume and letter. The fact check blocks a draft that changes your name or "
             "contact line.",
      "writes": ("search.toml › [candidate] and [documents]", "facts.md › Contact",
                 "resume.md and cover-letter.md › the name and @ lines")},
     {"id": "history", "group": "About you", "label": "Work history", "required": True, "fallback": "facts",
      "files": ("facts", "resume", "config"),
-     "meanwhile": "Until it's built: the Timeline on the Facts tab, and the same headings in your master resume.",
+     "meanwhile": "By hand: the Timeline in profile/facts.md, and the same employer and role headings in your master resume.",
      "why": "Every draft must use these employers, titles and dates word for word. A draft that changes one is blocked.",
      "writes": ("facts.md › Timeline", "resume.md › employer and role headings", "search.toml › [guard] expected_on_resume")},
     {"id": "achievements", "group": "About you", "label": "Achievements", "required": True, "fallback": "facts",
      "files": ("facts", "run_notes"),
-     "meanwhile": "Until it's built: the themed sections on the Facts tab.",
+     "meanwhile": "By hand: the themed sections of profile/facts.md, one fact to a line.",
      "why": "Drafts may only claim what's here. A strong list is the biggest single thing you can do for draft quality.",
      "writes": ("facts.md › your themed sections", "run-notes.md › emphasis and wording rules")},
     {"id": "offlimits", "group": "About you", "label": "Off limits", "required": False, "fallback": "facts",
      "files": ("facts", "config"),
-     "meanwhile": "Until it's built: Do not use and Unsupported on the Facts tab, and the patterns under [guard] in profile/search.toml.",
+     "meanwhile": "By hand: Do not use and Unsupported in profile/facts.md, and the patterns under [guard] in "
+                  "profile/search.toml.",
      "why": "Confidential names and things you haven't done. Pyrite blocks any draft that mentions them.",
      "writes": ("facts.md › Do not use and Unsupported", "search.toml › [guard] forbidden and unsupported")},
     {"id": "skills", "group": "About you", "label": "Skills and terms", "required": False, "fallback": "facts",
      "files": ("terms",),
-     "meanwhile": "Until it's built: approved-terms.txt on the Facts tab.",
+     "meanwhile": "By hand: profile/approved-terms.txt, one term to a line.",
      "why": "Specialist words a draft may use. Pyrite blocks unfamiliar ones until you say they're true of you.",
      "writes": ("approved-terms.txt",)},
     {"id": "gaps", "group": "About you", "label": "Gaps to answer", "required": False, "fallback": None,
      "files": ("facts",),
-     "meanwhile": "Until it's built: run `pyrite gaps` in a terminal.",
+     "meanwhile": "In a terminal: `pyrite gaps` asks the same questions.",
      "why": "Requirements your drafts keep calling gaps. You may have done some of them: a yes adds a fact, and a no "
             "goes under Unsupported, so drafts stop guessing either way.",
      "writes": ("facts.md › a section of facts, or Unsupported", "data/gap-answers.json › which questions you've answered")},
     {"id": "masters", "group": "About you", "label": "Master resume", "required": True, "fallback": None,
      "files": ("resume", "letter"),
-     "meanwhile": "Until it's built: edit your master resume and letter in any text editor.",
+     "meanwhile": "By hand: profile/resume.md and profile/cover-letter.md in any text editor.",
      "why": "Your master resume and letter. Every draft starts from these, and they must pass the fact check first.",
      "writes": ("resume.md", "cover-letter.md")},
     {"id": "roles", "group": "Your search", "label": "Roles you want", "required": True, "fallback": None,
      "files": ("config", "run_notes"),
-     "meanwhile": "[[track]] and [scoring] in profile/search.toml hold the same settings.",
+     "meanwhile": "By hand: [[track]] and [scoring] in profile/search.toml hold the same settings.",
      "why": "The kinds of role Pyrite keeps from the boards. Everything else is dropped before you see it.",
      "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Emphasis by track")},
     {"id": "where", "group": "Your search", "label": "Where you'll work", "required": True, "fallback": None,
      "files": ("config",),
-     "meanwhile": "[location] and [market] in profile/search.toml hold the same settings.",
+     "meanwhile": "By hand: [location] and [market] in profile/search.toml hold the same settings.",
      "why": "Which locations count. Onsite roles elsewhere are dropped unless you'll relocate.",
      "writes": ("search.toml › [location] and [market]",)},
     {"id": "companies", "group": "Your search", "label": "Companies to watch", "required": True, "fallback": None,
      "files": ("config",),
+     "meanwhile": "By hand: [watch.*] and [[manual_check]] in profile/search.toml, and `pyrite sources` to test them.",
      "why": "Pyrite reads these companies' job boards every morning.",
      "writes": ("search.toml › [watch.*], [[manual_check]] and [workday] queries",)},
     {"id": "priorities", "group": "Your search", "label": "What comes first", "required": False, "fallback": "settings/ranking",
@@ -237,8 +240,12 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
     # Every draft's headings are checked against heading_source, which needn't be profile/resume.md.
     heading = str(guard.get("heading_source", "") or "")
     has_master = bool(heading) and (store.ROOT / heading).is_file()
+    # A new workspace's resume.md is there from the start, but only as the blank form, which isn't a master yet.
+    blank = has_master and heading in doctor.still_blank(store.ROOT)
+    has_master = has_master and not blank
     master = ("Resume and letter written" if texts["letter"].strip() else "Resume written, no letter yet") \
         if heading == FILES["resume"] else f"Headings checked against {heading}"
+    master = master if has_master else "Still the blank form" if blank else "No master resume yet"
     tracks = [str(track.get("name", "")) for track in cfg.get("track", []) if isinstance(track, dict)]
     location = cfg.get("location", {})
     places = len(score.local_patterns(location)) + len(location.get("local_exact", []))
@@ -257,7 +264,7 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
         "offlimits": (bool(never or not_done), f"{never} never mentioned, {not_done} not done"),
         "skills": (terms > 0, f"{_plural(terms, 'approved term')}" if terms else "No approved terms"),
         "gaps": (True, _questions(found or gaps.view())),
-        "masters": (has_master, master if has_master else "No master resume yet"),
+        "masters": (has_master, master),
         "roles": (bool(tracks), f"{_plural(len(tracks), 'role type')}: {', '.join(tracks[:3])}{'…' if len(tracks) > 3 else ''}"
                   if tracks else "No role types yet"),
         "where": (bool(places or location.get("accept_remote", True)), ", ".join(where).capitalize()),
@@ -325,7 +332,7 @@ def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: 
         attention = any(item["step"] == step["id"] for item in waiting)
         status = "attention" if attention else "set" if is_set else "not_set"
         steps.append({**step, "status": status, "summary": summary, "changed": changed.get(step["id"])})
-    setting_up = workspace.setting_up()
+    setting_up = was_setting_up = workspace.setting_up()
     if setting_up and all(step["status"] == "set" for step in steps if step["required"]):
         workspace.finish_setup()  # For good: from here on, loosening a check needs a code.
         setting_up = False
@@ -333,7 +340,27 @@ def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: 
         waiting.append({"severity": "info", "title": "Your workspace is new, so changes need no code from this computer yet.",
                         "detail": "Once every required section is set, a change that lets drafts say more, such as "
                                   "approving a term, asks for a code sent to this computer's notifications.", "step": None})
-    return {"steps": steps, "needs": waiting, "setting_up": setting_up}
+    return {"steps": steps, "needs": waiting, "setting_up": setting_up,
+            "guide": guide(steps, setting_up, finished=was_setting_up and not setting_up)}
+
+
+def guide(steps: list[dict[str, Any]], setting_up: bool, finished: bool = False) -> dict[str, Any]:
+    """How far the guided setup has got, worked out from each section's state, so it's the files that say what's done
+    and leaving part way loses nothing. It's `active` while a new workspace is being set up, and `finished` only in
+    the answer that ended it, so the page can say so once."""
+    required = [step for step in steps if step["required"]]
+    left = [step["id"] for step in required if step["status"] != "set"]
+    return {"active": setting_up, "finished": finished, "required": len(required), "set": len(required) - len(left),
+            "left": left, "next": left[0] if left else None}
+
+
+def progress() -> dict[str, Any] | None:
+    """The guided setup's progress for the rail, or None when no setup is going. Reading every section takes a
+    moment, so it's only worked out while a new workspace is being set up."""
+    if not workspace.setting_up():
+        return None
+    found = view()["guide"]
+    return found if found["active"] or found["finished"] else None
 
 
 def _clean(key: str, text) -> str:

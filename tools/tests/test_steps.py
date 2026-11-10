@@ -13,7 +13,7 @@ from typing import Any
 
 import support  # Points Pyrite at a throwaway workspace before it loads.
 
-from pyrite import checks, discover, factsdoc, profile, server, sources, steps, store, tomledit
+from pyrite import checks, discover, factsdoc, profile, server, sources, steps, store, tomledit, workspace
 
 EXAMPLE_PROFILE = store.EXAMPLE_ROOT / "profile"
 
@@ -761,6 +761,15 @@ class Steps(unittest.TestCase):
                                             "why": "it has no senior word, which this role type needs"}])
         tried = self.draft("roles", {**form, "test": "Senior Sales Engineer"})["preview"]["test"]
         self.assertEqual((tried["track"], tried["excluded"], tried["level"]), (None, "sales", "mid"))
+
+    def test_a_new_workspace_with_no_role_types_opens_roles_without_an_error(self):
+        # Opening the section drafts the form as it is to preview the prospects, so having none yet isn't refused.
+        blank = workspace.blank_config((EXAMPLE_PROFILE / "search.toml").read_text(encoding="utf-8"), "Sam Doe")
+        profile.write({"config": blank}, self.view["versions"], "test")
+        self.view = {**profile.view(), **steps.view()}
+        self.assertEqual(self.view["roles"]["tracks"], [])
+        result = self.draft("roles", self.roles_form())
+        self.assertEqual((result["changes"], result["count"]), ({}, 0))
 
     def test_bad_roles_are_refused(self):
         def tracks(**change):

@@ -4,9 +4,25 @@
 
 Commands use the Windows path `.venv/Scripts/python.exe`. Elsewhere, it's `.venv/bin/python`.
 
+## The guided way
+
+On Windows, with Python 3.11 or newer installed, double-click `Pyrite.cmd`. Nothing else needs a terminal or a text editor.
+
+1. The first time, it makes the venv in this folder and installs what Pyrite needs, which takes a minute or two and needs the internet once. Without a new enough Python, it says where to get one and changes nothing.
+2. The dashboard opens on **Make your workspace**, over the demo. Give your name as it goes on your resume and the folder to make, and choose blank files or a copy of the example. [From the dashboard](#from-the-dashboard) has the details.
+3. Pyrite restarts on your new workspace at the Profile tab, which opens on **Setting up**: how many of the required sections are set, and a button to the next one. The rail's **Profile** shows the same count, such as 2/7.
+4. Setup goes through the Profile tab's own sections in order, in four groups: About you, Your search, Automation and Workspace. Each says why it matters, and **Where this goes** names the files it writes and how to make the same change by hand. The rail beside the section marks the optional ones and shows how far you've got.
+5. At the bottom, **Save and continue** saves the section and opens the next, and **Continue** moves on when there's nothing to save. An optional section that isn't set yet offers **Skip for now**. A required one can be left too, and setup comes back to it. **←** goes back a section.
+
+You can stop at any point and come back. What's done is read from your files each time, not kept as a record of its own, so a change made in a text editor counts too. A section showing **needs you** isn't done yet, and **Needs you** on the Profile tab says why.
+
+The required sections are what a first draft needs: **Name and contact**, **Work history**, **Achievements** and **Master resume** about you, and **Roles you want** and **Companies to watch** in your search, with **Where you'll work** set from the start to take remote roles. The Master resume section runs the fact check on your master as you write it, so a master that passes there passes for every draft. Once every required section is set, the Profile tab says **Setup done**, with **Check the boards now** for the first board check. From then on, a change that lets drafts say more, such as approving a term, asks for a code sent to this computer's notifications ([Confirming with a code](profile.md#confirming-with-a-code)).
+
+On macOS or Linux, make the venv as below and run `.venv/bin/python tools/pyrite.py open`, which opens the same setup. The rest of this page is the same setup by hand, for people who'd rather edit the files.
+
 ## The venv
 
-Make the venv with Python 3.11 or newer. On Windows, `py -3` picks the newest one installed, which matters where `python` is an older one:
+`Pyrite.cmd` makes this the first time it's run. To make it yourself, use Python 3.11 or newer. On Windows, `py -3` picks the newest one installed, which matters where `python` is an older one:
 
 ```bash
 py -3 -m venv .venv
@@ -40,7 +56,7 @@ my-job-search/
 
 ### From the dashboard
 
-With no workspace set yet, open the dashboard: double-click `Pyrite.cmd` on Windows, or run `pyrite open`. It opens on **Make your workspace**, over the demo. Give your name as it goes on your resume and the folder to make, which starts as `my-job-search` beside this one, and choose to start from blank files or from a copy of the example. It can make the folder a private git repository too, as `--git` does below. **Make my workspace** does what `init` does, points this folder at the new workspace, and restarts the dashboard on it, at the Profile tab, whose **Needs you** list says what's left. **Look around the demo first** closes the box for now: **Make your workspace** at the top of the page opens it again.
+With no workspace set yet, open the dashboard: double-click `Pyrite.cmd` on Windows, or run `pyrite open`. It opens on **Make your workspace**, over the demo. Give your name as it goes on your resume and the folder to make, which starts as `my-job-search` beside this one, and choose to start from blank files or from a copy of the example. It can make the folder a private git repository too, as `--git` does below. **Make my workspace** does what `init` does, points this folder at the new workspace, and restarts the dashboard on it, at the Profile tab, where [the guided way](#the-guided-way) goes on. **Look around the demo first** closes the box for now: **Make your workspace** at the top of the page opens it again.
 
 It only works while nothing names a workspace, so the dashboard can never make a second one or move Pyrite off the one in use. A new workspace needs no confirmation codes until its required Profile sections are set, since there's nothing in it of yours yet to loosen. See [Confirming with a code](profile.md#confirming-with-a-code).
 
