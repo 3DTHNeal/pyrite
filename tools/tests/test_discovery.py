@@ -961,7 +961,7 @@ class SweepRobustness(Discovery):
 
     def test_a_watch_entry_written_the_wrong_way_fails_only_its_own_source(self):
         # Workday written the way the other boards are, and a board written the way Workday is.
-        self.cfg = {**self.cfg, "watch": {"greenhouse": {"acme": "Acme"}, "lever": {"initech": {"name": "Initech"}}, "ashby": {},
+        self.cfg = {**self.cfg, "watch": {"greenhouse": {"acme": "Acme"}, "lever": {"initech": {"name": "Initech", "wd": "wd1", "site": "External"}}, "ashby": {},
                                           "workday": {"globex": "Globex"}}}
         stub_feed(None, [self.posting()])
         stats = self.sweep()

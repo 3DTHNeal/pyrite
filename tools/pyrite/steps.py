@@ -1510,16 +1510,53 @@ def _watching(cfg: dict[str, Any]) -> dict[tuple[str, str], Any]:
     return found
 
 
-def _board_form(kind: str, key: str, spec) -> dict[str, str]:
-    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, and every other
-    board is its company's name."""
+def _board_form(kind: str, key: str, spec) -> dict[str, Any]:
+    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, a Lever board on
+    Lever's EU site a table of name and eu, and every other board its company's name."""
     if kind == "workday":
         table = spec if isinstance(spec, dict) else {"name": spec}
         name, wd, site = (table.get(part) for part in ("name", "wd", "site"))
+    elif isinstance(spec, dict):
+        name, wd, site = spec.get("name"), "", ""
     else:
         name, wd, site = spec, "", ""
     text = lambda value: value if isinstance(value, str) else ""
-    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site)}
+    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site),
+            "eu": kind == "lever" and discover.lever_eu(spec)}
+
+
+def _companies_eu(raw: dict[str, Any], kind: str, old) -> bool:
+    """Whether the form puts a Lever board on Lever's EU site. A form that doesn't say keeps what the board had."""
+    if kind != "lever":
+        return False
+    eu = raw.get("eu")
+    if eu is None:
+        return discover.lever_eu(old)
+    if not isinstance(eu, bool):
+        raise ValueError("Whether a Lever board is on its EU site should be true or false.")
+    return eu
+
+
+def _companies_lever(name: str, eu: bool) -> Any:
+    """A Lever board's entry: its company's name, or a table with eu = true for a board on Lever's EU site."""
+    return {"name": name, "eu": True} if eu else name
+
+
+def _companies_pages(cfg: dict[str, Any]) -> Any:
+    """[workday] max_pages as search.toml has it, or the number read when it isn't set."""
+    workday = cfg.get("workday")
+    return workday.get("max_pages", discover.DEFAULT_WORKDAY_PAGES) if isinstance(workday, dict) else discover.DEFAULT_WORKDAY_PAGES
+
+
+def _companies_max_pages(config: str, cfg: dict[str, Any], raw) -> tuple[str, int]:
+    """[workday] max_pages as the form has it, within discover.WORKDAY_PAGES. A number outside them already in the file
+    stays while it isn't changed."""
+    if raw == _companies_pages(cfg):
+        return config, 0
+    low, high = discover.WORKDAY_PAGES
+    if not isinstance(raw, int) or isinstance(raw, bool) or not low <= raw <= high:
+        raise ValueError(f"Pages per Workday search is a whole number from {low} to {high}.")
+    return tomledit.set_value(config, "workday", "max_pages", raw), 1
 
 
 def _manual(cfg: dict[str, Any]) -> list[Any]:
@@ -1559,6 +1596,8 @@ def _companies_view(cfg: dict[str, Any]) -> dict[str, Any]:
         "manual": [{**_manual_form(entry), "at": at} for at, entry in enumerate(_manual(cfg))],
         "queries": [query for query in _queries(cfg) if isinstance(query, str)],
         "kinds": discover.BOARD_KINDS,
+        "max_pages": _companies_pages(cfg),
+        "pages_range": list(discover.WORKDAY_PAGES),
     }
 
 
@@ -1585,9 +1624,10 @@ def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str]
         kind = raw.get("kind")
         if not isinstance(kind, str) or kind not in discover.BOARD_KINDS:
             raise ValueError("A board is Greenhouse, Lever, Ashby or Workday.")
-        form = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
+        form: dict[str, Any] = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
                 "wd": _one_line(raw.get("wd"), "A Workday server") if kind == "workday" else "",
-                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else ""}
+                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else "",
+                "eu": _companies_eu(raw, kind, current.get(old_id) if old_id else None)}
         if old_id is None and not any(form[part] for part in ("key", "name", "wd", "site")):
             continue  # A row just added and not yet typed in.
         ident = (kind, form["key"])
@@ -1606,6 +1646,8 @@ def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str]
         if kind == "workday":
             # Anything else its table holds stays as it was.
             spec = {**(old if isinstance(old, dict) else {}), "name": form["name"], "wd": form["wd"], "site": form["site"]}
+        elif kind == "lever":
+            spec = _companies_lever(form["name"], form["eu"])
         wanted[ident] = (spec, old_id, True)
 
     gone = [ident for ident in current if ident not in kept]
@@ -1630,11 +1672,116 @@ def _and(names: list[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
+def _manual_entries(text: str, count: int) -> list[dict[str, str]]:
+    """Each [[manual_check]] in search.toml as written: its header line, its keys, the comment and blank lines after
+    its keys (`tail`), and those just above its header (`lead`, the one before's tail), which are about it."""
+    headers = [item for item in tomledit.scan(text) if isinstance(item, tomledit.Header)]
+    entries: list[dict[str, str]] = []
+    for at, header in enumerate(headers):
+        if header.name[:1] != ("manual_check",):
+            continue
+        if header.name != ("manual_check",) or not header.array:
+            raise ValueError("search.toml has a table inside [[manual_check]], which this section can't change. "
+                             "Change it in the file.")
+        stop = headers[at + 1].start if at + 1 < len(headers) else len(text)
+        lines = text[header.end:stop].splitlines(keepends=True)
+        keep = len(lines)
+        while keep and (not lines[keep - 1].strip() or lines[keep - 1].lstrip().startswith("#")):
+            keep -= 1
+        entries.append({"header": text[header.start:header.end], "body": "".join(lines[:keep]),
+                        "tail": "".join(lines[keep:]), "lead": entries[-1]["tail"] if entries else ""})
+    if len(entries) != count:
+        raise ValueError("search.toml's companies to check by hand aren't each written under a [[manual_check]] line, so "
+                         "this section can't change them. Change them in the file.")
+    return entries
+
+
+def _manual_body(body: str, old: dict[str, Any], new: dict[str, Any]) -> str:
+    """One [[manual_check]]'s keys with the form's changes made a key at a time, read as a file of its own, so its
+    comments and any key the form doesn't show stay as they were."""
+    for part in MANUAL_FIELDS:
+        if new.get(part) == old.get(part):
+            continue
+        body = (tomledit.set_value(body, (), part, new[part]) if part in new else tomledit.delete_value(body, (), part))
+    return body
+
+
+def _manual_new(entry: dict[str, Any], eol: str) -> str:
+    return f"[[manual_check]]{eol}" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}{eol}"
+                                              for part, value in entry.items())
+
+
+def _manual_replaced(text: str, start: int, end: int, block: str, expected: list[Any]) -> str | None:
+    """The text with text[start:end] replaced by `block`, if it then reads as before with [[manual_check]] as
+    `expected`, or None."""
+    new = text[:start] + block + text[end:]
+    try:
+        before, after = tomllib.loads(text), tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return None
+    got = after.pop("manual_check", None)
+    before.pop("manual_check", None)
+    return new if got == expected and before == after else None
+
+
+def _manual_in_place_of_example(text: str, block: str, expected: list[Any]) -> str | None:
+    """The text with the commented-out [[manual_check]] left when the last one was taken off turned into `block`, so a
+    list emptied and filled again stays where it was. None if there's no such example."""
+    lines = text.splitlines(keepends=True)
+    for at, line in enumerate(lines):
+        if not re.fullmatch(r"\s*#\s*\[\[\s*manual_check\s*\]\]\s*", line):
+            continue
+        stop = at + 1
+        while stop < len(lines) and re.match(r"\s*#\s*[A-Za-z0-9_-]+\s*=", lines[stop]):
+            stop += 1
+        start = len("".join(lines[:at]))
+        found = _manual_replaced(text, start, start + len("".join(lines[at:stop])), block, expected)
+        if found is not None:
+            return found
+    return None
+
+
+def _manual_write(config: str, old: list[Any], wanted: list[tuple[int | None, dict[str, Any]]]) -> str:
+    """search.toml with [[manual_check]] as `wanted`, each (where it was in the list, or None for a new one, and its
+    table). An entry that's unchanged and still next to the one before it is written back exactly as it was, a changed
+    one is changed a key at a time, a new one goes after the last, and one taken off goes with its own lines: its keys
+    and the comments just above it."""
+    expected = [entry for _, entry in wanted]
+    eol = "\r\n" if "\r\n" in config else "\n"
+    if not wanted:
+        return tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
+    if not old:
+        block = eol.join(_manual_new(entry, eol) for entry in expected)
+        placed = _manual_in_place_of_example(config, block, expected)
+        return placed if placed is not None else tomledit.replace_table(config, "manual_check", block, expected)
+    entries = _manual_entries(config, len(old))
+    pieces: list[str] = []
+    previous: int | None = None
+    for at, (index, entry) in enumerate(wanted):
+        if index is None:
+            if pieces and not pieces[-1].endswith("\n"):
+                pieces[-1] += eol
+            pieces.append(eol + _manual_new(entry, eol))
+            continue
+        written = entries[index]
+        lead = written["lead"]
+        if at == 0:
+            lead = lead.lstrip("\r\n")
+        elif previous is None or index != previous + 1:
+            lead = lead if lead.startswith(("\n", "\r\n")) else eol + lead
+        pieces.append(lead + written["header"] + _manual_body(written["body"], old[index], entry))
+        previous = index
+    if pieces[0].startswith(("\n", "\r\n")):  # Every entry before a new first one was taken off.
+        pieces[0] = pieces[0].lstrip("\r\n")
+    return tomledit.replace_table(config, "manual_check", "".join(pieces), expected)
+
+
 def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
-    """[[manual_check]] as the form has it. It's a list of tables, so a change writes the whole list again: comments
-    between its entries go, and the ones above and below it stay."""
+    """[[manual_check]] as the form has it, changed an entry at a time, so comments between entries stay with them.
+    A new one goes after the last."""
     old = _manual(cfg)
-    new: list[Any] = []
+    kept: list[tuple[int, dict[str, Any]]] = []
+    added: list[tuple[None, dict[str, Any]]] = []
     seen: set[int] = set()
     for raw in _list(raws, "Companies to check by hand"):
         if not isinstance(raw, dict):
@@ -1649,7 +1796,7 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
                                  "Reload and try again.")
             seen.add(at)
             if _manual_form(old[at]) == fields:
-                new.append(old[at])
+                kept.append((at, old[at]))
                 continue
         if not fields["name"]:
             raise ValueError("Every company to check by hand needs a name.")
@@ -1665,22 +1812,23 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
                 entry[part] = value
             else:
                 entry.pop(part, None)
-        new.append(entry)
+        if at is None:
+            added.append((None, entry))
+        else:
+            kept.append((at, entry))
+    wanted: list[tuple[int | None, dict[str, Any]]] = [*kept, *added]
+    new = [entry for _, entry in wanted]
     if new == old:
         return config, 0
-    if new:
-        block = "\n".join("[[manual_check]]\n" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}\n"
-                                                         for part, value in entry.items()) for entry in new)
-        config = tomledit.replace_table(config, "manual_check", block, expected=new)
-    else:
-        config = tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
-    changed = sum(entry not in old for entry in new) + sum(entry not in new for entry in old)
-    return config, max(changed, 1)
+    changed = len(added) + (len(old) - len(kept)) + sum(entry != old[at] for at, entry in kept)
+    changed += [at for at, _ in kept] != sorted(at for at, _ in kept)
+    return _manual_write(config, old, wanted), max(changed, 1)
 
 
 @drafter("companies")
 def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
-    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for.
+    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for
+    and how many pages of each search it reads.
     A pasted careers page address is read as the board it names, for the page to offer to add."""
     out = dict(texts)
     config = texts["config"]
@@ -1705,6 +1853,16 @@ def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]
         if remove or add:
             config = tomledit.edit_list(config, "workday", "queries", remove=remove, add=add, literal=True)
             count += len(remove) + len(add)
+    if "max_pages" in edits:
+        before = _companies_pages(cfg)
+        config, changed = _companies_max_pages(config, cfg, edits["max_pages"])
+        count += changed
+        if changed and (not isinstance(before, int) or edits["max_pages"] > before):
+            sites = sum(kind == "workday" for kind, _ in watched)
+            notes.append(f"Each page is a request to every watched Workday site, for every Workday search: with "
+                         f"{sites} site{'' if sites == 1 else 's'} and {len(queries)} search{'' if len(queries) == 1 else 'es'}, "
+                         f"up to {sites * len(queries) * edits['max_pages']} requests each run, before the postings "
+                         "themselves are read. A site that's asked too often may stop answering for a while.")
     # tomledit changes a key it finds and passes over one it doesn't, such as a company written as a table of its own.
     if _watching(_config(config)) != watched:
         raise ValueError("search.toml writes [watch] in a way this section can't change a key at a time, such as a "

@@ -1177,12 +1177,16 @@ def _test_board(body: dict[str, Any]) -> dict[str, Any]:
         if not all(isinstance(value, str) for value in board.values()):
             raise ValueError("Say which board to test.")
         board = {part: value.strip() for part, value in board.items()}
+        if board["kind"] == "lever" and body.get("eu") is True:
+            board["eu"] = True  # Lever's EU site: the same key, read from its EU feed.
     kind, key = board["kind"], board["key"]
     problem = discover.board_problem(kind, key, board.get("wd", ""), board.get("site", ""))
     if problem:
         raise ValueError(problem)
     name = board.get("name") or key
     spec: Any = {"name": name, "wd": board["wd"], "site": board["site"]} if kind == "workday" else name
+    if kind == "lever" and board.get("eu") is True:
+        spec = {"name": name, "eu": True}
     found = discover.check_source(kind, key, spec)
     if not found["ok"] and re.search(r"\b404\b", found["error"]):
         found["hint"] = (f"No {discover.BOARD_KINDS[kind]} board answers at that address. Check it against the careers "
