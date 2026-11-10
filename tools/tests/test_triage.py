@@ -1,7 +1,9 @@
 """Deadlines, what to settle before applying, and moving quickly through prospects without losing anything."""
 import json
+import tempfile
 import unittest
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 from support import CFG, Base  # Also sets up the throwaway workspace every path points into.
 
@@ -76,9 +78,37 @@ Some framing first.
         self.assertEqual(blockers, [
             "Location: Confirm before applying from Wisconsin, since relocation is out.",
             "The remote option may need Illinois residency.",
-            "The core requirement is unmet",
-            "Location is a stretch.",
+            "The core requirement is unmet. Nothing on record covers lidar.",
+            "Location is a stretch. More words here.",
         ])
+
+    def test_each_has_a_short_label_for_lists(self):
+        labels = deadline.for_job("", None, date.today())["blocker_labels"]
+        self.assertEqual(labels, {})
+        _, _, found = deadline._read(self.NOTES + "- **Check before applying:** **Oregon residency.** Remote is for Washington only.\n")
+        self.assertEqual([label for label, _whole in found], [
+            "Location", "The remote option may need Illinois…", "The core requirement is unmet", "Location is a stretch",
+            "Oregon residency",
+        ])
+        self.assertEqual(found[-1][1], "Oregon residency. Remote is for Washington only.")
+
+    def test_older_notes_fall_back_to_their_first_clause(self):
+        for text, label in (
+            ("The posting requires U.S. citizenship or a green card, and the record doesn't say.", "U.S. citizenship or a green card"),
+            ("The role is hybrid from Springfield, Shelbyville or Capital City, so confirm the commute.", "Hybrid from Springfield"),
+            ("it requires a robotics simulator such as Gazebo (correct me if you have used one).", "A robotics simulator such as Gazebo"),
+            ("You have four Acme drafts in progress, and one team will see them all.", "You have four Acme drafts in…"),
+        ):
+            with self.subTest(text):
+                self.assertEqual(deadline.short(text), label)
+
+    def test_the_to_do_list_names_the_label_and_the_panel_the_reason(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            (Path(tmp) / "notes.md").write_text("- **Check before applying:** **Oregon residency.** Remote is for Washington only.\n",
+                                                encoding="utf-8")
+            found = deadline.for_job("", Path(tmp), date.today())
+        self.assertEqual(found["blockers"], ["Oregon residency. Remote is for Washington only."])
+        self.assertEqual(found["blocker_labels"], {"Oregon residency. Remote is for Washington only.": "Oregon residency"})
 
     def test_notes_without_any_say_nothing(self):
         self.assertEqual(deadline.from_notes("# Acme\n\n- **Posting:** https://example.com\n"), (None, []))
@@ -108,6 +138,18 @@ class Sluice(Base):
         sends = [o for o in server.build_state(self.conn, CFG)["orders"] if o["kind"] == "Send"]
         self.assertEqual([o["text"] for o in sends], ["Acme: Urgent", "Acme: Calm"])
         self.assertIn("Apply by tomorrow", sends[0]["detail"])
+
+    def test_the_to_do_list_says_what_to_check_first_by_its_label(self):
+        folder, result = self.folder("2026-11-acme-labelled")
+        (store.ROOT / folder / "notes.md").write_text(
+            "- **Check before applying:** **Oregon residency.** The remote option is for Washington residents only.\n", encoding="utf-8")
+        self.add(source_id="a", title="Labelled", status="ready", app_folder=folder, check_result=result)
+        state = server.build_state(self.conn, CFG)
+        send = next(o for o in state["orders"] if o["text"] == "Acme: Labelled")
+        self.assertIn("Check first: Oregon residency.", send["detail"])
+        self.assertNotIn("Washington", send["detail"])
+        job = next(j for j in state["jobs"] if j["title"] == "Labelled")
+        self.assertEqual(job["blocker_labels"][job["blockers"][0]], "Oregon residency")
 
     def test_a_draft_changed_after_its_pass_asks_to_be_checked_not_sent(self):
         folder, result = self.folder("2026-11-acme-changed", {"resume.md": "not the hash of what's there now"})

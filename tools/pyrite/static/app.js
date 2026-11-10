@@ -450,8 +450,10 @@ function historyPills(job) {
   return pills;
 }
 
+// A thing to settle before applying, as its short label. The job's panel has the whole reason.
+const blockerLabel = (job, blocker) => (job.blocker_labels || {})[blocker] || blocker;
 const blockerPill = (job) => ((job.blockers || []).length
-  ? pill("bad", "Check first", `From the notes, before you apply:\n- ${job.blockers.join("\n- ")}`) : null);
+  ? pill("bad", "Check first", `From the notes, before you apply:\n- ${job.blockers.map((b) => blockerLabel(job, b)).join("\n- ")}`) : null);
 
 const urgentPills = (job) => [deadlinePill(job), blockerPill(job), ...historyPills(job)].filter(Boolean);
 
@@ -1643,7 +1645,14 @@ function beforeApplyBlock(job) {
   const urgent = (days !== null && days !== undefined && days >= 0 && days <= 2) || blockers.length || same;
   return h("div", { class: `callout${urgent ? " bad" : ""}` },
     h("strong", {}, "Before you apply"),
-    h("ul", {}, lines.map((line) => h("li", {}, line)), blockers.map((line) => h("li", {}, line))),
+    h("ul", {}, lines.map((line) => h("li", {}, line)), blockers.map((line) => {
+      // The label in bold, then the reason. A label written as the reason's own opening isn't said twice.
+      // A label cut short with … is the reason's own start, so the reason alone says it.
+      const label = blockerLabel(job, line);
+      if (label === line || label.endsWith("…")) return h("li", {}, line);
+      const rest = line.startsWith(label) ? line.slice(label.length).replace(/^[.:?!]\s*/, "") : line;
+      return h("li", {}, rest ? [h("b", {}, label), " ", rest] : h("b", {}, label));
+    })),
     blockers.length ? h("p", { class: "muted" }, "From this job's notes. The full reasoning is under Fit and interview notes.") : null);
 }
 

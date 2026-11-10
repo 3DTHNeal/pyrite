@@ -406,7 +406,10 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
     ready = sorted((j for j in jobs if j["status"] == "ready" and not j["posting_closed_at"]),
                    key=lambda j: (not soon(j), -j["rank"]))
     for job in ready[:5]:
-        first = f"Check first: {job['blockers'][0]}" if job["blockers"] else ""
+        # The short label, since the whole reason is in the job's panel.
+        labels = job.get("blocker_labels") or {}
+        label = labels.get(job["blockers"][0], job["blockers"][0]) if job["blockers"] else ""
+        first = f"Check first: {label}{'' if label[-1:] in '.?!…' else '.'}" if label else ""
         if job["changed_since_check"]:
             # Not ready to send: the pass no longer covers what's on file.
             orders.append({"rank": 1 if soon(job) else 2, "kind": "Check again", "job_id": job["id"], "action": "recheck",
