@@ -718,6 +718,13 @@ def acted_on(conn, job) -> bool:
     return False
 
 
+def judge(row, cfg: dict[str, Any]) -> tuple[scoring.Verdict, str]:
+    """A board's prospect scored again as `rescore` scores it, with why it would be dropped, or "" to keep it. The
+    Profile tab's Roles you want previews a change to search.toml with this, so its preview is what a rescore does."""
+    verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"])
+    return verdict, quality.rejection(row["title"], row["description"] or "") if verdict.keep else verdict.reason
+
+
 def rescore(conn, cfg=None) -> dict[str, Any]:
     """Re-apply the current scoring and filters to prospects: jobs still new, found on a board.
 
@@ -736,8 +743,7 @@ def rescore(conn, cfg=None) -> dict[str, Any]:
         "SELECT * FROM jobs WHERE status = 'new' AND source_key NOT IN ('seed', 'manual')"
     ).fetchall()
     for row in rows:
-        verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"])
-        reason = quality.rejection(row["title"], row["description"] or "") if verdict.keep else verdict.reason
+        verdict, reason = judge(row, cfg)
         if not reason:
             conn.execute(
                 "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",

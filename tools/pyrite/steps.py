@@ -17,7 +17,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, discover, factsdoc, gaps, profile, store, tomledit, workspace
+from . import checks, confirm, discover, factsdoc, gaps, profile, score, store, tomledit, workspace
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -262,6 +262,7 @@ def view() -> dict[str, Any]:
         "wording": _wording(texts["run_notes"]),
         "gaps": _gaps_view(),
         "companies": _companies_view(cfg),
+        "roles": _roles_view(cfg, texts),
     }
 
 
@@ -1642,3 +1643,473 @@ def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]
 
 DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
             "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "companies": _companies}
+# ---------- Roles you want ----------
+
+# The "**Emphasis by track:**" bullet in run-notes.md, and one track's line under it: "  - *AI systems:* the agents lead."
+EMPHASIS = re.compile(r"(?P<indent>[ \t]*)[-*][ \t]+\*\*Emphasis by track:?\*\*:?")
+EMPHASIS_LINE = re.compile(r"(?P<lead>[ \t]+[-*][ \t]+)\*(?P<name>[^*\r\n]+?):?\*:?[ \t]*(?P<text>.*)")
+# What [scoring] lists the section edits, as it names them. Each is matched as whole words, in any case.
+TITLE_LISTS = {"level_top": "Top-level words", "level_mid": "Senior words", "exclude_titles": "Never these titles"}
+MAX_POINTS = 100
+# How many prospects the preview names under each heading. Its counts cover every one.
+PROSPECTS_SHOWN = 25
+# A title no pattern should match. One that does would match any title at all.
+NONSENSE_TITLE = "qzxjv"
+DROPPED = {"title": "no role type takes its title", "location": "its place is outside your area",
+           "not_open": "it says there's no opening", "scam": "it shows a scam's signs"}
+
+
+def _strings(value) -> list[str]:
+    """A list of text from search.toml, or one string written without the brackets, as the scorer reads both."""
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _ordered(was: list[str], want: list[str]) -> list[str]:
+    """A list as edit_list leaves it: the items kept in their old order, then the new ones."""
+    return [value for value in was if value in want] + [value for value in want if value not in was]
+
+
+def _title_pattern(raw, what: str, whole: bool) -> str:
+    """A pattern for a title list, refused if it can't be read or would match any title. `whole` is for the [scoring]
+    lists, which the scorer wraps to match whole words."""
+    pattern = _one_line(raw, what)
+    if not pattern:
+        raise ValueError(f"{what} can't be empty.")
+    if len(pattern) > MAX_PATTERN:
+        raise ValueError(f"{what} can be at most {MAX_PATTERN} characters.")
+    try:
+        compiled = re.compile(rf"\b(?:{pattern})\b" if whole else pattern, re.I)
+    except re.error as err:
+        raise ValueError(f"{pattern!r} isn't a pattern Pyrite can read ({err}).") from None
+    if re.fullmatch(pattern, "") is not None or compiled.search(NONSENSE_TITLE):
+        raise ValueError(f"{pattern!r} matches any title at all, so it can't be used here.")
+    return pattern
+
+
+def _plain_title(raw) -> str:
+    title = _one_line(raw, "A job title")
+    if title and not re.findall(r"[^\s,\-–.()]+", title):
+        raise ValueError(f"“{title}” has no words in it to match.")
+    return title
+
+
+def _points(raw, what: str) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
+        raise ValueError(f"{what} should be a whole number.")
+    try:
+        number = float(raw)
+    except ValueError:
+        raise ValueError(f"{what} should be a whole number.") from None
+    if not number.is_integer() or not 0 <= number <= MAX_POINTS:
+        raise ValueError(f"{what} should be a whole number from 0 to {MAX_POINTS}.")
+    return int(number)
+
+
+def _emphasis(text: str) -> dict[str, Any]:
+    """The Emphasis by track bullet in run-notes.md: its line, where the lines under it end, how they start, and each
+    track's line and text by name."""
+    doc = factsdoc.Doc(text)
+    for index in range(len(doc.lines)):
+        match = EMPHASIS.match(doc.bare(index))
+        if not match:
+            continue
+        tracks: dict[str, tuple[int, str]] = {}
+        lead = ""
+        end = index + 1
+        while end < len(doc.lines) and doc.bare(end).strip() and \
+                len(doc.bare(end)) - len(doc.bare(end).lstrip()) > len(match["indent"]):
+            line = EMPHASIS_LINE.fullmatch(doc.bare(end))
+            if line:
+                tracks.setdefault(line["name"].strip(), (end, line["text"].strip()))
+                lead = lead or line["lead"]
+            end += 1
+        return {"line": index, "end": end, "lead": lead or f"{match['indent']}  - ", "tracks": tracks}
+    return {"line": None, "end": len(doc.lines), "lead": "  - ", "tracks": {}}
+
+
+def _set_emphasis(text: str, kept: list[tuple[str | None, str, str | None]], removed: list[str]) -> tuple[str, int]:
+    """run-notes.md with each track's line under Emphasis by track renamed, changed, added or taken out to match.
+    `kept` is each track's old name (None for a new one), its name now, and its emphasis, or None to leave it as is."""
+    found = _emphasis(text)
+    lines = found["tracks"]
+    doc = factsdoc.Doc(text)
+    plan = Plan()
+    adds: list[str] = []
+    count = 0
+    for old, new, said in kept:
+        at = lines.get(old) if old is not None else None
+        if at is None:
+            if said:
+                adds.append(f"*{new}:* {said}")
+                count += 1
+            continue
+        line, was = at
+        want = was if said is None else said
+        if not want:
+            plan.delete(line, line + 1)
+            count += 1
+        elif new != old or want != was:
+            match = EMPHASIS_LINE.fullmatch(doc.bare(line))
+            assert match is not None  # It was found by this pattern.
+            plan.set(line, f"{match['lead']}*{new}:* {want}")
+            count += 1
+    for old in removed:
+        if old in lines:
+            plan.delete(lines[old][0], lines[old][0] + 1)
+            count += 1
+    if adds and found["line"] is not None:
+        plan.insert(found["end"], [found["lead"] + line for line in adds])
+    plan.apply(doc)
+    if adds and found["line"] is None:
+        if not text.strip():
+            return "# Run notes\n\n- **Emphasis by track:**\n" + "".join(f"  - {line}\n" for line in adds), count
+        doc.insert(len(doc.lines), ["- **Emphasis by track:**", *(f"  - {line}" for line in adds)])
+    return doc.render(), count
+
+
+def _track_entries(text: str, tracks: list[Any]) -> list[dict[str, str]]:
+    """Each [[track]] in search.toml as written: its header line, its keys, and the comment lines just above it, which
+    are about it. The first one's comments are about every track, so they aren't its own."""
+    headers = [item for item in tomledit.scan(text) if isinstance(item, tomledit.Header)]
+    entries: list[dict[str, str]] = []
+    for at, header in enumerate(headers):
+        if header.name[:1] != ("track",):
+            continue
+        if header.name != ("track",) or not header.array:
+            raise ValueError("search.toml has a table inside [[track]], which this section can't change. Change it in the file.")
+        stop = headers[at + 1].start if at + 1 < len(headers) else len(text)
+        lines = text[header.end:stop].splitlines(keepends=True)
+        keep = len(lines)
+        while keep and (not lines[keep - 1].strip() or lines[keep - 1].lstrip().startswith("#")):
+            keep -= 1
+        entries.append({"header": text[header.start:header.end], "body": "".join(lines[:keep]),
+                        "tail": "".join(lines[keep:]), "lead": entries[-1]["tail"] if entries else ""})
+    if len(entries) != len(tracks):
+        raise ValueError("search.toml's role types aren't each written under a [[track]] line, so this section can't "
+                         "change them. Change them in the file.")
+    return entries
+
+
+def _track_body(body: str, old: dict[str, Any] | None, new: dict[str, Any]) -> str:
+    """A [[track]]'s keys with the form's changes made a key at a time, read as a file of their own, so comments and
+    keys this section doesn't edit, such as `industries`, stay as they were."""
+    was = old or {}
+    if new["name"] != was.get("name"):
+        body = tomledit.set_value(body, (), "name", new["name"])
+    for key, literal in (("titles", False), ("title", True)):
+        before, want = _strings(was.get(key)), new[key]
+        if want == before:
+            continue
+        if not want:
+            body = tomledit.delete_value(body, (), key)
+        elif isinstance(was.get(key), list):
+            body = tomledit.edit_list(body, (), key, remove=[v for v in before if v not in want],
+                                      add=[v for v in want if v not in before], literal=literal)
+        else:
+            body = tomledit.set_value(body, (), key, want, literal)
+    if old is None or new["needs_level"] != bool(was.get("needs_level", False)):
+        body = tomledit.set_value(body, (), "needs_level", new["needs_level"])
+    return body
+
+
+def _track_form(raws, old_tracks: list[Any]) -> list[dict[str, Any]]:
+    """The role types the form asks for, in order, each checked. A new one left blank is left out."""
+    wanted: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    names: set[str] = set()
+    for raw in _list(raws, "Role types"):
+        if not isinstance(raw, dict):
+            raise ValueError("A role type should be a name and its job titles.")
+        index = raw.get("index")
+        if index is not None and (not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(old_tracks)
+                                  or not isinstance(old_tracks[index], dict) or index in seen):
+            raise ValueError("search.toml's role types have changed since the page read it. Reload and try again.")
+        old = old_tracks[index] if index is not None else {}
+        name = _one_line(raw.get("name"), "A role type's name")
+        titles = list(dict.fromkeys(t for t in (_plain_title(r) for r in _list(raw.get("titles"), "Job titles")) if t))
+        before = _strings(old.get("title"))
+        patterns = list(dict.fromkeys(
+            p if p in before else _title_pattern(p, "A title pattern", whole=False)
+            for p in (_one_line(r, "A title pattern") for r in _list(raw.get("patterns"), "Title patterns")) if p))
+        if index is None and not name and not titles and not patterns:
+            continue
+        if not name:
+            raise ValueError("Every role type needs a name.")
+        if "*" in name:
+            raise ValueError(f"“{name}” has a * in it, which run-notes.md would read as formatting.")
+        if name.lower() in names:
+            raise ValueError(f"There are two role types called “{name}”.")
+        if not titles and not patterns:
+            raise ValueError(f"{name} needs at least one job title, or it takes no postings at all.")
+        emphasis = raw.get("emphasis")
+        if index is not None:
+            seen.add(index)
+        names.add(name.lower())
+        wanted.append({
+            "index": index, "name": name,
+            "titles": _ordered(_strings(old.get("titles")), titles), "title": _ordered(before, patterns),
+            "needs_level": bool(raw.get("needs_level", old.get("needs_level", False))),
+            "emphasis": None if emphasis is None else _one_line(emphasis, f"What {name} drafts lead with"),
+        })
+    if not wanted:
+        raise ValueError("Keep at least one role type. With none, every posting is dropped.")
+    return wanted
+
+
+def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[dict[str, Any]], list[str]]:
+    """search.toml with [[track]] as the form has it, how many edits that is, the role types wanted, and the names of
+    the ones taken out. A track that's unchanged and still next to the one before it is written back exactly as it was."""
+    old_tracks = _tracks(cfg)
+    wanted = _track_form(raws, old_tracks)
+    kept = [w["index"] for w in wanted if w["index"] is not None]
+    removed = [str(t.get("name", "")) for i, t in enumerate(old_tracks) if i not in kept and isinstance(t, dict)]
+    count = len(removed) + sum(w["index"] is None for w in wanted) + (kept != sorted(kept))
+    for w in wanted:
+        if w["index"] is None:
+            continue
+        old = old_tracks[w["index"]]
+        count += (w["name"] != old.get("name")) + (w["needs_level"] != bool(old.get("needs_level", False)))
+        count += len(set(w["titles"]) ^ set(_strings(old.get("titles")))) + len(set(w["title"]) ^ set(_strings(old.get("title"))))
+    if not count:
+        return text, 0, wanted, removed
+    entries = _track_entries(text, old_tracks)
+    eol = "\r\n" if "\r\n" in text else "\n"
+    pieces, expected = [], []
+    previous = None
+    for at, w in enumerate(wanted):
+        index = w["index"]
+        old = old_tracks[index] if index is not None else None
+        entry = entries[index] if index is not None else {"header": f"[[track]]{eol}", "body": "", "lead": eol}
+        lead = entry["lead"]
+        if at == 0:
+            lead = lead.lstrip("\r\n")
+        elif index is None or previous is None or index != previous + 1:
+            lead = lead if lead.startswith(("\n", "\r\n")) else eol + lead
+        pieces.append(lead + entry["header"] + _track_body(entry["body"], old, w))
+        track = dict(old or {})
+        track["name"] = w["name"]
+        for key in ("titles", "title"):
+            if w[key] != _strings(track.get(key)):
+                if w[key]:
+                    track[key] = w[key]
+                else:
+                    track.pop(key, None)
+        if old is None or w["needs_level"] != bool(track.get("needs_level", False)):
+            track["needs_level"] = w["needs_level"]
+        expected.append(track)
+        previous = index
+    return tomledit.replace_table(text, "track", "".join(pieces), expected), count, wanted, removed
+
+
+def _table(cfg: dict[str, Any], name: str) -> dict[str, Any]:
+    found = cfg.get(name)
+    return found if isinstance(found, dict) else {}
+
+
+def _tracks(cfg: dict[str, Any]) -> list[Any]:
+    found = cfg.get("track")
+    return found if isinstance(found, list) else []
+
+
+def _with_scoring(cfg: dict[str, Any]) -> dict[str, Any]:
+    """A config with every [scoring] list the scorer reads, empty where search.toml has none."""
+    return {**cfg, "scoring": {"level_top": [], "level_mid": [], "exclude_titles": [], "keywords": [], "flags": [],
+                               **_table(cfg, "scoring")}}
+
+
+def try_title(title: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """How the scorer reads one job title: the role type it goes to, if any, and why each one that matches its words
+    does or doesn't take it."""
+    cfg = _with_scoring(cfg)
+    excluded = next((p for p in _strings(cfg["scoring"]["exclude_titles"]) if re.search(rf"\b(?:{p})\b", title, re.I)), None)
+    seniority = score.level(title, cfg)
+    matched = score.match_track(title, cfg, {"company": "", "description": ""})
+    tracks = []
+    for track in _tracks(cfg):
+        if not isinstance(track, dict):
+            continue
+        plain = next((words for words in _strings(track.get("titles")) if re.search(score.plain_pattern(words), title, re.I)), None)
+        pattern = None if plain else next((p for p in _strings(track.get("title")) if re.search(p, title, re.I)), None)
+        if plain is None and pattern is None:
+            continue
+        why = ("it has no senior word, which this role type needs" if track.get("needs_level") and not seniority
+               else f"only for postings in {', '.join(map(str, track['industries']))}" if track.get("industries") else "")
+        tracks.append({"name": str(track.get("name", "")), "plain": plain, "pattern": pattern, "why": why})
+    return {"title": title, "excluded": excluded, "level": seniority, "tracks": tracks,
+            "track": matched[0] if matched and not excluded else None}
+
+
+def _prospects(before: dict[str, Any], cfg: dict[str, Any], changed: bool) -> dict[str, Any]:
+    """What a rescore with `cfg` would do to the prospects, each one a board found that's still new, scored as
+    `pyrite rescore` scores it and compared with how the settings `before` score it. One that `before` would drop too
+    is marked `already`, since the next rescore drops it either way. Read from the database without changing it."""
+    found: dict[str, Any] = {"total": 0, "changed": changed, "kept": 0, "held": 0, "dropped": [], "moved": [],
+                             "more_dropped": 0, "more_moved": 0}
+    path = store.DB_PATH
+    if not path.is_file():
+        return found
+    min_score = (cfg.get("run") or {}).get("min_score", 0)
+    try:
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM jobs WHERE status = 'new' AND source_key NOT IN ('seed', 'manual') "
+                                "ORDER BY score DESC").fetchall()
+            found["total"] = len(rows)
+            if not changed:
+                return found
+            old, new = _with_scoring(before), _with_scoring(cfg)
+            for row in rows:
+                # Against the settings as they are, not the stored score, so what's shown is what this change does.
+                was, was_reason = discover.judge(row, old)
+                verdict, reason = discover.judge(row, new)
+                named = {"id": row["id"], "company": row["company"], "title": row["title"], "before": was.score,
+                         "track_before": was.track}
+                if reason:
+                    held = discover.acted_on(conn, row)
+                    found["held"] += held
+                    why = f"it would score {verdict.score}, under min_score {min_score}" if reason == "score" \
+                        else DROPPED.get(reason, reason.replace("_", " "))
+                    found["dropped"].append({**named, "why": why, "held": held, "already": bool(was_reason)})
+                    continue
+                found["kept"] += 1
+                if verdict.score != was.score or verdict.track != was.track:
+                    found["moved"].append({**named, "after": verdict.score, "track_after": verdict.track,
+                                           "was_dropped": bool(was_reason)})
+    except sqlite3.Error as err:
+        return {**found, "error": f"Pyrite couldn't read your prospects ({err})."}
+    except (KeyError, TypeError, ValueError, re.error) as err:
+        return {**found, "error": f"Pyrite couldn't score your prospects with these settings ({err})."}
+    found["moved"].sort(key=lambda job: -abs(job["after"] - (job["before"] or 0)))
+    for key, more in (("dropped", "more_dropped"), ("moved", "more_moved")):
+        found[more] = max(0, len(found[key]) - PROSPECTS_SHOWN)
+        found[key] = found[key][:PROSPECTS_SHOWN]
+    return found
+
+
+def _roles_view(cfg: dict[str, Any], texts: dict[str, str]) -> dict[str, Any]:
+    """The role types and [scoring] lists as the section edits them, with each track's emphasis from run-notes.md."""
+    found = _emphasis(texts["run_notes"])
+    emphasis = found["tracks"]
+    scoring = _table(cfg, "scoring")
+    tracks = []
+    for index, track in enumerate(_tracks(cfg)):
+        if isinstance(track, dict):
+            name = str(track.get("name", ""))
+            tracks.append({"index": index, "name": name, "titles": _strings(track.get("titles")),
+                           "patterns": _strings(track.get("title")), "needs_level": bool(track.get("needs_level")),
+                           "industries": _strings(track.get("industries")),
+                           "emphasis": emphasis[name][1] if name in emphasis else ""})
+    return {
+        "tracks": tracks,
+        **{key: _strings(scoring.get(key)) for key in TITLE_LISTS},
+        "keywords": [list(row) for row in scoring.get("keywords", []) if isinstance(row, list)],
+        "flags": [list(row) for row in scoring.get("flags", []) if isinstance(row, list)],
+        "min_score": (cfg.get("run") or {}).get("min_score", 0),
+        "emphasis_found": found["line"] is not None,
+    }
+
+
+def _rows(raws, what: str, labeled: bool, old: list[Any]) -> list[list[Any]]:
+    """Skill points ([pattern, points]) or flags ([label, pattern, points]) from the form. A row left blank is left out."""
+    rows: list[list[Any]] = []
+    known = {str(row[1 if labeled else 0]) for row in old if isinstance(row, list) and len(row) > (1 if labeled else 0)}
+    for raw in _list(raws, what):
+        if not isinstance(raw, list) or len(raw) != (3 if labeled else 2):
+            raise ValueError(f"Each of {what.lower()} should be {'a label, ' if labeled else ''}a pattern and its points.")
+        label = _one_line(raw[0], "A flag's label") if labeled else ""
+        pattern = _one_line(raw[1 if labeled else 0], "A pattern")
+        points = raw[-1]
+        if not label and not pattern and points in (None, ""):
+            continue
+        if labeled and not label:
+            raise ValueError("Every flag needs a label: it's what the card shows.")
+        if not pattern:
+            raise ValueError(f"{'“' + label + '”' if label else 'A row'} needs a pattern.")
+        if pattern not in known:
+            pattern = _title_pattern(pattern, "A pattern", whole=False)
+        number = _points(points, f"The points for {label or pattern!r}")
+        rows.append([label, pattern, number] if labeled else [pattern, number])
+    return rows
+
+
+def _set_rows(text: str, key: str, rows: list[list[Any]]) -> str:
+    """search.toml with a [scoring] list of rows set, one row to a line, so a later change to one row changes one line.
+    A list packed several rows to a line by hand is set out that way the first time it changes."""
+    pair = next((item for item in tomledit.scan(text) if isinstance(item, tomledit.Pair) and item.table == ("scoring",)
+                 and item.key == (key,) and not item.array), None)
+    if pair is None:
+        return tomledit.set_value(text, "scoring", key, rows, literal=True)
+    eol = "\r\n" if "\r\n" in text else "\n"
+    new = text[:pair.value_start] + tomledit.dump(rows, literal=True, layout="lines", eol=eol) + text[pair.value_end:]
+    expected = _config(text)
+    expected["scoring"][key] = rows
+    if _config(new) != expected:
+        raise ValueError(f"Changing {key} would have changed something else in search.toml, so nothing was changed.")
+    return new
+
+
+def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
+    out = dict(texts)
+    notes: list[str] = []
+    count = 0
+    config = texts["config"]
+    scoring = _table(cfg, "scoring")
+    wanted: list[dict[str, Any]] = []
+    if "tracks" in edits:
+        config, count, wanted, removed = _write_tracks(config, cfg, edits["tracks"])
+        old_names = {i: str(t.get("name", "")) for i, t in enumerate(_tracks(cfg)) if isinstance(t, dict)}
+        moves = [(old_names.get(w["index"]) if w["index"] is not None else None, w["name"], w["emphasis"]) for w in wanted]
+        out["run_notes"], said = _set_emphasis(texts["run_notes"], moves, removed)
+        count += said
+    for key, label in TITLE_LISTS.items():
+        if key not in edits:
+            continue
+        was = _strings(scoring.get(key))
+        want = list(dict.fromkeys(
+            value if value in was else _title_pattern(value, f"A word in {label}", whole=True)
+            for value in (_one_line(raw, f"A word in {label}") for raw in _list(edits[key], label)) if value))
+        if _ordered(was, want) != was:
+            config = tomledit.edit_list(config, "scoring", key, remove=[v for v in was if v not in want],
+                                        add=[v for v in want if v not in was], literal=True)
+            count += len(set(was) ^ set(want))
+    for key, label, labeled in (("keywords", "Skill points", False), ("flags", "Flags", True)):
+        if key not in edits:
+            continue
+        old_rows = [list(row) for row in scoring.get(key, []) if isinstance(row, list)]
+        rows = _rows(edits[key], label, labeled, old_rows)
+        if rows != old_rows:
+            config = _set_rows(config, key, rows)
+            count += len({tuple(r) for r in rows} ^ {tuple(r) for r in old_rows}) or 1
+    out["config"] = config
+    changed = config != texts["config"]
+    new_cfg = _config(config) if changed else cfg
+
+    # Worth knowing before saving: a new title the filters will never let through, or one an earlier role type takes.
+    excludes = _strings(_with_scoring(new_cfg)["scoring"]["exclude_titles"])
+    for at, w in enumerate(wanted):
+        old = _tracks(cfg)[w["index"]] if w["index"] is not None else {}
+        for title in (t for t in w["titles"] if t not in _strings(old.get("titles"))):
+            blocked = next((p for p in excludes if re.search(rf"\b(?:{p})\b", title, re.I)), None)
+            earlier = next((e["name"] for e in wanted[:at] if (not e["needs_level"] or w["needs_level"])
+                            and any(re.search(p, title, re.I) for p in score.title_patterns(e))), None)
+            if blocked:
+                notes.append(f"“{title}” has {blocked!r} in it, which is under Never these titles, so {w['name']} will never take it.")
+            elif earlier:
+                notes.append(f"{earlier} takes “{title}” first, since a title goes to the first role type that matches it.")
+    levels = _with_scoring(new_cfg)["scoring"]
+    if any(w["needs_level"] for w in wanted) and not levels["level_top"] and not levels["level_mid"]:
+        notes.append("A role type that needs a senior title takes nothing while there are no top-level or senior words.")
+    if changed:
+        notes.append("Saving changes search.toml, not your prospects. `pyrite rescore` scores them again as the preview "
+                     "shows, and postings dropped before come back only with `pyrite discover --fresh`.")
+    test = _one_line(edits.get("test"), "The title to try")
+    return Draft(out, count, notes, {
+        "test": try_title(test, new_cfg) if test else None,
+        "prospects": _prospects(cfg, new_cfg, changed),
+    })
+
+
+DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
+            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "roles": _roles}
