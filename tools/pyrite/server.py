@@ -30,6 +30,7 @@ from . import (
     checks,
     claude_code,
     confirm,
+    culture,
     deadline,
     discover,
     doctor,
@@ -627,6 +628,9 @@ def job_detail(conn, job_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
     job["autofill_refusal"] = workday.refusal(conn, row, cfg)
     job["can_autofill"] = job["autofill_refusal"] is None or (job["autofill"] or {}).get("state") == "running"
     job["autofill_log"] = f"{job['app_folder']}/{workday.LOG}" if job["app_folder"] and (ROOT / job["app_folder"] / workday.LOG).exists() else ""
+    # What the web says about the employer, shared by every job there, and where to read reviews yourself.
+    job["culture"] = culture.status(row["company"]) if culture.company_key(row["company"]) else None
+    job["culture_links"] = culture.links(row["company"])
     return job
 
 
@@ -964,6 +968,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._update(conn, cfg, body.get("switch") is True)
             if path == "/api/industries/outlook":
                 outlook.start(cfg, str(body.get("name") or ""))
+                return self._json({"ok": True}, 202)
+            match = re.fullmatch(rf"/api/job/{JOB_ID}/culture", path)
+            if match:
+                culture.start(conn, int(match.group(1)))
                 return self._json({"ok": True}, 202)
             match = re.fullmatch(rf"/api/job/{JOB_ID}/action", path)
             if match:

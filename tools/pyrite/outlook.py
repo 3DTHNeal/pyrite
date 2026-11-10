@@ -1,7 +1,7 @@
 """A researched outlook for one industry where you live, written by Claude from a web search.
 
-This is the only Claude run that reaches the web, so it gets nothing else: no files, no shell, and
-nothing about you beyond the industry, the area and the employers you listed for it. What it hands
+Like the skill-age lookup and the employer research in culture.py, this run reaches the web, so it gets
+nothing else: no files, no shell, and nothing about you beyond the industry, the area and the employers you listed for it. What it hands
 back is held to a rule that plain code can check. Every point must cite a source, and every source
 must be a page Claude opened, or one its own searches returned, during this run. Anything else is
 dropped before the dashboard sees it. That can't prove a page says what the point claims, so the
@@ -290,12 +290,13 @@ def _json(answer: str) -> dict[str, Any]:
     return data
 
 
-def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+def vet(answer: str, seen: Iterable[str], headings: tuple[str, ...] = HEADINGS) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Keep the points whose sources this run's own tools came across. Returns sections, sources and what was dropped.
 
     A source counts only if its whole address, give or take its scheme, a www., a fragment or a closing slash, is one
     the run opened or its searches listed: not a site's home page, a shortened address, or one a fetched page mentioned.
-    Anything in the answer of the wrong shape is left out rather than trusted."""
+    Anything in the answer of the wrong shape is left out rather than trusted. Sections come in the order of
+    `headings`, and any other heading is dropped."""
     data = _json(answer)
     pages = {bare for bare in map(_bare, seen) if bare}
     sources: dict[int, dict[str, Any]] = {}
@@ -316,7 +317,7 @@ def vet(answer: str, seen: Iterable[str]) -> tuple[list[dict[str, Any]], list[di
     numbers: dict[int, int] = {}
     sections, dropped = [], 0
     by_heading = {s["heading"]: s for s in _list(data.get("sections")) if isinstance(s, dict) and isinstance(s.get("heading"), str)}
-    for heading in HEADINGS:
+    for heading in headings:
         points: list[dict[str, Any]] = []
         for raw in _list(by_heading.get(heading, {}).get("points")):
             if not isinstance(raw, dict):

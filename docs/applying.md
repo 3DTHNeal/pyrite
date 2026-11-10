@@ -14,6 +14,21 @@ The job panel opens with **Before you apply** when there's something to settle: 
 
 A ready draft whose files changed after the assay passed it shows as **Check again** in the to-do list, not **Send**, with a button that rebuilds and rechecks it there, and **Check all again** when there are several. The field report folds away, with a line saying so, once you've applied or passed on anything since it was written.
 
+## How the employer works
+
+A star rating says little about whether a company ships in small steps or puts every project through phase gates, or whether it rates people on a forced curve and lets the bottom of it go. The **Employer** part of a job's panel looks for that. **Research with Claude** has Claude search the web for how the employer works and treats people, under six headings:
+
+- **In short**
+- **How work gets done:** size, ownership, funding and growth, and whether teams ship in small steps or pass plans through phase gates, stage gates or SAFe. Rules every company in a regulated industry follows, such as FDA design controls, count as the industry's, not the employer's.
+- **Performance reviews:** forced or target rating distributions, stack ranking, quotas of low ratings, "unregretted" attrition targets, layoffs called performance-based, rehire bans. Companies rarely use these names, so it looks for leaked memos, lawsuits and employees' accounts.
+- **Layoffs and reorganizations**, with dates, numbers and WARN notices.
+- **Labor and legal record:** wage, safety, discrimination and retaliation cases, NLRB charges and settlements, each marked as an allegation or a finding.
+- **What employees say**, as news and search results report it.
+
+It's built like an industry [outlook](prospects.md) and held to the same source check: a Claude run with web search and nothing else, which gets only the employer's name, the job's title and the posting's link, and keeps only points whose sources that run found. Headings where it found nothing are named as such, since nothing found isn't the same as a clean record. Claude isn't allowed to open review sites itself, since their terms forbid automated reading, so the panel links a search of Glassdoor, Indeed, Blind, Comparably and Violation Tracker, and the NLRB's case search, for you to read.
+
+A report belongs to the employer, so every job there shares it, and **Research again** replaces it; a failed redo keeps the last one. When one exists, tailoring sums it up under `## Culture` in the job's `notes.md`, with each source linked, and gives anything your `profile/run-notes.md` names as a dealbreaker its own `**Check before applying:**` line. A report over 180 days old says it may be out of date. `pyrite culture <id>` does the same from the command line. It uses Sonnet unless `model` under `[culture]` in `search.toml` says otherwise, or the Settings tab's **Employer research** does.
+
 ## Filling a Workday form
 
 No applicant tracking system lets a candidate apply through an API: Workday, Greenhouse, Lever and Ashby all take applications only through their forms, and their apply endpoints need the employer's own credentials. Workday's form is the long one, and its resume parse fills the work history badly, so a workspace can keep `profile/workday-paste.md`: every field, in page order, typed out once. Copy `example/profile/workday-paste.md` to start. Its role sections need to keep the shape the example has, a `### Work experience N` heading, a table with `Job title` and `Company` rows, and one fenced text block, because that's what the merge reads.
