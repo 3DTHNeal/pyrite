@@ -1,7 +1,8 @@
 "use strict";
 // Companies to watch: the job boards Pyrite reads every morning, under [watch.*] in search.toml, the companies with no
-// board it can read, which you check by hand, and what it searches Workday sites for. A pasted careers page address is
-// read on the server as the board it names. Test reads one board once, as `pyrite sources` does, and saves nothing.
+// board it can read, which you check by hand, and what it searches Workday sites for and how many pages of each search
+// it reads. A pasted careers page address is read on the server as the board it names. Test reads one board once, as
+// `pyrite sources` does, and saves nothing.
 
 profileStep("companies", {
   render(ctx) {
@@ -10,9 +11,10 @@ profileStep("companies", {
     const memo = ctx.memo;
     if (!memo.form) {
       memo.form = {
-        boards: data.boards.map((b) => ({ was: b.was, kind: b.kind, key: b.key, name: b.name, wd: b.wd, site: b.site, going: false })),
+        boards: data.boards.map((b) => ({ was: b.was, kind: b.kind, key: b.key, name: b.name, wd: b.wd, site: b.site, eu: b.eu, going: false })),
         manual: data.manual.map((m) => ({ at: m.at, name: m.name, url: m.url, why: m.why })),
         queries: [...data.queries],
+        max_pages: data.max_pages,
         paste: "",
       };
       memo.tests = {};
@@ -34,8 +36,8 @@ profileStep("companies", {
       }
     });
     const edits = () => ({
-      boards: form.boards.filter((b) => !b.going).map(({ was, kind, key, name, wd, site }) => ({ was, kind, key, name, wd, site })),
-      manual: form.manual, queries: form.queries, paste: form.paste,
+      boards: form.boards.filter((b) => !b.going).map(({ was, kind, key, name, wd, site, eu }) => ({ was, kind, key, name, wd, site, eu })),
+      manual: form.manual, queries: form.queries, max_pages: form.max_pages, paste: form.paste,
     });
     const changed = (now) => send(edits(), now);
 
@@ -44,8 +46,9 @@ profileStep("companies", {
       el.addEventListener("input", () => { onInput(el.value.trim()); changed(); });
       return el;
     };
-    const boardId = (b) => [b.kind, b.key, b.wd, b.site].join(":");
-    const where = (b) => (b.kind === "workday" ? `${b.key}.${b.wd}.myworkdayjobs.com/${b.site}` : `${kinds[b.kind]} board ${b.key}`);
+    const boardId = (b) => [b.kind, b.key, b.wd, b.site, b.eu ? "eu" : ""].join(":");
+    const where = (b) => (b.kind === "workday" ? `${b.key}.${b.wd}.myworkdayjobs.com/${b.site}`
+      : `${kinds[b.kind]}${b.eu ? " EU" : ""} board ${b.key}`);
 
     // ---- Test: one board, once, as `pyrite sources` reads it ----
     const testLine = (b) => {
@@ -62,7 +65,7 @@ profileStep("companies", {
       memo.tests[id] = { busy: true };
       redraw();
       try {
-        const found = await api("/api/profile/test-board", { kind: b.kind, key: b.key, wd: b.wd || "", site: b.site || "", name: b.name || "" });
+        const found = await api("/api/profile/test-board", { kind: b.kind, key: b.key, wd: b.wd || "", site: b.site || "", name: b.name || "", eu: Boolean(b.eu) });
         memo.tests[id] = { ok: found.ok, count: found.count, reason: found.error, hint: found.hint };
       } catch (err) {
         memo.tests[id] = { error: err.message };
@@ -93,7 +96,7 @@ profileStep("companies", {
           } }, "Add it under Check by hand")) : null));
         return;
       }
-      const board = { kind: found.kind, key: found.key, wd: found.wd || "", site: found.site || "", name: memo.pasteName };
+      const board = { kind: found.kind, key: found.key, wd: found.wd || "", site: found.site || "", eu: Boolean(found.eu), name: memo.pasteName };
       const already = form.boards.find((b) => !b.going && b.kind === board.kind && b.key === board.key);
       const name = h("input", { type: "text", value: memo.pasteName, "aria-label": "The company's name" });
       name.addEventListener("input", () => { memo.pasteName = name.value; board.name = name.value.trim(); });
@@ -125,6 +128,7 @@ profileStep("companies", {
     function draw() {
       const shown = form.boards.filter((b) => !b.going).length;
       heading.textContent = `Watched boards (${shown})`;
+      drawPagesCost();
       if (!form.boards.length) {
         fill(list, h("p", { class: "muted" }, "No boards yet. Paste a company's careers page above to add one."));
         return;
@@ -134,7 +138,7 @@ profileStep("companies", {
         const result = h("div");
         const redraw = () => fill(result, testLine(b));
         const was = b.was ? known[b.was] : null;
-        const same = was && was.kind === b.kind && was.key === b.key && was.wd === b.wd && was.site === b.site;
+        const same = was && was.kind === b.kind && was.key === b.key && was.wd === b.wd && was.site === b.site && was.eu === Boolean(b.eu);
         const status = same && was.status
           ? (was.status.error ? h("small", { class: "error" }, `Failing at the last run: ${was.status.error}`)
             : h("small", { class: "muted" }, `${profileCount(was.status.count || 0, "posting")} at the last run.`))
@@ -144,6 +148,12 @@ profileStep("companies", {
             input(b.wd, "Workday server, such as wd1", (v) => { b.wd = v; }, { placeholder: "wd1", class: "short", disabled: off || b.going }),
             input(b.site, "Workday site", (v) => { b.site = v; }, { placeholder: "site", disabled: off || b.going })]
           : [input(b.key, `${kinds[b.kind]} board`, (v) => { b.key = v; }, { placeholder: "board", disabled: off || b.going })];
+        if (b.kind === "lever") {
+          // A board on Lever's EU site, jobs.eu.lever.co, is read from Lever's EU feed.
+          const eu = h("input", { type: "checkbox", checked: Boolean(b.eu), disabled: off || b.going });
+          eu.addEventListener("change", () => { b.eu = eu.checked; changed(true); redraw(); });
+          keyInputs.push(h("label", { class: "profile-choice", title: "On Lever's EU site, jobs.eu.lever.co" }, eu, "EU site"));
+        }
         const label = b.going ? `Keep ${b.name || b.key}` : `Stop watching ${b.name || b.key}`;
         fill(row,
           h("span", { class: "profile-board-kind" }, kinds[b.kind]),
@@ -190,6 +200,7 @@ profileStep("companies", {
           drawQueries();
           changed(true);
         } }, "✕"))) : h("span", { class: "muted" }, "No searches, so Workday sites find nothing."));
+      drawPagesCost();
     }
     const queryField = h("input", { type: "text", placeholder: "A search, such as firmware engineer", "aria-label": "A Workday search", disabled: off });
     const addQuery = () => {
@@ -202,6 +213,25 @@ profileStep("companies", {
       changed(true);
     };
     queryField.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addQuery(); } });
+
+    // ---- How many pages each Workday search reads ----
+    const [fewest, most] = data.pages_range;
+    const pagesField = h("input", { type: "number", min: String(fewest), max: String(most), step: "1", class: "short",
+      value: String(form.max_pages), "aria-label": "Pages per Workday search", disabled: off });
+    const pagesCost = h("small", { class: "muted", "aria-live": "polite" });
+    function drawPagesCost() {
+      const sites = form.boards.filter((b) => !b.going && b.kind === "workday").length;
+      const pages = Number.isInteger(form.max_pages) ? form.max_pages : 0;
+      fill(pagesCost, `Each page is 20 postings, and a request to every watched Workday site for every search: with ${profileCount(sites, "site")} `
+        + `and ${profileCount(form.queries.length, "search", "searches")}, up to ${sites * form.queries.length * pages} requests each run. `
+        + `A search stops early once a page comes back short. From ${fewest} to ${most}.`);
+    }
+    pagesField.addEventListener("input", () => {
+      const value = Number(pagesField.value);
+      form.max_pages = pagesField.value.trim() && Number.isInteger(value) ? value : pagesField.value;
+      drawPagesCost();
+      changed();
+    });
 
     draw();
     drawManual();
@@ -230,11 +260,14 @@ profileStep("companies", {
           h("h3", { class: "profile-sub" }, "Workday searches"),
           h("small", { class: "muted" }, "A Workday site has no full list to read, so Pyrite searches each one for these. What they find still goes through the filters in Roles you want."),
           chips,
-          h("div", { class: "profile-add" }, queryField, h("button", { class: "btn", type: "button", disabled: off, onclick: addQuery }, "Add"))),
+          h("div", { class: "profile-add" }, queryField, h("button", { class: "btn", type: "button", disabled: off, onclick: addQuery }, "Add")),
+          profileField("Pages per search", pagesField),
+          pagesCost),
         review),
       aside: h("div", { class: "panel stack" }, h("h2", {}, "Finding a company's board"),
         h("p", {}, "Pyrite reads four kinds of job board: Greenhouse, Lever, Ashby and Workday. Their addresses look like these:"),
-        h("ul", { class: "profile-hosts" }, ["boards.greenhouse.io/acme", "jobs.lever.co/acme", "jobs.ashbyhq.com/acme", "acme.wd1.myworkdayjobs.com/External"]
+        h("ul", { class: "profile-hosts" }, ["boards.greenhouse.io/acme", "jobs.lever.co/acme, or jobs.eu.lever.co/acme", "jobs.ashbyhq.com/acme",
+          "acme.wd1.myworkdayjobs.com/External", "wd1.myworkdaysite.com/recruiting/acme/External"]
           .map((host) => h("li", {}, host))),
         h("p", {}, "A company's own careers page often hands its jobs to one of these. Open a job there and paste where its Apply button goes."),
         h("p", { class: "muted" }, "Test reads the board once, as ", h("code", {}, "pyrite sources"), " does, and says how many postings it lists. It saves nothing. A board that fails at a run is shown on the Sources tab.")),

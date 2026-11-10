@@ -78,7 +78,25 @@ def watch_problem(kind: str, ident: str, spec) -> str:
                 f'{ident} = {{ name = "Company", wd = "wd1", site = "External" }}, with the wd and site from its careers page address.')
     if isinstance(spec, str) and spec.strip():
         return ""
+    if kind == "lever":
+        if (isinstance(spec, dict) and set(spec) <= {"name", "eu"} and isinstance(spec.get("name"), str)
+                and spec["name"].strip() and isinstance(spec.get("eu", False), bool)):
+            return ""
+        return (f'[watch.lever] {ident} in profile/search.toml should be the company\'s name, written as {ident} = "Company", '
+                f'or {ident} = {{ name = "Company", eu = true }} for a board on Lever\'s EU site, jobs.eu.lever.co.')
     return f'[watch.{kind}] {ident} in profile/search.toml should be the company\'s name, written as {ident} = "Company".'
+
+
+def lever_eu(spec) -> bool:
+    """Whether a [watch.lever] board is on Lever's EU site, written as { name = "Company", eu = true }."""
+    return isinstance(spec, dict) and spec.get("eu") is True
+
+
+def _read_feed(kind: str, ident: str, spec, company: str) -> list[sources.Posting]:
+    """One Greenhouse, Lever or Ashby board's listing, from the feed its entry names."""
+    if kind == "lever" and lever_eu(spec):
+        return sources.FEEDS[kind](ident, company, eu=True)  # type: ignore[call-arg]
+    return sources.FEEDS[kind](ident, company)
 
 
 def watch_problems(cfg: dict[str, Any]) -> list[str]:
@@ -91,6 +109,16 @@ BOARD_KINDS = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "
 # What a board's key may be. Each one is put into the address of its board's own feed, so nothing in it may change
 # which site that address names: no slash, colon, at sign, question mark or anything else that ends a path segment.
 BOARD_KEY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?")
+# An Ashby board is its company's job board name, which may hold spaces and other punctuation, as "Acme Labs" in
+# jobs.ashbyhq.com/Acme%20Labs. Its feed address takes it percent-encoded, every character but a letter, digit, _ . -
+# or ~, so nothing in it can end the path segment it's in. It starts with a letter or digit, so it's never . or .., and
+# holds no slash, backslash, %, ? or #, so even decoded at the other end it can't read as a path, a query or another
+# encoding.
+ASHBY_BOARD = re.compile(r"[^\W_](?:[\w .,&'()+!-]{0,98}[\w.,&'()+!-])?")
+# How many pages each Workday search may read, and how many it reads when [workday] max_pages isn't set. Each page is
+# a request to every watched Workday site, for every search.
+WORKDAY_PAGES = (1, 10)
+DEFAULT_WORKDAY_PAGES = 2
 # A Workday tenant is the first label of its host, <tenant>.<wdN>.myworkdayjobs.com, so it's a host label and no more.
 WORKDAY_TENANT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 WORKDAY_WD = re.compile(r"wd\d{1,3}")
@@ -98,13 +126,19 @@ WORKDAY_SITE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}")
 # The language a Workday careers address may start with, as in /en-US/External.
 WORKDAY_LOCALE = re.compile(r"[a-z]{2}(?:-[A-Za-z]{2})?")
 WORKDAY_HOST = re.compile(r"([a-z0-9-]+)\.(wd\d{1,3})\.myworkdayjobs\.com")
+# Workday's other careers host, <tenant>.<wdN>.myworkdaysite.com/recruiting/<tenant>/<site>, often without the tenant
+# in front. It names the same tenant, server and site, so the board is read from its myworkdayjobs.com feed as any other.
+WORKDAY_SITE_HOST = re.compile(r"(?:([a-z0-9-]+)\.)?(wd\d{1,3})\.myworkdaysite\.com")
 # Each board's careers page and feed hosts, and how many path parts come before the board's key on each.
 BOARD_HOSTS = {
     "boards.greenhouse.io": ("greenhouse", 0), "job-boards.greenhouse.io": ("greenhouse", 0),
     "boards-api.greenhouse.io": ("greenhouse", 2),  # /v1/boards/<board>/jobs
     "jobs.lever.co": ("lever", 0), "api.lever.co": ("lever", 2),  # /v0/postings/<board>
+    "jobs.eu.lever.co": ("lever", 0), "api.eu.lever.co": ("lever", 2),
     "jobs.ashbyhq.com": ("ashby", 0), "api.ashbyhq.com": ("ashby", 2),  # /posting-api/job-board/<board>
 }
+# Lever's EU site, whose boards are read from its EU feed.
+LEVER_EU_HOSTS = {"jobs.eu.lever.co", "api.eu.lever.co"}
 
 
 def board_problem(kind: str, key: str, wd: str = "", site: str = "") -> str:
@@ -123,7 +157,7 @@ def board_problem(kind: str, key: str, wd: str = "", site: str = "") -> str:
             return (f"“{site}” isn't a Workday site. It's the part after the address's last slash, as External in "
                     "acme.wd1.myworkdayjobs.com/External.")
         return ""
-    if not BOARD_KEY.fullmatch(key):
+    if not (ASHBY_BOARD if kind == "ashby" else BOARD_KEY).fullmatch(key):
         return (f"“{key}” isn't {'an' if kind == 'ashby' else 'a'} {BOARD_KINDS[kind]} board. It's the part of the careers page address after the "
                 f"site's name, as acme in {_example_address(kind)}.")
     return ""
@@ -136,13 +170,52 @@ def _example_address(kind: str) -> str:
 
 def _name_from(key: str) -> str:
     """A first guess at a company's name from its board's key, as Acme Robotics from acme-robotics."""
-    words = [word for word in re.split(r"[-_.]+", key) if word]
+    words = [word for word in re.split(r"[-_.\s]+", key) if word]
     return " ".join(word if word[:1].isupper() else word.capitalize() for word in words)
 
 
-def board_from_url(text: str) -> dict[str, str]:
-    """The board a careers page address names, as {kind, key, name}, with wd and site for Workday. The address may be a
-    job's own page, or leave out https://. Raises ValueError, saying what Pyrite can read, for any other address."""
+def _workday_site(host: str, tenant: str | None, wd: str, parts: list[str]) -> dict[str, str]:
+    """The Workday board a <tenant>.<wdN>.myworkdaysite.com address names: /recruiting/<tenant>/<site>, after a
+    language if there is one, or the /wday/cxs/<tenant>/<site> its own page reads."""
+    if parts and WORKDAY_LOCALE.fullmatch(parts[0]):
+        parts = parts[1:]
+    if parts[:1] == ["recruiting"]:
+        named = parts[1:3]
+    elif parts[:2] == ["wday", "cxs"]:
+        named = parts[2:4]
+    else:
+        named = []
+    if len(named) < 2:
+        raise ValueError(f"That address has no Workday tenant and site after the slash. It looks like "
+                         f"{host}/recruiting/acme/External: open a job on it and paste that.")
+    if tenant and tenant != named[0].lower():
+        raise ValueError(f"That address names two Workday tenants, {tenant} and {named[0]}, so Pyrite can't tell which "
+                         "board it is.")
+    return {"kind": "workday", "key": named[0].lower(), "wd": wd, "site": named[1]}
+
+
+def _workday_elsewhere(host: str, parts: list[str]) -> str:
+    """What to say about an address that looks like a Workday careers site on a company's own domain, or "" if it
+    doesn't. Only Workday's own hosts say which tenant and server a site is on, and Pyrite never opens an address it's
+    sent to find out, so it can't read one of these."""
+    lowered = [part.lower() for part in parts]
+    at = next((i for i in range(len(lowered) - 1) if lowered[i:i + 2] == ["wday", "cxs"]), None)
+    job = next((i for i, part in enumerate(lowered) if part == "job"), None)
+    if at is None and not (job is not None and job + 1 < len(parts) and WORKDAY_REQUISITION.search(parts[-1])):
+        return ""
+    named = ""
+    if at is not None and len(parts) > at + 3:
+        named = f" It names the tenant {parts[at + 2]} and the site {parts[at + 3]}, but not the Workday server (wd1, wd5 and so on)."
+    return (f"{host} looks like a Workday careers site on the company's own domain. Pyrite reads Workday at "
+            f"<tenant>.<wdN>.myworkdayjobs.com, and this address doesn't say which Workday board is behind it.{named} "
+            "Pyrite won't open the page to find out. Open a job there: its Apply button often goes to a myworkdayjobs.com "
+            "address, which Pyrite can read. Otherwise add it under Check by hand.")
+
+
+def board_from_url(text: str) -> dict[str, Any]:
+    """The board a careers page address names, as {kind, key, name}, with wd and site for Workday and eu for a Lever
+    board on its EU site. The address may be a job's own page, or leave out https://. Raises ValueError, saying what
+    Pyrite can read, for any other address. Nothing is fetched: the board is read from the address alone."""
     raw = text.strip() if isinstance(text, str) else ""
     if not raw:
         raise ValueError("Paste a careers page address.")
@@ -156,9 +229,12 @@ def board_from_url(text: str) -> dict[str, str]:
     parts = [unquote(part) for part in parsed.path.split("/") if part]
     if parsed.scheme.lower() not in ("http", "https") or not host:
         raise ValueError("That isn't a web address.")
-    found: dict[str, str]
+    found: dict[str, Any]
     workday = WORKDAY_HOST.fullmatch(host)
-    if workday:
+    elsewhere = WORKDAY_SITE_HOST.fullmatch(host)
+    if elsewhere:
+        found = _workday_site(host, elsewhere.group(1), elsewhere.group(2), parts)
+    elif workday:
         tenant, wd = workday.groups()
         if parts[:2] == ["wday", "cxs"] and len(parts) >= 4:
             site = parts[3]
@@ -178,7 +254,12 @@ def board_from_url(text: str) -> dict[str, str]:
         if not key:
             raise ValueError(f"That address has no board after the slash. It looks like {_example_address(kind)}.")
         found = {"kind": kind, "key": key}
+        if host in LEVER_EU_HOSTS:
+            found["eu"] = True
     else:
+        said = _workday_elsewhere(host, parts)
+        if said:
+            raise ValueError(said)
         raise ValueError(f"Pyrite reads Greenhouse, Lever, Ashby and Workday job boards, and {host} isn't one of them. "
                          "A company's own careers page often sends its Apply links to one: open a job there and paste "
                          "where its Apply button goes. Otherwise add it under Check by hand.")
@@ -200,7 +281,7 @@ def check_source(kind: str, ident: str, spec) -> dict[str, Any]:
             page = cast(dict[str, Any], sources._request(f"{api}/jobs", {"limit": 1, "offset": 0, "searchText": "", "appliedFacets": {}}, retries=0))
             count = page.get("total", 0)
         else:
-            count = len(sources.FEEDS[kind](ident, name))
+            count = len(_read_feed(kind, ident, spec, name))
         return {"source": f"{kind}:{ident}", "company": name, "ok": True, "count": count}
     except Exception as err:
         return {"source": f"{kind}:{ident}", "company": name, "ok": False, "error": str(err)[:120]}
@@ -269,7 +350,7 @@ def _fetch_one(item: tuple[str, str, Any], cfg: dict[str, Any], known: set[str],
             # Workday lists are search results, so absence doesn't mean a posting closed.
             result["complete"] = False
             spec = {**spec, "tenant": ident}
-            hits = sources.workday_search(spec, cfg["workday"]["queries"], cfg["workday"]["max_pages"])
+            hits = sources.workday_search(spec, cfg["workday"]["queries"], cfg["workday"].get("max_pages", DEFAULT_WORKDAY_PAGES))
             result["seen"] = list(hits)
             today = date.today()
             result["dates"] = {path: sources.workday_posted_date(hit.get("postedOn"), today) for path, hit in hits.items()}
@@ -289,7 +370,7 @@ def _fetch_one(item: tuple[str, str, Any], cfg: dict[str, Any], known: set[str],
             result["closed"], result["live"] = _probe_workday(spec, open_ids or [], hits, deadline)
             return result
 
-        postings = sources.FEEDS[kind](ident, company)
+        postings = _read_feed(kind, ident, spec, company)
         result["seen"] = [p.source_id for p in postings]
         # Greenhouse and Lever report the date a listing was first created, which never moves.
         if kind == "ashby":

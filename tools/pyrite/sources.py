@@ -14,6 +14,7 @@ import re
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -268,9 +269,11 @@ def _lever_pay(salary: dict[str, Any]) -> str:
     return f"${salary['min']:,} - ${salary['max']:,} {currency} per {per}"
 
 
-def fetch_lever(board: str, company: str) -> list[Posting]:
+def fetch_lever(board: str, company: str, eu: bool = False) -> list[Posting]:
+    """A Lever board's postings. `eu` reads a board on Lever's EU site, jobs.eu.lever.co, from its own feed."""
     key = f"lever:{board}"
-    data = cast(list[dict[str, Any]], _request(f"https://api.lever.co/v0/postings/{board}?mode=json"))
+    host = "api.eu.lever.co" if eu else "api.lever.co"
+    data = cast(list[dict[str, Any]], _request(f"https://{host}/v0/postings/{board}?mode=json"))
     postings = []
     for job in data:
         categories = job.get("categories") or {}
@@ -298,7 +301,9 @@ def fetch_lever(board: str, company: str) -> list[Posting]:
 
 def fetch_ashby(board: str, company: str) -> list[Posting]:
     key = f"ashby:{board}"
-    data = cast(dict[str, Any], _request(f"https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true"))
+    # A board's name may hold a space or other punctuation, so it's percent-encoded whole, slashes too.
+    path = urllib.parse.quote(board, safe="")
+    data = cast(dict[str, Any], _request(f"https://api.ashbyhq.com/posting-api/job-board/{path}?includeCompensation=true"))
     postings = []
     for job in data.get("jobs", []):
         if job.get("isListed") is False:

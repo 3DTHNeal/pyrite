@@ -1510,16 +1510,53 @@ def _watching(cfg: dict[str, Any]) -> dict[tuple[str, str], Any]:
     return found
 
 
-def _board_form(kind: str, key: str, spec) -> dict[str, str]:
-    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, and every other
-    board is its company's name."""
+def _board_form(kind: str, key: str, spec) -> dict[str, Any]:
+    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, a Lever board on
+    Lever's EU site a table of name and eu, and every other board its company's name."""
     if kind == "workday":
         table = spec if isinstance(spec, dict) else {"name": spec}
         name, wd, site = (table.get(part) for part in ("name", "wd", "site"))
+    elif isinstance(spec, dict):
+        name, wd, site = spec.get("name"), "", ""
     else:
         name, wd, site = spec, "", ""
     text = lambda value: value if isinstance(value, str) else ""
-    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site)}
+    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site),
+            "eu": kind == "lever" and discover.lever_eu(spec)}
+
+
+def _companies_eu(raw: dict[str, Any], kind: str, old) -> bool:
+    """Whether the form puts a Lever board on Lever's EU site. A form that doesn't say keeps what the board had."""
+    if kind != "lever":
+        return False
+    eu = raw.get("eu")
+    if eu is None:
+        return discover.lever_eu(old)
+    if not isinstance(eu, bool):
+        raise ValueError("Whether a Lever board is on its EU site should be true or false.")
+    return eu
+
+
+def _companies_lever(name: str, eu: bool) -> Any:
+    """A Lever board's entry: its company's name, or a table with eu = true for a board on Lever's EU site."""
+    return {"name": name, "eu": True} if eu else name
+
+
+def _companies_pages(cfg: dict[str, Any]) -> Any:
+    """[workday] max_pages as search.toml has it, or the number read when it isn't set."""
+    workday = cfg.get("workday")
+    return workday.get("max_pages", discover.DEFAULT_WORKDAY_PAGES) if isinstance(workday, dict) else discover.DEFAULT_WORKDAY_PAGES
+
+
+def _companies_max_pages(config: str, cfg: dict[str, Any], raw) -> tuple[str, int]:
+    """[workday] max_pages as the form has it, within discover.WORKDAY_PAGES. A number outside them already in the file
+    stays while it isn't changed."""
+    if raw == _companies_pages(cfg):
+        return config, 0
+    low, high = discover.WORKDAY_PAGES
+    if not isinstance(raw, int) or isinstance(raw, bool) or not low <= raw <= high:
+        raise ValueError(f"Pages per Workday search is a whole number from {low} to {high}.")
+    return tomledit.set_value(config, "workday", "max_pages", raw), 1
 
 
 def _manual(cfg: dict[str, Any]) -> list[Any]:
@@ -1559,6 +1596,8 @@ def _companies_view(cfg: dict[str, Any]) -> dict[str, Any]:
         "manual": [{**_manual_form(entry), "at": at} for at, entry in enumerate(_manual(cfg))],
         "queries": [query for query in _queries(cfg) if isinstance(query, str)],
         "kinds": discover.BOARD_KINDS,
+        "max_pages": _companies_pages(cfg),
+        "pages_range": list(discover.WORKDAY_PAGES),
     }
 
 
@@ -1585,9 +1624,10 @@ def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str]
         kind = raw.get("kind")
         if not isinstance(kind, str) or kind not in discover.BOARD_KINDS:
             raise ValueError("A board is Greenhouse, Lever, Ashby or Workday.")
-        form = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
+        form: dict[str, Any] = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
                 "wd": _one_line(raw.get("wd"), "A Workday server") if kind == "workday" else "",
-                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else ""}
+                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else "",
+                "eu": _companies_eu(raw, kind, current.get(old_id) if old_id else None)}
         if old_id is None and not any(form[part] for part in ("key", "name", "wd", "site")):
             continue  # A row just added and not yet typed in.
         ident = (kind, form["key"])
@@ -1606,6 +1646,8 @@ def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str]
         if kind == "workday":
             # Anything else its table holds stays as it was.
             spec = {**(old if isinstance(old, dict) else {}), "name": form["name"], "wd": form["wd"], "site": form["site"]}
+        elif kind == "lever":
+            spec = _companies_lever(form["name"], form["eu"])
         wanted[ident] = (spec, old_id, True)
 
     gone = [ident for ident in current if ident not in kept]
@@ -1785,7 +1827,8 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
 
 @drafter("companies")
 def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
-    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for.
+    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for
+    and how many pages of each search it reads.
     A pasted careers page address is read as the board it names, for the page to offer to add."""
     out = dict(texts)
     config = texts["config"]
@@ -1810,6 +1853,16 @@ def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]
         if remove or add:
             config = tomledit.edit_list(config, "workday", "queries", remove=remove, add=add, literal=True)
             count += len(remove) + len(add)
+    if "max_pages" in edits:
+        before = _companies_pages(cfg)
+        config, changed = _companies_max_pages(config, cfg, edits["max_pages"])
+        count += changed
+        if changed and (not isinstance(before, int) or edits["max_pages"] > before):
+            sites = sum(kind == "workday" for kind, _ in watched)
+            notes.append(f"Each page is a request to every watched Workday site, for every Workday search: with "
+                         f"{sites} site{'' if sites == 1 else 's'} and {len(queries)} search{'' if len(queries) == 1 else 'es'}, "
+                         f"up to {sites * len(queries) * edits['max_pages']} requests each run, before the postings "
+                         "themselves are read. A site that's asked too often may stop answering for a while.")
     # tomledit changes a key it finds and passes over one it doesn't, such as a company written as a table of its own.
     if _watching(_config(config)) != watched:
         raise ValueError("search.toml writes [watch] in a way this section can't change a key at a time, such as a "
