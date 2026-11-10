@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from . import deadline, pay, score, skillage
 
@@ -33,13 +34,13 @@ DEFAULT_RARE_POINTS = 5
 class Context:
     """What judging one job needs to know about all the others."""
     today: date
-    peers: dict
-    local: Counter
+    peers: dict[str, Any]
+    local: Counter[str]
     watched_days: int | None
     decide_days: int
 
 
-def decide_days(cfg: dict) -> int:
+def decide_days(cfg: dict[str, Any]) -> int:
     return int((cfg.get("run") or {}).get("decide_days", deadline.DECIDE_DAYS))
 
 
@@ -47,7 +48,7 @@ def _recent(first_seen: str | None, today: date) -> bool:
     return bool(first_seen) and str(first_seen)[:10] >= (today - timedelta(days=RARE_DAYS)).isoformat()
 
 
-def context(conn, cfg: dict, today: date) -> Context:
+def context(conn, cfg: dict[str, Any], today: date) -> Context:
     rows = [{**dict(row), "level": score.level(row["title"], cfg)}
             for row in conn.execute("SELECT title, track, location_kind, first_seen, comp FROM jobs")]
     local = Counter(row["track"] for row in rows if row["location_kind"] == "local" and row["track"] and _recent(row["first_seen"], today))
@@ -56,12 +57,12 @@ def context(conn, cfg: dict, today: date) -> Context:
     return Context(today, pay.peers(rows, pay.settings(cfg)["currency"]), local, watched, decide_days(cfg))
 
 
-def alone(cfg: dict, today: date) -> Context:
+def alone(cfg: dict[str, Any], today: date) -> Context:
     """A context that knows nothing of the other jobs, so pay is judged against your floor and target only, and nothing is rare."""
     return Context(today, {}, Counter(), None, decide_days(cfg))
 
 
-def rarity(job: dict, cfg: dict, ctx: Context) -> dict:
+def rarity(job: dict[str, Any], cfg: dict[str, Any], ctx: Context) -> dict[str, Any]:
     """Whether a local job is rare in its track, and the priority that earns it."""
     rules = cfg.get("freshness") or {}
     result = {"rare": False, "rare_reason": "", "rare_points": 0}
@@ -77,7 +78,7 @@ def rarity(job: dict, cfg: dict, ctx: Context) -> dict:
     return {"rare": True, "rare_reason": reason, "rare_points": points}
 
 
-def read(job: dict, cfg: dict, ctx: Context, folder: Path | None) -> dict:
+def read(job: dict[str, Any], cfg: dict[str, Any], ctx: Context, folder: Path | None) -> dict[str, Any]:
     """Everything this module knows about one job, and the priority points and reasons it adds."""
     description = job.get("description") or ""
     found = deadline.for_job(description, folder, ctx.today)
@@ -95,7 +96,7 @@ def read(job: dict, cfg: dict, ctx: Context, folder: Path | None) -> dict:
     return {**found, **skills, **money, **rare, "signal_points": money["pay_points"] + rare["rare_points"], "signal_reasons": reasons}
 
 
-def apply(job: dict, found: dict) -> dict:
+def apply(job: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
     """The job with these signals in it, their points in its priority and their reasons with the others."""
     job.update(found)
     job["rank"] = (job.get("rank") or 0) + found["signal_points"]
@@ -103,7 +104,7 @@ def apply(job: dict, found: dict) -> dict:
     return job
 
 
-def markings(job: dict) -> list[str]:
+def markings(job: dict[str, Any]) -> list[str]:
     """Lines for a triage run about the deadline, pay and rarity, in Pyrite's words. The skills' ages have their own section."""
     lines = []
     if job.get("deadline"):

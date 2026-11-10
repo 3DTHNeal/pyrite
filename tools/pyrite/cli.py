@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from . import __version__, checks, claude_code, demo, discover, fill, score, signals, store, words, workspace
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
@@ -60,7 +60,7 @@ def _file_token(company: str) -> str:
     return "_".join(re.findall(r"[^\W_]+", company))[:40] or "Company"
 
 
-def _file_prefix(cfg: dict) -> str:
+def _file_prefix(cfg: dict[str, Any]) -> str:
     return "_".join(re.findall(r"[^\W_]+", cfg["candidate"]["name"])) or "Candidate"
 
 
@@ -156,7 +156,7 @@ def cmd_sources(args):
         print(words.sources(report))
 
 
-def queue(conn, cfg: dict, limit: int | None = None) -> dict:
+def queue(conn, cfg: dict[str, Any], limit: int | None = None) -> dict[str, Any]:
     """What a run should work on, best first: the postings to judge and the drafts to write."""
     run_cfg = cfg["run"]
     today = date.today()
@@ -164,7 +164,7 @@ def queue(conn, cfg: dict, limit: int | None = None) -> dict:
     swept_at = last["started_at"] if last else None
     context = signals.context(conn, cfg, today)
 
-    def ranked(row) -> dict:
+    def ranked(row) -> dict[str, Any]:
         folder = store.ROOT / row["app_folder"] if row["app_folder"] else None
         job = {**job_dict(row), **score.freshness(dict(row), cfg, today, swept_at)}
         return signals.apply(job, signals.read(dict(row), cfg, context, folder))
@@ -349,7 +349,7 @@ def cmd_finish(args, conn):
         sys.exit(1)
 
 
-def _overlap_note(report: dict) -> None:
+def _overlap_note(report: dict[str, Any]) -> None:
     """Say in words what the dashboard says beside the result: a resume that uses nearly every skill term the posting
     names reads as copied from it. The JSON on stdout stays as it is, for the runs that read it."""
     copied = checks.reads_as_copied(report.get("overlap"))
@@ -357,7 +357,7 @@ def _overlap_note(report: dict) -> None:
         print(f"Note: {copied} Screeners mark that down, so aim for {checks.OVERLAP_TARGET}.", file=sys.stderr)
 
 
-def finish_job(conn, cfg: dict, job_id: int, say_building: bool = False) -> dict:
+def finish_job(conn, cfg: dict[str, Any], job_id: int, say_building: bool = False) -> dict[str, Any]:
     job = get_job(conn, job_id)
     folder = ROOT / job["app_folder"]
 
@@ -516,7 +516,7 @@ def _run_task(kind: str) -> None:
         sys.exit(1)
 
 
-def _gaps_words(found: dict, shown: list[dict], least: int, every: bool) -> None:
+def _gaps_words(found: dict[str, Any], shown: list[dict[str, Any]], least: int, every: bool) -> None:
     from . import gaps
 
     open_ = gaps.questions(found, 1)
@@ -688,7 +688,7 @@ def cmd_fill(args):
         print(f"{fill.NOT_PASSED} {report['unchecked']}", file=sys.stderr)
 
 
-def _fill_sheet(folder: Path, company: str = "", title: str = "", url: str = "", source: str = "", *, unchecked: str) -> dict:
+def _fill_sheet(folder: Path, company: str = "", title: str = "", url: str = "", source: str = "", *, unchecked: str) -> dict[str, Any]:
     try:
         return fill.make_sheet(folder, company, title, url, source=source, unchecked=unchecked)
     except (FileNotFoundError, fill.SheetError) as err:
@@ -1276,11 +1276,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _commands(sub: argparse._SubParsersAction) -> list[str]:
+def _commands(sub: "argparse._SubParsersAction[argparse.ArgumentParser]") -> list[str]:
     return [name for name in sub.choices if name not in HIDDEN_COMMANDS]
 
 
-def _help(parser: argparse.ArgumentParser, sub: argparse._SubParsersAction, topic: str | None) -> None:
+def _help(parser: argparse.ArgumentParser, sub: "argparse._SubParsersAction[argparse.ArgumentParser]", topic: str | None) -> None:
     if not topic:
         parser.print_help()
     elif topic in sub.choices and topic not in HIDDEN_COMMANDS:

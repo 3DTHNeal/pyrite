@@ -16,6 +16,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from . import factsdoc, settings, store
 
@@ -158,11 +159,11 @@ def _title(text: str) -> str:
     return ""
 
 
-def read_all(root: Path | None = None) -> tuple[list[Gap], dict[str, dict]]:
+def read_all(root: Path | None = None) -> tuple[list[Gap], dict[str, dict[str, Any]]]:
     """Every gap in every application's notes, and each folder's heading and when its notes were written."""
     root = root or store.ROOT
     gaps: list[Gap] = []
-    folders: dict[str, dict] = {}
+    folders: dict[str, dict[str, Any]] = {}
     base = root / "applications"
     if not base.is_dir():
         return gaps, folders
@@ -213,7 +214,7 @@ def _answers_path() -> Path:
     return store.ROOT / "data" / "gap-answers.json"
 
 
-def answers() -> list[dict]:
+def answers() -> list[dict[str, Any]]:
     """Every answer given, oldest first. A file that won't read counts as none, so the questions come back."""
     try:
         found = json.loads(_answers_path().read_text(encoding="utf-8"))
@@ -223,7 +224,7 @@ def answers() -> list[dict]:
     return [row for row in rows or [] if isinstance(row, dict) and row.get("answer") in ANSWERS]
 
 
-def _save_answers(rows: list[dict]) -> None:
+def _save_answers(rows: list[dict[str, Any]]) -> None:
     path = _answers_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     settings._write(path, json.dumps({"answers": rows}, indent=2, ensure_ascii=False) + "\n")
@@ -233,7 +234,7 @@ def _keys(found: Group) -> list[list[str]]:
     return [sorted(key) for key in dict.fromkeys(gap.tokens for gap in found.gaps) if key]
 
 
-def answer_for(found: Group, rows: list[dict]) -> dict | None:
+def answer_for(found: Group, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The latest answer that's about this group, matched by words, so a new wording of an answered gap counts too."""
     for row in reversed(rows):
         if row.get("id") == found.id:
@@ -271,14 +272,14 @@ def _when(iso: str) -> datetime | None:
         return None
 
 
-def view(conn=None, root: Path | None = None) -> dict:
+def view(conn=None, root: Path | None = None) -> dict[str, Any]:
     """Every group with what it holds and where it stands, for `pyrite gaps` and the Profile tab.
 
     A group is a question unless it's answered, already in Unsupported, or every gap in it says it's settled. One
     raised again by notes written after its answer says so, since that draft may have been written without it."""
     root = root or store.ROOT
     gaps, folders = read_all(root)
-    jobs: dict[str, dict] = {}
+    jobs: dict[str, dict[str, Any]] = {}
     if conn is not None:
         for row in conn.execute("SELECT id, company, title, status, applied_at, app_folder FROM jobs WHERE app_folder IS NOT NULL"):
             jobs[str(row["app_folder"]).replace("\\", "/").rstrip("/")] = dict(row)
@@ -317,12 +318,12 @@ def view(conn=None, root: Path | None = None) -> dict:
     return {"groups": out, "applications": len(folders), "gaps": len(gaps), "ask_from": ASK_FROM}
 
 
-def questions(found: dict, least: int = ASK_FROM) -> list[dict]:
+def questions(found: dict[str, Any], least: int = ASK_FROM) -> list[dict[str, Any]]:
     """The groups still to ask about, raised by at least `least` applications, most often raised first."""
     return [g for g in found["groups"] if g["state"] == "open" and g["count"] >= least]
 
 
-def find(found: dict, gap_id: str) -> dict:
+def find(found: dict[str, Any], gap_id: str) -> dict[str, Any]:
     match = next((g for g in found["groups"] if g["id"] == gap_id), None)
     if match is None:
         raise ValueError(f"No gap called {gap_id!r}. `pyrite gaps --all` lists every one with its name.")
@@ -393,7 +394,7 @@ def _added(before: str, after: str, text: str, unsupported: bool) -> bool:
     return count(after) > count(before)
 
 
-def _phrase(row: dict) -> str:
+def _phrase(row: dict[str, Any]) -> str:
     if row["answer"] == "yes":
         return f"you've done it, and added “{row['lines'][0]}” to your facts" if row.get("lines") else "you've done it"
     if row["answer"] == "no":
@@ -401,7 +402,7 @@ def _phrase(row: dict) -> str:
     return "it doesn't apply"
 
 
-def record(conn, found: dict, wanted: object, before: str, after: str) -> list[dict]:
+def record(conn, found: dict[str, Any], wanted: object, before: str, after: str) -> list[dict[str, Any]]:
     """Keep the answers a save made, and flag the unsent drafts that raised each gap. Only an answer whose line the
     save actually added is kept, so what's recorded is what's in the files, whatever the page said."""
     rows = answers()
@@ -427,7 +428,7 @@ def record(conn, found: dict, wanted: object, before: str, after: str) -> list[d
     return [{**row, "flagged": flag(conn, find(found, row["id"]), row)} for row in kept]
 
 
-def _remember(rows: list[dict], match: dict, answer: str, lines: list[str]) -> dict:
+def _remember(rows: list[dict[str, Any]], match: dict[str, Any], answer: str, lines: list[str]) -> dict[str, Any]:
     keys = [sorted(tokens(m["name"])) for m in match["members"]]
     row = {"id": match["id"], "label": match["label"], "answer": answer, "at": store.now(), "lines": lines,
            "keys": [list(key) for key in dict.fromkeys(tuple(key) for key in keys if key)]}
@@ -435,7 +436,7 @@ def _remember(rows: list[dict], match: dict, answer: str, lines: list[str]) -> d
     return row
 
 
-def dismiss(found: dict, gap_id: str) -> dict:
+def dismiss(found: dict[str, Any], gap_id: str) -> dict[str, Any]:
     """Stop asking about a gap that isn't a fact to settle, such as whether to travel. No file changes."""
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so its questions can't be answered.")
@@ -462,7 +463,7 @@ def forget(gap_id: str) -> bool:
 NOT_SENT = ("new", "shortlisted", "needs_fix", "ready")
 
 
-def flag(conn, match: dict, row: dict) -> list[int]:
+def flag(conn, match: dict[str, Any], row: dict[str, Any]) -> list[int]:
     """Note on each unsent draft that raised this gap that it was answered. A sent application is a record, so it's
     left alone."""
     flagged = []
@@ -478,7 +479,7 @@ def flag(conn, match: dict, row: dict) -> list[int]:
     return flagged
 
 
-def rework(conn, jobs: list[dict], root: Path | None = None) -> dict[int, str]:
+def rework(conn, jobs: list[dict[str, Any]], root: Path | None = None) -> dict[int, str]:
     """Unsent drafts with an answer since they were written, by job id, with what was answered. A draft stops being
     flagged once its resume is rewritten after the answer, or you say you've seen it."""
     root = root or store.ROOT

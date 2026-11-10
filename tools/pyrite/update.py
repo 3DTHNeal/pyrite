@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from .store import CODE_ROOT
 
@@ -40,10 +41,10 @@ class GitError(Exception):
 
 
 _lock = threading.Lock()  # One update at a time, and no check halfway through one.
-_fetched: dict = {}  # The last fetch of GitHub's main, by code folder: (when, why it failed or None).
+_fetched: dict[str, Any] = {}  # The last fetch of GitHub's main, by code folder: (when, why it failed or None).
 
 
-def _run(command: list[str], cwd: Path, seconds: int) -> subprocess.CompletedProcess:
+def _run(command: list[str], cwd: Path, seconds: int) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=seconds, env={**os.environ, **NO_PROMPT}, stdin=subprocess.DEVNULL,
                           creationflags=NO_WINDOW)
@@ -99,7 +100,7 @@ def _own_main(repo: Path) -> bool:
     return bool(_git(repo, "for-each-ref", f"refs/heads/{BRANCH}"))
 
 
-def _look(repo: Path, demo: bool, fresh: bool) -> dict:
+def _look(repo: Path, demo: bool, fresh: bool) -> dict[str, Any]:
     """Compare this copy with GitHub's main, fetching that first if `fresh` or the last fetch is an hour old."""
     if not shutil.which("git"):
         return {"available": False, "error": "git isn't installed, so Pyrite can't tell whether it's up to date."}
@@ -123,7 +124,7 @@ def _look(repo: Path, demo: bool, fresh: bool) -> dict:
             raise GitError(failed)
         behind = int(_git(repo, "rev-list", "--count", f"HEAD..{LATEST}"))
         ahead = int(_git(repo, "rev-list", "--count", f"{LATEST}..HEAD"))
-        found: dict = {"available": behind > 0, "behind": behind, "current": _git(repo, "rev-parse", "--short", "HEAD")}
+        found: dict[str, Any] = {"available": behind > 0, "behind": behind, "current": _git(repo, "rev-parse", "--short", "HEAD")}
         if behind:
             # A merge says nothing about the code, so only the commits it brought in are listed. The list is empty when
             # GitHub's main is ahead only by merging what this copy already has.
@@ -146,7 +147,7 @@ def _look(repo: Path, demo: bool, fresh: bool) -> dict:
         return {"available": False, "error": f"Couldn't check GitHub for a newer Pyrite: {err}"}
 
 
-def check(repo: Path = CODE_ROOT, demo: bool = False, fresh: bool = False) -> dict:
+def check(repo: Path = CODE_ROOT, demo: bool = False, fresh: bool = False) -> dict[str, Any]:
     """Whether GitHub's main is ahead of this copy. GitHub is asked at most once an hour unless `fresh`, but this copy
     is read again every time, so the answer follows a branch switched or an edit stashed since the last one.
 
@@ -164,7 +165,7 @@ def forget() -> None:
         _fetched.clear()
 
 
-def apply(repo: Path = CODE_ROOT, demo: bool = False, python: str = sys.executable, switch: bool = False) -> dict:
+def apply(repo: Path = CODE_ROOT, demo: bool = False, python: str = sys.executable, switch: bool = False) -> dict[str, Any]:
     """Move this copy forward to GitHub's main, and install the packages again if tools/requirements.txt changed.
 
     A copy on main is fast-forwarded. One on another branch, or on none, with nothing GitHub's main lacks is switched

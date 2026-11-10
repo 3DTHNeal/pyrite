@@ -40,7 +40,7 @@ def _read() -> str:
         return handle.read()
 
 
-def _version(promote: dict | None) -> str:
+def _version(promote: dict[str, Any] | None) -> str:
     return hashlib.sha256(json.dumps(promote or {}, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -52,7 +52,7 @@ def _claimable_facts() -> str:
     return checks.claimable(path.read_text(encoding="utf-8"))
 
 
-def skills(promote: dict) -> dict:
+def skills(promote: dict[str, Any]) -> dict[str, Any]:
     """For each industry, which of the skills it wants appear in the fact bank."""
     facts = _claimable_facts()
     result = {}
@@ -69,7 +69,7 @@ def skills(promote: dict) -> dict:
     return result
 
 
-def view() -> dict:
+def view() -> dict[str, Any]:
     promote = tomllib.loads(_read()).get("promote") or {}
     return {"version": _version(promote), "promote": promote, "skills": skills(promote)}
 
@@ -102,7 +102,7 @@ def _pattern(value, what: str) -> str:
     return value
 
 
-def _list(value, what: str) -> list:
+def _list(value, what: str) -> list[Any]:
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > MAX_ITEMS:
@@ -126,14 +126,14 @@ def _codes(value, what: str) -> list[str]:
     return codes
 
 
-def _unique(names: list, what: str) -> None:
+def _unique(names: list[str], what: str) -> None:
     lowered = [n.lower() for n in names]
     for name, low in zip(names, lowered, strict=True):
         if lowered.count(low) > 1:
             raise ValueError(f"{what}: '{name}' is listed twice.")
 
 
-def _named_item(raw, what: str, with_points: bool = False) -> dict:
+def _named_item(raw, what: str, with_points: bool = False) -> dict[str, Any]:
     """A city or a wanted skill: a name, with a pattern and points if they were given."""
     if not isinstance(raw, dict):
         raise ValueError(f"{what}: that isn't a valid entry.")
@@ -146,7 +146,7 @@ def _named_item(raw, what: str, with_points: bool = False) -> dict:
     return item
 
 
-def validate(raw) -> dict:
+def validate(raw) -> dict[str, Any]:
     """Turn what the form sent into a clean section, or say what's wrong with it."""
     if not isinstance(raw, dict):
         raise ValueError("Nothing to save.")
@@ -197,7 +197,7 @@ def _regex(value: str) -> str:
     return _text(value) if "'" in value else f"'{value}'"
 
 
-def _inline(item: dict) -> str:
+def _inline(item: dict[str, Any]) -> str:
     parts = [f"name = {_text(item['name'])}"]
     if "points" in item:
         parts.append(f"points = {item['points']}")
@@ -206,11 +206,11 @@ def _inline(item: dict) -> str:
     return "{ " + ", ".join(parts) + " }"
 
 
-def _inline_list(items: list) -> list:
+def _inline_list(items: list[Any]) -> list[str]:
     return [f"  {_inline(item)}," for item in items]
 
 
-def render(promote: dict) -> str:
+def render(promote: dict[str, Any]) -> str:
     lines = [
         "[promote]",
         f"city_points = {promote['city_points']}       # Each list counts once, at its best match.",
@@ -261,7 +261,7 @@ def _and(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else "".join(items)
 
 
-def unkept(promote: dict) -> list[str]:
+def unkept(promote: dict[str, Any]) -> list[str]:
     """The settings in [promote] that a save from the form would drop, as they'd be found in search.toml, such as
     "[promote.extra]" or "points on the skill Firmware"."""
     lost = []
@@ -326,7 +326,7 @@ def _write(path, text: str) -> None:
             time.sleep(0.1)
 
 
-def save(body: dict) -> dict:
+def save(body: dict[str, Any]) -> dict[str, Any]:
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so settings can't be saved. Point PYRITE_HOME at your own workspace to change them.")
     with _lock:

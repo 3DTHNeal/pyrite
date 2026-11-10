@@ -6,6 +6,7 @@ import sqlite3
 import tomllib
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 CODE_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_ROOT = (CODE_ROOT / "example").resolve()
@@ -293,7 +294,7 @@ def _is_number(value) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def config_problems(cfg: dict) -> list[str]:
+def config_problems(cfg: dict[str, Any]) -> list[str]:
     """Settings of the wrong kind, each as a sentence naming it: a number written as text, a model or effort under
     [claude] that Claude Code wouldn't take, or a [scoring] list whose entries aren't the [pattern, points] pairs it
     needs."""
@@ -373,7 +374,7 @@ def _relative(path: Path) -> str:
         return str(path)
 
 
-def read_config(path: Path) -> dict:
+def read_config(path: Path) -> dict[str, Any]:
     """A search.toml, read. A byte-order mark is skipped, since Windows PowerShell 5.1 writes one. A file that isn't
     valid TOML raises ConfigError naming the line, such as "profile/search.toml line 28: Expected '=' after a key"."""
     try:
@@ -387,7 +388,7 @@ def read_config(path: Path) -> dict:
         raise ConfigError(f"{where}: {why}. Fix that line and try again.") from None
 
 
-def load_config() -> dict:
+def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         raise SystemExit(f"There's no {CONFIG_PATH}. Copy example/profile/search.toml there, or make a new workspace with "
                          "`pyrite init ../my-job-search --name \"Your Name\"`, then run `pyrite doctor`.")
@@ -613,7 +614,7 @@ def freeze_sent(conn, job_id: int, source: Path | None = None) -> dict[str, str]
     return fingerprints
 
 
-def _recorded(job, column: str) -> dict:
+def _recorded(job, column: str) -> dict[str, Any]:
     return json.loads(job[column] or "{}") if column in job.keys() else {}  # noqa: SIM118  sqlite3.Row has no __contains__ for names.
 
 
@@ -702,7 +703,7 @@ def set_status(conn, job_id: int, status: str, note: str = "", follow_up_days: i
         raise ValueError(f"unknown status {status!r}")
     job = get_job(conn, job_id)
     ts = now()
-    fields: dict = {"status": status, "status_changed_at": ts}
+    fields: dict[str, Any] = {"status": status, "status_changed_at": ts}
 
     if status == "ready" and not job["ready_at"]:
         fields["ready_at"] = ts
@@ -767,7 +768,7 @@ def outreach(conn) -> set[int]:
     return {row[0] for row in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (REACHED_OUT,))}
 
 
-def possible_replies(conn) -> dict[int, dict]:
+def possible_replies(conn) -> dict[int, dict[str, Any]]:
     """Detected mail you haven't dealt with yet, by job. Any status update or a dismissal settles it."""
     settled = (*STATUSES, REPLY_DISMISSED)
     marks = ", ".join("?" * len(settled))
@@ -778,7 +779,7 @@ def possible_replies(conn) -> dict[int, dict]:
             ORDER BY id""",
         (REPLY_DETECTED, *settled),
     ).fetchall()
-    flags: dict[int, dict] = {}
+    flags: dict[int, dict[str, Any]] = {}
     for row in rows:
         count = flags.get(row["job_id"], {}).get("count", 0) + 1
         flags[row["job_id"]] = {"detail": row["detail"], "count": count}
@@ -797,7 +798,7 @@ def fix_attempts(conn) -> dict[int, int]:
     return {row["job_id"]: row["tries"] for row in rows}
 
 
-def job_dict(row: sqlite3.Row, include_description: bool = False) -> dict:
+def job_dict(row: sqlite3.Row, include_description: bool = False) -> dict[str, Any]:
     data = dict(row)
     if not include_description:
         data.pop("description", None)

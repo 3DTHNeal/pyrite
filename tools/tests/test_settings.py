@@ -11,6 +11,7 @@ import urllib.request
 from datetime import date
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 from support import CFG
 
@@ -225,7 +226,7 @@ class HowPyriteRuns(SettingsBase):
     def save(self, **values):
         return options.save({"version": options.view()["version"], "values": {name.replace("__", "."): value for name, value in values.items()}})
 
-    def shown(self, name: str) -> dict:
+    def shown(self, name: str) -> dict[str, Any]:
         return next(field for section in options.view()["sections"] for panel in section["panels"]
                     for field in panel["fields"] if field["id"] == name)
 

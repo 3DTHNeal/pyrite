@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 from . import store, tomledit
 
@@ -105,7 +106,7 @@ def _named(text: str, old: str, name: str) -> str:
     return re.sub(rf"^(# )?{re.escape(old)}$", lambda m: f"{m.group(1) or ''}{name}", text, flags=re.M)
 
 
-def _setting(cfg: dict, table: str) -> dict:
+def _setting(cfg: dict[str, Any], table: str) -> dict[str, Any]:
     for part in table.split("."):
         cfg = cfg.get(part, {}) if isinstance(cfg, dict) else {}
     return cfg if isinstance(cfg, dict) else {}
@@ -163,7 +164,7 @@ def _copy_example(profile: Path, name: str) -> None:
         path.write_text(_named(path.read_text(encoding="utf-8"), example_name, name), encoding="utf-8")
 
 
-def _git(folder: Path, *args: str) -> subprocess.CompletedProcess:
+def _git(folder: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", "-C", str(folder), *args], capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
 
 
