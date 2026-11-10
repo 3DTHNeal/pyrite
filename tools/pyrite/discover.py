@@ -601,7 +601,8 @@ def rescore(conn, cfg=None) -> dict:
 
     Each one that passes gets its score and reasons again. One that no longer passes is dropped and remembered as
     rejected, unless you've acted on it: then it's left as it was and counted as held. `removed` names the dropped ones,
-    since the record of each is gone. Jobs past new, and ones you added or imported, keep the score they were decided on.
+    since the record of each is gone. A posting you added is scored again too, and never dropped. Jobs past new, and
+    ones you imported, keep the score they were decided on.
     Records that the prospects now have this code's scoring, so the next sweep doesn't do it again.
     """
     cfg = cfg or load_config()
@@ -636,6 +637,15 @@ def rescore(conn, cfg=None) -> dict:
             )
             dropped += 1
             removed.append(f"{row['company']}: {row['title']} ({reason.replace('_', ' ')})")
+    for row in conn.execute("SELECT * FROM jobs WHERE status = 'new' AND source_key = 'manual'").fetchall():
+        verdict = scoring.evaluate(row["title"], row["location"], row["workplace"], row["description"], cfg, row["company"],
+                                   added=True)
+        conn.execute(
+            "UPDATE jobs SET score = ?, score_reasons = ?, track = ?, flags = ?, location_kind = ? WHERE id = ?",
+            (verdict.score, json.dumps(verdict.reasons), verdict.track or scoring.ADDED_TRACK, json.dumps(verdict.flags),
+             verdict.location_kind, row["id"]),
+        )
+        kept += 1
     set_meta(conn, SCORING_VERSION, str(scoring.VERSION))
     conn.commit()
     return {"kept": kept, "dropped": dropped, "held": held, "removed": removed}

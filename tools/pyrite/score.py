@@ -387,25 +387,42 @@ def _matched_words(found: re.Match) -> str:
     return " ".join(text[start:end].split()).lower()[:40]
 
 
-def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict, company: str = "") -> Verdict:
+# The location kind of a posting kept though it's outside your area, where a board's posting would be "out" and dropped.
+ELSEWHERE = "elsewhere"
+# The track shown for a posting you added whose title matches none of yours.
+ADDED_TRACK = "Added by you"
+
+
+def evaluate(title: str, location: str, workplace: str, description: str, cfg: dict, company: str = "",
+             added: bool = False) -> Verdict:
+    """Whether a posting passes the filters, and its score with the reasons for it.
+
+    `added` is for a posting you added yourself, which is never refused. A title no track matches and a place outside
+    your area each score nothing and say so, where a board's posting would be dropped, and `min_score` isn't applied.
+    The rest is scored as usual, so the score still says how the posting compares.
+    """
     matched = match_track(title, cfg, {"company": company, "description": description})
-    if not matched:
+    if not matched and not added:
         return Verdict(False, "title")
-    track, level_points = matched
+    track, level_points = matched or ("", {"top": 10, "mid": 5}.get(level(title, cfg), 0))
 
     kind = classify_location(location, workplace, cfg)
-    if kind == "out":
+    if kind == "out" and not added:
         return Verdict(False, "location", track=track)
 
-    reasons = [f"{track} title +25"]
-    score = 25
+    reasons = [f"{track} title +25"] if track else ["no track for this title +0"]
+    score = 25 if track else 0
     if level_points:
         score += level_points
         reasons.append(f"seniority +{level_points}")
 
-    location_points = {"local": 15, "remote": 10, "unknown": 3}[kind]
-    score += location_points
-    reasons.append(f"{kind} +{location_points}")
+    if kind == "out":
+        kind = ELSEWHERE
+        reasons.append("outside your area +0")
+    else:
+        location_points = {"local": 15, "remote": 10, "unknown": 3}[kind]
+        score += location_points
+        reasons.append(f"{kind} +{location_points}")
 
     body = f"{title}\n{description}"
     keyword_points = 0
@@ -428,6 +445,6 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
             reasons.append(f"{label.lower()} -{penalty}")
 
     score = max(0, min(100, score))
-    if score < cfg["run"]["min_score"]:
+    if score < cfg["run"]["min_score"] and not added:
         return Verdict(False, "score", score=score, track=track, location_kind=kind)
     return Verdict(True, "", score, track, kind, reasons, flags)

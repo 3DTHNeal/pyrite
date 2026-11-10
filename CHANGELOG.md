@@ -48,6 +48,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - **Got it** on a job whose folder changed after sending, for a folder you reworked on purpose. It stops the warning for the files as they are now, and the warning comes back if they change again. The sent copies stay the record.
 - On a terminal, `pyrite discover`, `rescore`, `queue`, `job`, `check`, `finish`, `fill` and `usage` say what they found in a few lines of words, such as how many postings a pan read, how many were new and why the rest were filtered out. `--json` prints the JSON as before, and so does any run whose output goes to a file or another program, so the daily run, scheduled pans and scripts see no change. `pyrite sources` takes `--json` too.
 - A logo and icons. The dashboard has a favicon, and a pixel-art pyrite crystal beside its title that glints now and then and throws sparks while a board check, Claude run or tailoring batch is going. With reduced motion turned on, it holds still. Each stage of **Where they stand** has an icon from a fire assay, from the gold pan for prospects to the cupel's gold bead for an offer. `art/icons/build.py` draws them all.
+- **Add a posting** reads the posting from its link. Paste the link and the company, title, location and description boxes you've left empty are filled from the page, for you to check before adding. A page behind a sign-in, or one built only in the browser, says it can't be read. Only public web addresses are read, never one on your own computer or network. `pyrite add --url` reads the link too when you give no `--description-file`.
 
 ### Changed
 
@@ -205,6 +206,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 - A fill sheet made from a draft the assay hasn't passed, or whose pass no longer covers it, is still written, but it says at the top that its role text hasn't passed the assay and why, and so do the job's history and `pyrite fill`. `pyrite fill <folder>` says no pass was looked up.
 - Prospects says `1 posting`, not `1 postings`.
 - At about 1000px wide, Prospects' **Tailor** and **Pass** stay in view at the right edge instead of scrolling off it.
+- A posting you add yourself that a filter would refuse no longer shows a score of 0. It's scored like any other, with nothing for the part that failed: **no track for this title +0** or **outside your area +0** in **Why it scored**. Its pay is read from its text. `pyrite rescore` scores the ones you added again, and never drops one.
 
 ### Security
 

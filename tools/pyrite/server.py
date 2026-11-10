@@ -52,6 +52,7 @@ from . import (
 from . import score as scoring
 from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
+from .sources import find_comp
 from .store import (
     DEFAULT_FIX_ATTEMPTS,
     IS_EXAMPLE,
@@ -183,14 +184,15 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     ).fetchone()
     if existing:
         return existing["id"]
-    verdict = scoring.evaluate(title, location, "", description, {**cfg, "run": {**cfg["run"], "min_score": 0}}, company)
+    # Scored in full even where a filter would refuse it, so the score says how it compares rather than a flat 0.
+    verdict = scoring.evaluate(title, location, "", description, cfg, company, added=True)
     ts = now()
     cursor = conn.execute(
         """INSERT INTO jobs (source_key, source_id, company, title, location, location_kind, url, description, comp,
                first_seen, last_seen, score, score_reasons, track, flags, status, status_changed_at, priority)
            VALUES ('manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, 1)""",
-        (source_id, company, title, location, verdict.location_kind or "unknown", url, description, "", ts, ts,
-         verdict.score, json.dumps(verdict.reasons or ["Added by you"]), verdict.track or "Added by you",
+        (source_id, company, title, location, verdict.location_kind, url, description, find_comp(description), ts, ts,
+         verdict.score, json.dumps(verdict.reasons), verdict.track or scoring.ADDED_TRACK,
          json.dumps(verdict.flags), ts),
     )
     log_event(conn, cursor.lastrowid, "found", "Added by you")
