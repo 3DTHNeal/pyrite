@@ -1995,6 +1995,8 @@ def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
 # The "**Emphasis by track:**" bullet in run-notes.md, and one track's line under it: "  - *AI systems:* the agents lead."
 EMPHASIS = re.compile(r"(?P<indent>[ \t]*)[-*][ \t]+\*\*Emphasis by track:?\*\*:?")
 EMPHASIS_LINE = re.compile(r"(?P<lead>[ \t]+[-*][ \t]+)\*(?P<name>[^*\r\n]+?):?\*:?[ \t]*(?P<text>.*)")
+# The "**Roles so far:**" bullet in run-notes.md, prose about the kinds of role you've gone for.
+ROLES_SO_FAR = re.compile(r"(?P<head>(?P<indent>[ \t]*)[-*][ \t]+\*\*Roles so far:?\*\*:?)(?P<text>.*)")
 # What [scoring] lists the section edits, as it names them. Each is matched as whole words, in any case.
 TITLE_LISTS = {"level_top": "Top-level words", "level_mid": "Senior words", "exclude_titles": "Never these titles"}
 MAX_POINTS = 100
@@ -2116,6 +2118,71 @@ def _set_emphasis(text: str, kept: list[tuple[str | None, str, str | None]], rem
     return doc.render(), count
 
 
+def _roles_so_far(text: str) -> dict[str, Any]:
+    """The Roles so far bullet in run-notes.md: its line, its text, and how many lines sit under it, which the section
+    leaves as they are."""
+    doc = factsdoc.Doc(text)
+    for index in range(len(doc.lines)):
+        match = ROLES_SO_FAR.fullmatch(doc.bare(index))
+        if not match:
+            continue
+        end = index + 1
+        while end < len(doc.lines) and doc.bare(end).strip() and \
+                len(doc.bare(end)) - len(doc.bare(end).lstrip()) > len(match["indent"]):
+            end += 1
+        return {"line": index, "text": match["text"].strip(), "more": end - index - 1}
+    return {"line": None, "text": "", "more": 0}
+
+
+def _roles_so_far_set(text: str, want: str) -> tuple[str, int]:
+    """run-notes.md with the Roles so far bullet saying `want`, and whether that's a change. The bullet is added above
+    Emphasis by track if it isn't there, and emptied rather than taken out, so the daily run still sees where it goes.
+    Its text unchanged leaves the file exactly as it was."""
+    found = _roles_so_far(text)
+    if want == found["text"]:
+        return text, 0
+    doc = factsdoc.Doc(text)
+    if found["line"] is not None:
+        match = ROLES_SO_FAR.fullmatch(doc.bare(found["line"]))
+        assert match is not None  # It was found by this pattern.
+        doc.set_line(found["line"], match["head"] + (f" {want}" if want else ""))
+    elif not text.strip():
+        return f"# Run notes\n\n- **Roles so far:** {want}\n", 1
+    else:
+        at, indent = len(doc.lines), ""
+        line = _emphasis(text)["line"]
+        heading = EMPHASIS.match(doc.bare(line)) if line is not None else None
+        if heading:
+            at, indent = line, heading["indent"]
+        doc.insert(at, [f"{indent}- **Roles so far:** {want}"])
+    return doc.render(), 1
+
+
+def _track_industry_names(cfg: dict[str, Any]) -> list[str]:
+    """The industries a role type can be limited to: the names under [[promote.industry]], which Settings › Cities and
+    industries edits. The scorer matches a track's industries to these exactly."""
+    found = _table(cfg, "promote").get("industry")
+    tables = found if isinstance(found, list) else []
+    return list(dict.fromkeys(str(i["name"]) for i in tables if isinstance(i, dict) and i.get("name")))
+
+
+def _track_industries(raws, before: list[str], known: list[str]) -> list[str]:
+    """The industries a role type asks for, each spelled as it is under [[promote.industry]]. A name the track already
+    has stays even if no industry is called that, so an unchanged role type saves unchanged; the notes point it out."""
+    names: list[str] = []
+    for value in (_one_line(raw, "An industry") for raw in _list(raws, "Industries")):
+        if value and value not in before:
+            match = next((name for name in known if name.lower() == value.lower()), None)
+            if match is None:
+                raise ValueError(f"“{value}” isn't an industry under Settings › Cities and industries. "
+                                 + (f"Pick one of {', '.join(known)}, or add it there first." if known
+                                    else "Add it there first, then pick it here."))
+            value = match
+        if value:
+            names.append(value)
+    return list(dict.fromkeys(names))
+
+
 def _track_entries(text: str, tracks: list[Any]) -> list[dict[str, str]]:
     """Each [[track]] in search.toml as written: its header line, its keys, and the comment lines just above it, which
     are about it. The first one's comments are about every track, so they aren't its own."""
@@ -2141,11 +2208,11 @@ def _track_entries(text: str, tracks: list[Any]) -> list[dict[str, str]]:
 
 def _track_body(body: str, old: dict[str, Any] | None, new: dict[str, Any]) -> str:
     """A [[track]]'s keys with the form's changes made a key at a time, read as a file of their own, so comments and
-    keys this section doesn't edit, such as `industries`, stay as they were."""
+    keys this section doesn't edit stay as they were."""
     was = old or {}
     if new["name"] != was.get("name"):
         body = tomledit.set_value(body, (), "name", new["name"])
-    for key, literal in (("titles", False), ("title", True)):
+    for key, literal in (("titles", False), ("title", True), ("industries", False)):
         before, want = _strings(was.get(key)), new[key]
         if want == before:
             continue
@@ -2161,8 +2228,9 @@ def _track_body(body: str, old: dict[str, Any] | None, new: dict[str, Any]) -> s
     return body
 
 
-def _track_form(raws, old_tracks: list[Any]) -> list[dict[str, Any]]:
-    """The role types the form asks for, in order, each checked. A new one left blank is left out."""
+def _track_form(raws, old_tracks: list[Any], industries: list[str]) -> list[dict[str, Any]]:
+    """The role types the form asks for, in order, each checked. A new one left blank is left out. A role type sent
+    without `industries` keeps the ones it has; `industries` are the names it may pick from."""
     wanted: list[dict[str, Any]] = []
     seen: set[int] = set()
     names: set[str] = set()
@@ -2191,12 +2259,15 @@ def _track_form(raws, old_tracks: list[Any]) -> list[dict[str, Any]]:
         if not titles and not patterns:
             raise ValueError(f"{name} needs at least one job title, or it takes no postings at all.")
         emphasis = raw.get("emphasis")
+        had = _strings(old.get("industries"))
+        limited = _track_industries(raw["industries"], had, industries) if "industries" in raw else had
         if index is not None:
             seen.add(index)
         names.add(name.lower())
         wanted.append({
             "index": index, "name": name,
             "titles": _ordered(_strings(old.get("titles")), titles), "title": _ordered(before, patterns),
+            "industries": _ordered(had, limited),
             "needs_level": bool(raw.get("needs_level", old.get("needs_level", False))),
             "emphasis": None if emphasis is None else _one_line(emphasis, f"What {name} drafts lead with"),
         })
@@ -2210,7 +2281,7 @@ def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[
     """search.toml with [[track]] as the form has it, how many edits that is, the role types wanted, and the names of
     the ones taken out. A track that's unchanged and still next to the one before it is written back exactly as it was."""
     old_tracks = _tracks(cfg)
-    wanted = _track_form(raws, old_tracks)
+    wanted = _track_form(raws, old_tracks, _track_industry_names(cfg))
     kept = [w["index"] for w in wanted if w["index"] is not None]
     removed = [str(t.get("name", "")) for i, t in enumerate(old_tracks) if i not in kept and isinstance(t, dict)]
     count = len(removed) + sum(w["index"] is None for w in wanted) + (kept != sorted(kept))
@@ -2219,7 +2290,7 @@ def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[
             continue
         old = old_tracks[w["index"]]
         count += (w["name"] != old.get("name")) + (w["needs_level"] != bool(old.get("needs_level", False)))
-        count += len(set(w["titles"]) ^ set(_strings(old.get("titles")))) + len(set(w["title"]) ^ set(_strings(old.get("title"))))
+        count += sum(len(set(w[key]) ^ set(_strings(old.get(key)))) for key in ("titles", "title", "industries"))
     if not count:
         return text, 0, wanted, removed
     entries = _track_entries(text, old_tracks)
@@ -2238,7 +2309,7 @@ def _write_tracks(text: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[
         pieces.append(lead + entry["header"] + _track_body(entry["body"], old, w))
         track = dict(old or {})
         track["name"] = w["name"]
-        for key in ("titles", "title"):
+        for key in ("titles", "title", "industries"):
             if w[key] != _strings(track.get(key)):
                 if w[key]:
                     track[key] = w[key]
@@ -2337,7 +2408,8 @@ def _prospects(before: dict[str, Any], cfg: dict[str, Any], changed: bool) -> di
 
 
 def _roles_view(cfg: dict[str, Any], texts: dict[str, str]) -> dict[str, Any]:
-    """The role types and [scoring] lists as the section edits them, with each track's emphasis from run-notes.md."""
+    """The role types and [scoring] lists as the section edits them, with each track's emphasis and the Roles so far
+    line from run-notes.md, and the industries a role type can be limited to."""
     found = _emphasis(texts["run_notes"])
     emphasis = found["tracks"]
     scoring = _table(cfg, "scoring")
@@ -2356,6 +2428,8 @@ def _roles_view(cfg: dict[str, Any], texts: dict[str, str]) -> dict[str, Any]:
         "flags": [list(row) for row in scoring.get("flags", []) if isinstance(row, list)],
         "min_score": (cfg.get("run") or {}).get("min_score", 0),
         "emphasis_found": found["line"] is not None,
+        "industry_names": _track_industry_names(cfg),
+        "roles_so_far": _roles_so_far(texts["run_notes"]),
     }
 
 
@@ -2412,6 +2486,9 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
         moves = [(old_names.get(w["index"]) if w["index"] is not None else None, w["name"], w["emphasis"]) for w in wanted]
         out["run_notes"], said = _set_emphasis(texts["run_notes"], moves, removed)
         count += said
+    if "roles_so_far" in edits:
+        out["run_notes"], said = _roles_so_far_set(out["run_notes"], _one_line(edits["roles_so_far"], "Roles so far"))
+        count += said
     for key, label in TITLE_LISTS.items():
         if key not in edits:
             continue
@@ -2447,6 +2524,9 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
                 notes.append(f"“{title}” has {blocked!r} in it, which is under Never these titles, so {w['name']} will never take it.")
             elif earlier:
                 notes.append(f"{earlier} takes “{title}” first, since a title goes to the first role type that matches it.")
+    for track, name, same in score.unknown_industries(new_cfg):
+        notes.append(f"“{name}” isn't an industry under Settings › Cities and industries"
+                     f"{f', which has “{same}”' if same else ''}, so {track} takes no posting for it.")
     levels = _with_scoring(new_cfg)["scoring"]
     if any(w["needs_level"] for w in wanted) and not levels["level_top"] and not levels["level_mid"]:
         notes.append("A role type that needs a senior title takes nothing while there are no top-level or senior words.")
