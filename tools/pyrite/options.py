@@ -214,13 +214,18 @@ def save(body: dict[str, Any]) -> dict[str, Any]:
     return view()
 
 
-def status(cfg: dict[str, Any], fresh: bool = False) -> dict[str, Any]:
-    """Whether Claude Code is signed in and the mail reader is working, for the top of their sections, each as
-    {"ok", "what", "fix"}. Claude Code's answer is kept for a minute unless `fresh` asks again."""
+def claude_status(fresh: bool = False) -> dict[str, Any]:
+    """Whether Claude Code is here and signed in, as {"ok", "what", "fix"}. The answer is kept for a minute unless
+    `fresh` asks again, since asking takes a second or two."""
     global _claude_seen
     with _status_lock:
         if fresh or _claude_seen is None or time.monotonic() - _claude_seen[0] > CLAUDE_CHECK_SECONDS:
             _claude_seen = (time.monotonic(), doctor.claude_check())
-        claude = _claude_seen[1]
+        return _claude_seen[1]
+
+
+def status(cfg: dict[str, Any], fresh: bool = False) -> dict[str, Any]:
+    """Whether Claude Code is signed in and the mail reader is working, for the top of their sections, each as
+    {"ok", "what", "fix"}. Claude Code's answer is kept for a minute unless `fresh` asks again."""
     source = str((cfg.get("inbox") or {}).get("source", "imap"))
-    return {"claude": claude, "mail": {**doctor.mail_check(cfg), "last_ok": doctor.last_mail_check(source)[0]}}
+    return {"claude": claude_status(fresh), "mail": {**doctor.mail_check(cfg), "last_ok": doctor.last_mail_check(source)[0]}}

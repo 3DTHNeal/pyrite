@@ -79,6 +79,8 @@ GITIGNORE = """\
 data/*.db-wal
 data/*.db-shm
 data/*.db-journal
+# Copies of it the Profile tab's Workspace and backup section makes. The repository keeps its history already.
+data/backups/
 # The code the dashboard is waiting for, which lasts 2 minutes.
 data/confirm-code.json
 # The browser profile `pyrite autofill` uses, which holds your sign-ins to Workday sites.
