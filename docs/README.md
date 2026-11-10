@@ -6,9 +6,9 @@ How to set Pyrite up and use it day to day. The [project README](../README.md) s
 
 | Page | What's in it |
 |---|---|
-| [Setting up](setup.md) | The venv, your workspace and its files, `init`, `doctor`, and the pre-push check for a public fork |
+| [Setting up](setup.md) | The guided way from `Pyrite.cmd`, making your workspace from the dashboard or with `init`, its files, `doctor`, and the pre-push check for a public fork |
 | [Writing the documents](documents.md) | The form a master resume and letter are written in, importing the resume you have, and building an application by hand |
-| [The dashboard](dashboard.md) | Starting it, what its parts are called, the stage icons, what each colour means, and the buttons that start a run |
+| [The dashboard](dashboard.md) | Starting it, what its parts are called, the stage icons, what each colour means, the to-do list, the job panel, keyboard keys, the buttons that start a run, Settings and updating Pyrite |
 
 ## Day to day
 
@@ -16,16 +16,16 @@ How to set Pyrite up and use it day to day. The [project README](../README.md) s
 |---|---|
 | [Finding and ranking postings](prospects.md) | Watching companies, going through prospects, new listings and ghost jobs, pay and rarity, preferred cities and industries, and the Industries tab |
 | [The assay](assay.md) | What the fact check blocks and warns about, what it can miss, and refreshing a resume |
-| [Applying and after](applying.md) | Deadlines, filling a Workday form, what **I applied** does, reaching out, postings that come down, and interview prep |
-| [Your profile and facts](profile.md) | The Profile and Facts tabs, History and **Put back**, the gaps your drafts keep raising, and the code a loosening change asks for |
+| [Applying and after](applying.md) | Deadlines, researching how an employer works, filling a Workday form, what **I applied** does, reaching out, postings that come down, and interview prep |
+| [Your profile and facts](profile.md) | The Profile tab's sections, from your name and work history to the roles, places and companies you search for, **Rescore now**, History and **Put back**, the gaps your drafts keep raising, the Facts tab, and the code a loosening change asks for |
 
 ## Running by itself
 
 | Page | What's in it |
 |---|---|
-| [Scheduling and Claude runs](schedule.md) | The morning pan and the daily run, how the daily run is locked down, and what Claude usage counts |
+| [Scheduling and Claude runs](schedule.md) | The morning pan and the daily run, what the run judges and tailors and in what order, how it's locked down, a run stopped by a change to your profile, and what Claude usage counts |
 | [Reply detection](mail.md) | Reading Gmail through the connector or IMAP, what counts as a reply, and scam warnings |
-| [Common commands](commands.md) | `sweep`, `run`, `discover`, `sources`, `rescore`, `queue` and `gaps`, and their JSON output |
+| [Common commands](commands.md) | `sweep`, `run`, `discover`, `sources`, `rescore`, `queue`, `gaps`, `status` and `refresh`, their JSON output, and where every other command is covered |
 
 [Keeping an agent honest on hard data](technique.md) sets out the technique behind the assay as rules you could use on another agent, and shows how its catch rate is measured.
 

@@ -42,4 +42,30 @@ Commands use the Windows path `.venv/Scripts/python.exe`. Elsewhere, it's `.venv
 
 `--no` adds the gap under "Unsupported" (`--no "your words"` to word it), `--dismiss` stops asking about one that isn't a fact to settle, and `gaps forget <name>` asks about one again. Drafts you haven't sent that list an answered gap are flagged for rework on the dashboard.
 
+```bash
+.venv/Scripts/python.exe tools/pyrite.py status 42 rejected --note "Form email after the phone screen"
+```
+
+`status <id> <status>` moves a job as the dashboard's status buttons do, with an optional `--note` for its timeline: `new`, `shortlisted`, `applied`, `responded`, `interviewing`, `offer`, `rejected`, `ghosted`, `withdrawn`, `passed` or `closed`. `ready` and `needs_fix` aren't among them, since only the assay sets those, through `pyrite finish`. A job you've sent can't go back to `new` or `shortlisted`, where a run would rewrite the folder that records what you sent: `status <id> applied` reopens it as sent. The first `applied` does what **I applied** does: it schedules the follow-up and keeps a read-only copy of the documents in `sent/` ([After you apply](applying.md#after-you-apply)).
+
+```bash
+.venv/Scripts/python.exe tools/pyrite.py refresh 42
+```
+
+`refresh <id>` is **Refresh resume** from the command line: Claude rewrites that draft's resume, and it's kept only if it passes the assay ([Refreshing a resume](assay.md#refreshing-a-resume)).
+
+`pyrite help` lists every command, and `pyrite help <command>` explains one. The rest are covered where they're used:
+
+| Command | Covered in |
+|---|---|
+| `init`, `where`, `doctor`, `seed` | [Setting up](setup.md) |
+| `demo`, `check` | [The README](../README.md) |
+| `import-resume`, `folder`, `finish` | [Writing the documents](documents.md) |
+| `serve`, `open` | [The dashboard](dashboard.md) |
+| `add`, `skills`, `outlook` | [Finding and ranking postings](prospects.md) |
+| `culture`, `fill`, `autofill`, `sent`, `outreach`, `prep` | [Applying and after](applying.md) |
+| `code` | [Confirming with a code](profile.md#confirming-with-a-code) |
+| `triage`, `brief`, `usage` | [Scheduling and Claude runs](schedule.md) |
+| `inbox` | [Reply detection](mail.md) |
+
 On a terminal, `discover`, `rescore`, `queue`, `job`, `check`, `finish`, `fill`, `gaps` and `usage` say what they found in a few lines of words. Add `--json` for JSON instead, which is also what they print whenever their output goes to a file or another program, so a script or a scheduled run reads the same JSON as before. `sources` prints its table either way, and JSON with `--json`.

@@ -6,7 +6,7 @@ Commands use the Windows path `.venv/Scripts/python.exe`. Elsewhere, it's `.venv
 
 ## Adding companies
 
-Add a line under `[watch.*]` in `search.toml` if the careers page is on Greenhouse, Lever, Ashby or Workday, then run `pyrite sources` to confirm it responds. Employers with no public feed go under `[[manual_check]]`, which lists them on the dashboard's Sources tab. Use **Add a posting** for anything you find yourself, such as on LinkedIn.
+The easy way is **Companies to watch** on the Profile tab: paste a careers page address, and it works out the Greenhouse, Lever, Ashby or Workday board behind it, and **Test** reads the board once to show it answers. [Companies to watch](profile.md#companies-to-watch) has the details. By hand, add a line under `[watch.*]` in `search.toml`, then run `pyrite sources` to confirm it responds. Employers with no public feed go under **Check by hand**, `[[manual_check]]` in the file, which lists them on the dashboard's Sources tab. Use **Add a posting** for anything you find yourself, such as on LinkedIn.
 
 Paste the posting's link into **Add a posting** and Pyrite reads the page, then fills in the company, title, location and description boxes you've left empty. Check what it found before adding: a page that doesn't mark those up gives only its heading and its text, which can carry some of the site's own wording at the end. A page behind a sign-in, or one that only builds itself in the browser, can't be read, and the form says so: paste the description in yourself. Only public web addresses are read, never one on your own computer or network. `pyrite add --url` reads the link the same way when you give no `--description-file`.
 

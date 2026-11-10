@@ -572,10 +572,11 @@ def build_state(conn, cfg) -> dict[str, Any]:
             "SELECT kind, COUNT(DISTINCT job_id) FROM events WHERE ts > ? AND kind IN ('applied', 'passed') GROUP BY kind",
             (briefing["ts"],))}
     # The boards search.toml watches now, and the inbox. A board taken out of it isn't checked any more, so its last
-    # good read would otherwise stay on the list as working.
+    # good read would otherwise stay on the list as working. The demo's boards are made up, and the example's search.toml
+    # can't watch them without asking real boards for companies that don't exist, so the demo lists every one.
     watched = {f"{kind}:{ident}" for kind, ident, _ in discover._watchlist(cfg)}
     source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")
-                   if r["source_key"] in watched or r["source_key"].startswith("inbox:")]
+                   if IS_EXAMPLE or r["source_key"] in watched or r["source_key"].startswith("inbox:")]
     return {
         "jobs": jobs,
         "stats": stats,

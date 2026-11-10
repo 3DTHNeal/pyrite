@@ -67,7 +67,60 @@ Two buttons, under the status line at the top, start a run without waiting for t
 
 A third, **Tailor these now**, sits in the **Being tailored** column of the Pipeline board. It has Claude write every draft waiting there, stretch jobs included, without judging new postings and without the daily run's limit, and its result shows under the status line at the top. It uses your Claude plan, so it asks first. A draft that has used up its fix attempts is left alone; **Tailor this one first** on that job gives it another go.
 
-Each runs in the background, shows its progress in the status line while the crystal beside the name throws sparks, and refuses to start while one of its kind is already going. The Claude run and the tailoring batch also refuse to start while the other is going, since both write drafts. The demo starts none of them.
+Each runs in the background, shows its progress in the status line while the crystal beside the name throws sparks, and refuses to start while one of its kind is already going. The Claude run and the tailoring batch also refuse to start while the other is going, since both write drafts. The demo starts none of them. A run that stopped because a file under `profile/` changed while it wrote offers **I made this change** in the status line: [When your profile changes during a run](schedule.md#when-your-profile-changes-during-a-run) says what it does.
+
+## The to-do list
+
+**To do** lists what needs you, most urgent first, and each item opens its job. The key numbers beside its name each have a tooltip: **ready to send** counts only drafts whose posting is still up, and its tooltip says how many to check again and how many more came down. The Pipeline board still has every job at its stage.
+
+| Item | When it shows |
+|---|---|
+| **Finish setup** | Something in your workspace is still the example's or blank, the same findings as `pyrite doctor` |
+| **Possible scam** | A posting you haven't sent has a scam's tells, or mail about hiring has them ([Reply detection](mail.md)) |
+| **Possible reply** | Mail that looks like a reply to an application. Only your buttons change its status |
+| **Act now** | You're interviewing or have an offer, and the date on its **Next step** has come |
+| **Follow up** | You applied or heard back, and the date on its **Next step** has come, 7 days after applying unless you changed it (`follow_up_days`) |
+| **Send** | A draft passed the assay and its posting is still up. The five best, those closing within two days first |
+| **Check again** | A ready draft's files changed after the assay passed it ([The assay](assay.md)) |
+| **Closing soon** | A prospect or a job being tailored closes within `decide_days`: tailor it or pass ([Deadlines](applying.md#deadlines-and-what-to-check-before-applying)) |
+| **Blocked** | The draft failed the assay. It says when the daily run has stopped retrying it |
+| **Posting down** | The posting of a job you sent came down, with when it will count as ghosted |
+| **Rework** | A draft you haven't sent was written before you answered one of its gaps |
+| **Gone quiet** | Nothing heard `quiet_days` after applying: mark it ghosted, or send one last note |
+| **New listing** | The three best postings from the last 7 days that were never reposted |
+| **Reach out** | Applications one to three days old with no note to the hiring manager logged, as one item |
+| **Gaps to answer** | A requirement has come up as a gap in three applications or more |
+
+The tag colours follow the table above. The field report from the last Claude run sits at the top, and folds away once you've applied or passed on anything since it was written.
+
+## The job panel
+
+Clicking a job anywhere opens its panel at the side. The header has its stage icon and its number, which the `pyrite` commands take, and the address ends in `#job-` and that number while it's open. The panel runs in the order you'd apply:
+
+- **Before you apply**, when there's something to settle, then a note if the posting came down or may be a ghost job.
+- The posting's link, the files to upload, and **Fill Workday form** where it applies ([Applying and after](applying.md)).
+- What came back, a frozen copy of what you sent, files changed since the assay passed them, and a draft the run has stopped retrying.
+- The status buttons for this stage, such as **Tailor this one first**, **Pass**, **I applied**, **Got a reply**, **Interview**, **Offer**, **Rejected**, **Ghosted**, **Withdraw** or **Reopen**, with an optional note to go with the change.
+- The assay's result, then **Rewrite or prepare**: **Refresh resume**, **Interview prep** and **Make fill sheet**, where each applies.
+- Tags such as **New** or **Reposted**, then the facts: status, location, pay, track, fit and its reason, and when it was found, posted, reposted, applied and heard back.
+- **What Pyrite read into it**: pay against similar roles, rarity and asks nobody could meet ([Pay, rarity and asks nobody could meet](prospects.md#pay-rarity-and-asks-nobody-could-meet)).
+- **Next step**, a line and a date of your own. The date is what **Follow up** and **Act now** go by, and a rescore keeps a job that has one.
+- **Reaching out**, for the note to the hiring manager ([After you apply](applying.md#after-you-apply)).
+- **Your notes**, free text kept in the database, saved with **Save notes**. A note keeps the job through a rescore too. A note or next step you haven't saved says **Not saved yet**, and stays in its box if you close the panel and come back, until the page is reloaded.
+- **Fit and interview notes**, the job's `notes.md` as tailoring wrote it.
+- **Employer**: the research on how the employer works ([How the employer works](applying.md#how-the-employer-works)).
+- **Why it scored** and **Why its priority is**, the points behind its place in the list.
+- The posting's text, then its **Timeline**: every change of status, run, check and note, newest first.
+
+## Keys
+
+| Key | Where | Does |
+|---|---|---|
+| **/** | Anywhere but a text box | Opens Prospects with its search box ready to type in |
+| **J** and **K** | A job's panel | The next and previous job in the list you opened it from |
+| **T** and **P** | The panel of a job nothing has been written for | Tailor this one first, or pass, then open the next |
+| **Esc** | A panel, or the status line's details | Closes it |
+| **Enter** | The box for a confirmation code | Confirms |
 
 ## Settings
 
@@ -75,7 +128,7 @@ Each runs in the background, shows its progress in the status line while the cry
 
 | Section | What it sets | In `search.toml` |
 |---|---|---|
-| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks and skill ages | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]` and `[skills]` |
+| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks, skill ages and employer research | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]`, `[skills]` and `[culture]` |
 | **Mail** | Whether replies are read over IMAP or through the Gmail connector, and how many days back | `[inbox]` `source` and `lookback_days` |
 | **Daily run** | How many postings are judged and resumes written each morning, how many tries a draft gets, and whether a cover letter is written | `[run]` `triage_per_day`, `tailor_per_day`, `fix_attempts` and `cover_letters` |
 | **Dashboard** | When the to-do list reminds you to follow up, calls an application ghosted or a deadline close, whether it reminds you to reach out, and whether it asks GitHub for updates | `[run]` `follow_up_days`, `quiet_days` and `decide_days`; `[dashboard]` `reach_out` and `check_updates` |
