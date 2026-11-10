@@ -42,6 +42,27 @@ class Draft:
     preview: dict[str, Any] = field(default_factory=dict)
 
 
+Drafter = Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], Draft]
+# Each section's drafter, by its id in profile.STEPS. A drafter adds itself with @drafter where it's defined, so a new
+# section changes no shared line that another section's branch also changes.
+DRAFTERS: dict[str, Drafter] = {}
+
+
+def drafter(step: str) -> Callable[[Drafter], Drafter]:
+    """Register the function below as the drafter for the Profile section `step`. A second drafter for one section
+    stops Pyrite loading rather than quietly replacing the first, as two merged branches could otherwise do."""
+    if step not in profile.STEP_IDS:
+        raise RuntimeError(f"{step!r} isn't a Profile section, so it can't have a drafter.")
+
+    def register(func: Drafter) -> Drafter:
+        if step in DRAFTERS:
+            raise RuntimeError(f"Two drafters for the {step!r} section: {DRAFTERS[step].__name__} and {func.__name__}.")
+        DRAFTERS[step] = func
+        return func
+
+    return register
+
+
 def _one_line(value, what: str) -> str:
     if value is None:
         return ""
@@ -354,6 +375,7 @@ def fill_from_resume(reason: str) -> list[str]:
 
 # ---------- Name and contact ----------
 
+@drafter("basics")
 def _basics(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -503,6 +525,7 @@ def _section_end(doc: factsdoc.Doc, section: factsdoc.Section) -> int:
     return at
 
 
+@drafter("history")
 def _history(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -938,6 +961,7 @@ def _pattern(raw) -> str:
     return pattern
 
 
+@drafter("offlimits")
 def _offlimits(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -1021,6 +1045,7 @@ def _offlimits(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]
 
 # ---------- Skills and terms ----------
 
+@drafter("skills")
 def _skills(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     text = texts["terms"]
@@ -1168,6 +1193,7 @@ def _fact_notes(texts: dict[str, Any], cfg: dict[str, Any], facts: list[str]) ->
     return notes
 
 
+@drafter("achievements")
 def _achievements(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -1307,6 +1333,7 @@ def _assay(texts: dict[str, Any], cfg: dict[str, Any], key: str, kind: str) -> d
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}
 
 
+@drafter("masters")
 def _masters(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     count = 0
@@ -1375,6 +1402,7 @@ def _masters(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) 
 
 # ---------- Gaps to answer ----------
 
+@drafter("gaps")
 def _gap_answers(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     """Answers to the gaps that keep coming up, as lines in facts.md: a yes as a fact under the section you chose, and
     a no as a line under Unsupported. Leaving a question for later, or saying it doesn't apply, changes no file."""
@@ -1597,6 +1625,7 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
     return config, max(changed, 1)
 
 
+@drafter("companies")
 def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for.
     A pasted careers page address is read as the board it names, for the page to offer to add."""
@@ -1750,6 +1779,7 @@ def _market_notes(chosen: dict[str, str]) -> list[str]:
     return notes
 
 
+@drafter("where")
 def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     config = texts["config"]
@@ -2250,6 +2280,7 @@ def _set_rows(text: str, key: str, rows: list[list[Any]]) -> str:
     return new
 
 
+@drafter("roles")
 def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -2309,8 +2340,3 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
         "test": try_title(test, new_cfg) if test else None,
         "prospects": _prospects(cfg, new_cfg, changed),
     })
-
-
-DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
-            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "companies": _companies,
-            "where": _where, "roles": _roles}

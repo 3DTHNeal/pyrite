@@ -1,13 +1,16 @@
 """The Profile tab: changing one TOML setting without touching the rest, reading and writing facts.md without losing a
 byte, saving profile files together with their history, and the hub that shows each section and what needs you."""
+import ast
 import re
 import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import tomllib
 import unittest
 import unittest.mock as mock
+import urllib.request
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -609,12 +612,39 @@ class ToolsAndWorkspace(Profile):
 
 class PageScripts(unittest.TestCase):
     def test_every_script_the_page_loads_is_served_and_every_section_file_is_loaded(self):
-        page = (server.STATIC / "index.html").read_text(encoding="utf-8")
+        page = server.page().decode()
         loaded = re.findall(r'<script src="([^"]+)"', page)
+        self.assertEqual(loaded[0], "/static/profile.js")  # Each section registers itself with profile.js.
         self.assertEqual(loaded[-1], "/static/app.js")  # app.js starts the page, so everything else loads first.
         self.assertTrue(all(src in server.STATIC_FILES for src in loaded), loaded)
         sections = {f"/static/profile/{path.name}" for path in (server.STATIC / "profile").glob("*.js")}
         self.assertLessEqual(sections, set(loaded))
+        self.assertEqual(len(loaded), len(set(loaded)))
+        self.assertNotIn(server.SECTIONS_MARK, page)
+
+    def test_the_page_served_is_the_one_with_the_section_scripts(self):
+        httpd = server.make_server(0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/", timeout=5) as resp:
+                self.assertEqual(resp.read(), server.page())
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+class NoNameDefinedTwice(unittest.TestCase):
+    """Two branches can each add a function of the same name to one module and merge without a conflict. The second
+    then quietly replaces the first, as happened with two editors' _prospects in steps.py."""
+
+    def test_no_module_defines_a_top_level_function_or_class_twice(self):
+        for path in sorted((support.CODE_ROOT / "tools").rglob("*.py")):
+            seen: dict[str, int] = {}
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    with self.subTest(path=path.name, name=node.name):
+                        self.assertNotIn(node.name, seen, f"also defined on line {seen.get(node.name)}")
+                    seen[node.name] = node.lineno
 
 
 if __name__ == "__main__":
