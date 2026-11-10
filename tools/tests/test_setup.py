@@ -110,7 +110,8 @@ class MakingAWorkspace(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
-        self.base = Path(tmp.name)
+        # Resolved, as the real code folder is: macOS's /var is /private/var, and Windows can shorten a name to RUNNER~1.
+        self.base = Path(tmp.name).resolve()
         # A stand-in code folder inside the temporary one, so "../mine" lands beside it and never beside the real one.
         self.code = self.base / "pyrite"
         self.code.mkdir()
