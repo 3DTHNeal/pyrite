@@ -34,6 +34,7 @@ from . import (
     fill,
     gaps,
     launch,
+    link,
     mail,
     market,
     options,
@@ -119,6 +120,7 @@ MAX_NOTE = 2000  # The note that goes with a status change.
 MAX_NOTES = 5000  # Your notes on a job.
 MAX_NEXT_STEP = 300
 MAX_NAME = 200  # A company, title or location you add by hand.
+MAX_LINK = 2000  # A posting's web address. Anything longer was pasted into the wrong box.
 # A job's or an alert's number. Longer ones can't be one, and SQLite can't even look them up.
 JOB_ID = r"(\d{1,18})"
 # Tells this server from the one that replaces it after an update, so the page knows when to reload.
@@ -898,6 +900,9 @@ class Handler(BaseHTTPRequestHandler):
                 if known:
                     return self._json({"id": job_id, "existing": True, "status": known["status"]}, 200)
                 return self._json({"id": job_id}, 201)
+            if path == "/api/jobs/read":
+                # What the posting at a link says, so the Add a posting form can fill itself in. Nothing is saved.
+                return self._json(link.read(_text(body, "url", "The link", MAX_LINK)))
             if path == "/api/run":
                 tasks.start(conn, str(body.get("kind") or ""))
                 return self._json({"ok": True}, 202)
