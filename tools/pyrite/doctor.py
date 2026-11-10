@@ -14,8 +14,10 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from assay.factbank import uncommented
+
 from . import discover, factsdoc, inbox, score
-from .checks import listed_terms, uncommented, unenforced_claims
+from .checks import listed_terms, unenforced_claims
 from .claude_code import find_claude, signed_in
 from .store import DB_PATH, EXAMPLE_ROOT
 

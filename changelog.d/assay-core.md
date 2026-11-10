@@ -1,0 +1,3 @@
+### Changed
+
+- The assay's general checks are now a package of their own, `tools/assay`, that knows nothing about resumes, so another tool can build a fact checker from the same parts. What a draft passes or fails is unchanged. Neither `python tools/pyrite.py` nor an install made with `pip install -e .` needs anything done: both find the new package once you update. Two setups can't, and the `pyrite` command now says which applies and how to fix it, rather than stopping with a traceback: an editable install made in strict mode, which needs `pip install -e .` again, and another package named `assay` in the same environment, which loads in place of Pyrite's own.

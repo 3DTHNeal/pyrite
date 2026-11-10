@@ -31,7 +31,7 @@ The rules behind that, in the order a draft meets them:
 
 ### At the gate
 
-- **The judge has no model in it.** [`checks.py`](../tools/pyrite/checks.py) is patterns and set membership. There is nothing to persuade and nothing to inject. When it can't trace a claim to the fact bank, it blocks.
+- **The judge has no model in it.** The [`assay`](../tools/assay/__init__.py) package, and the resume rules [`checks.py`](../tools/pyrite/checks.py) adds to it, are patterns and set membership. There is nothing to persuade and nothing to inject. When it can't trace a claim to the fact bank, it blocks.
 - **The writer cannot reach the judge.** Claude gets no shell and no web access, and can't write to the facts or the rules. Only the assay can mark a draft ready: no command or button sets that by hand.
 - **Never weaken a failing check. Fix the draft.** A block comes back as a list of errors. The drafter may change its draft and nothing else, and the run's rules say so in those words.
 
@@ -101,3 +101,9 @@ It runs with the tests too, and fails if any count moves in either direction, so
 **What it can't do.** The assay reads words, not meaning. It checks that a number exists in the fact bank, not which claim the number belongs to, and a plain-prose invention with no number and no name passes. Recent work on numeric grounding binds each number to a structured claim and verifies it outside the model, as in [Proof-Carrying Numbers](https://arxiv.org/abs/2509.06902). Those limits are written down, and they are why a person reads every draft.
 
 **What would come next.** Report a false-alarm rate beside the catch rate. Have the drafter cite a fact for each number, so the gate can bind the two. Add a model reviewer as a second layer that can add a block and never remove one.
+
+## Using the gate in another tool
+
+The general half of the assay is a package of its own, [`tools/assay`](../tools/assay/__init__.py). It knows nothing about resumes: each function takes the text to judge and the evidence to judge it by, and returns what it found. Number scales, confidential names, denials, links, specialist terms and the sealed record are all there. What's particular to a resume, such as the name line, roles under the right employer, page limits and a letter's requisition number, stays in `checks.py`, which is built on it.
+
+A test, `tools/tests/test_assay_core.py`, keeps it that way. The package may import only itself and a short list of the standard library, so it can't start a program, reach the network or read a database, and it may not mention Pyrite. Another tool that needs truthful text can build its own gate from the same parts and add its own rules beside them.

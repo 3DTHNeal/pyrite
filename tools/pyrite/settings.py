@@ -15,7 +15,9 @@ import time
 import tomllib
 from typing import Any
 
-from . import checks, score, store
+from assay.factbank import claimable
+
+from . import score, store
 
 MAX_NAME = 80
 MAX_PATTERN = 300
@@ -49,7 +51,7 @@ def _claimable_facts() -> str:
     path = store.CONFIG_PATH.with_name("facts.md")
     if not path.exists():
         return ""
-    return checks.claimable(path.read_text(encoding="utf-8"))
+    return claimable(path.read_text(encoding="utf-8"))
 
 
 def skills(promote: dict[str, Any]) -> dict[str, Any]:
