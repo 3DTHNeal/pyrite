@@ -267,6 +267,47 @@ class NoCodesWhileSettingUp(unittest.TestCase):
         with self.assertRaises(confirm.CodeNeeded):
             confirm.require(self.change, self.current, self.based_on)
 
+    def test_the_guide_reads_its_progress_from_the_files(self):
+        # Nothing records which sections are done: they're read afresh, so leaving part way loses nothing.
+        self.assertIsNone(profile.progress())
+        workspace._start_setup(self.root)
+        required = [step["id"] for step in profile.STEPS if step["required"]]
+        unfinished = {step["id"]: (step["id"] not in ("history", "roles"), "") for step in profile.STEPS}
+        with mock.patch.object(profile, "needs", return_value=[]), mock.patch.object(profile, "_summaries", return_value=unfinished):
+            found = profile.view()["guide"]
+            self.assertEqual(profile.progress(), found)
+        self.assertEqual(found, {"active": True, "finished": False, "required": len(required), "set": len(required) - 2,
+                                 "left": ["history", "roles"], "next": "history"})
+        # An optional section not set doesn't hold setup up.
+        optional = next(step["id"] for step in profile.STEPS if not step["required"])
+        mostly = {step["id"]: (step["id"] != optional, "") for step in profile.STEPS}
+        with mock.patch.object(profile, "needs", return_value=[]), mock.patch.object(profile, "_summaries", return_value=mostly):
+            ended = profile.view()["guide"]
+            # Only the answer that ended setup says it finished, and after that there's no setup to show.
+            self.assertEqual(profile.view()["guide"], {**ended, "finished": False})
+            self.assertIsNone(profile.progress())
+        self.assertEqual((ended["active"], ended["finished"], ended["left"], ended["next"]), (False, True, [], None))
+
+    def test_a_required_section_that_needs_you_isnt_done(self):
+        workspace._start_setup(self.root)
+        finished = {step["id"]: (True, "") for step in profile.STEPS}
+        waiting = [{"severity": "warn", "title": "facts.md is still blank.", "detail": "", "step": "achievements"}]
+        with mock.patch.object(profile, "needs", return_value=waiting), mock.patch.object(profile, "_summaries", return_value=finished):
+            found = profile.view()["guide"]
+        self.assertEqual((found["active"], found["next"]), (True, "achievements"))
+        self.assertTrue(workspace.setting_up())
+
+    def test_a_blank_master_resume_isnt_set(self):
+        # A blank workspace has resume.md from the start, as a form with nothing in it, which setup can't count as done.
+        (self.root / "profile" / "resume.md").write_text("# \n\n## Experience\n\n<!-- Your roles go here. -->\n", encoding="utf-8")
+        masters = next(step for step in profile.view()["steps"] if step["id"] == "masters")
+        self.assertEqual((masters["status"] == "set", masters["summary"]), (False, "Still the blank form"))
+
+    def test_every_section_says_how_to_make_the_change_by_hand(self):
+        for step in profile.STEPS:
+            self.assertTrue(step.get("meanwhile"), step["id"])
+            self.assertNotIn("Until it's built", step["meanwhile"])
+
     def test_init_starts_a_workspace_in_setup(self):
         folder = self.root / "made"
         with mock.patch.object(store, "HOME_POINTER", self.root / "pointer"), mock.patch.dict(os.environ, {"PYRITE_HOME": ""}):

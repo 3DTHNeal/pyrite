@@ -332,6 +332,9 @@ function renderRail() {
   count("count-archive", closed, "", closedLine());
   const failing = state.sources.filter((s) => s.last_error).length;
   count("count-sources", failing, failing ? "bad" : "", failing ? `${plural(failing, "source")} failing` : null);
+  // While a new workspace is set up, Profile shows how many of its required sections are set.
+  profileRailCount(state.guide);
+  if (state.guide && state.guide.finished) profileDone = true;
   // The funnel's first stage is Prospects, which has its own place in the rail. The rest line up with the board's columns.
   const stages = state.funnel.filter((f) => f.stage !== "Prospects");
   fill($("rail-stages"), stages.map((f, index) => h("button", {

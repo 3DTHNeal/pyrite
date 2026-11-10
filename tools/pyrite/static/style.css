@@ -478,15 +478,32 @@ textarea { width: 100%; resize: vertical; }
 .profile-diff .del { background: color-mix(in srgb, var(--bad) 12%, transparent); }
 .profile-diff .hunk { color: var(--ink-3); }
 
-.profile-step { display: grid; grid-template-columns: 210px minmax(0, 1fr); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; min-height: 520px; }
-.profile-rail { border-right: 1px solid var(--line); padding: 12px 8px; display: grid; gap: 12px; align-content: start; }
+/* A section fills the view below the top bar, like the app's other views: its own rail of sections down the left,
+   in the app rail's look, and the footer pinned to the bottom of the window. */
+.profile-step { display: grid; grid-template-columns: 216px minmax(0, 1fr); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; min-height: calc(100vh - 140px); }
+.profile-rail { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 80px); overflow-y: auto; border-right: 1px solid var(--line); padding: 12px 8px; display: grid; gap: 12px; align-content: start; }
 .profile-rail-select { display: none; }
 .profile-back { justify-self: start; }
-.profile-rail-group p { font: 600 11px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); padding: 0 8px 4px; }
+.profile-rail-group p { display: flex; align-items: center; gap: 8px; font: 650 11px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); padding: 0 8px 4px; }
+.profile-rail-group p::before { content: ""; flex: none; width: 5px; height: 5px; background: var(--brass); box-shadow: 1px 1px 0 var(--brass-lo); }
 .profile-rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
-.profile-rail-step { width: 100%; display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: center; text-align: left; border: 0; background: transparent; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.profile-rail-step { width: 100%; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; text-align: left; border: 0; background: transparent; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--ink-2); }
 .profile-rail-step:hover { background: var(--surface-2); color: var(--ink); }
-.profile-rail-step.current { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); font-weight: 600; }
+.profile-rail-step.current { background: color-mix(in srgb, var(--brass) 18%, transparent); color: var(--ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--brass); }
+.profile-rail-step .opt { font: 10px var(--mono); letter-spacing: .04em; color: var(--ink-3); font-weight: 400; }
+.profile-rail-progress { display: grid; gap: 5px; padding: 0 8px; }
+.profile-rail-progress small { color: var(--ink-3); font-size: 12px; }
+/* Setup's progress: how many required sections are set. */
+.profile-progress { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.profile-progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--brass-lo), var(--brass)); border-radius: 3px; transition: width .3s; }
+.profile-setup { display: grid; gap: 10px; border-left: 3px solid var(--brass); }
+.profile-setup.done { border-left-color: var(--good); }
+.profile-setup-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.profile-setup-head h2 { font-size: 17px; }
+.profile-setup p { max-width: 80ch; }
+.profile-stage-head .eyebrow { font: 600 11px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.profile-writes p { margin: 6px 0 2px; font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .profile-progress i { transition: none; } }
 .profile-rail-step .dot { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--line); }
 .profile-rail-step.set .dot { background: var(--good); border-color: var(--good); }
 .profile-rail-step.attention .dot { background: var(--warn); border-color: var(--warn); }
@@ -626,7 +643,8 @@ textarea { width: 100%; resize: vertical; }
 }
 @media (max-width: 760px) {
   .profile-step { grid-template-columns: minmax(0, 1fr); }
-  .profile-rail { border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+  .profile-step { min-height: 0; }
+  .profile-rail { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
   .profile-rail-group, .profile-back { display: none; }
   .profile-rail-select { display: block; width: 100%; }
   .profile-stage-head, .profile-work { padding-left: 14px; padding-right: 14px; }

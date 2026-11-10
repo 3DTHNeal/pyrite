@@ -2052,7 +2052,8 @@ def _track_form(raws, old_tracks: list[Any]) -> list[dict[str, Any]]:
             "needs_level": bool(raw.get("needs_level", old.get("needs_level", False))),
             "emphasis": None if emphasis is None else _one_line(emphasis, f"What {name} drafts lead with"),
         })
-    if not wanted:
+    # Taking off the last one would drop every posting. A new workspace starts with none, which is no change of yours.
+    if not wanted and old_tracks:
         raise ValueError("Keep at least one role type. With none, every posting is dropped.")
     return wanted
 

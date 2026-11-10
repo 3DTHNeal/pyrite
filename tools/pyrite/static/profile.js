@@ -1,8 +1,10 @@
 "use strict";
 // The Profile tab: everything Pyrite knows about you and your search, in one place. The hub lists each section with
 // its state, what needs you, and every save with the copy it replaced. Each section's editor is its own file in
-// /static/profile/, which registers itself with profileStep(). Sections without one yet point to the Facts or Settings
-// tab, which stay as they were.
+// /static/profile/, which registers itself with profileStep(). Sections set on the Settings tab point there.
+//
+// While a new workspace is set up, the same sections are the guided setup: the hub says how far it has got, the rail
+// shows it, and each section's footer moves on to the next one.
 //
 // The server decides what a save may change and which changes need a code. This file only carries the page's edits.
 // Loads before app.js, so it uses app.js's helpers (h, fill, api, codePrompt, pill, toast) only once the page is up.
@@ -89,13 +91,42 @@ const PROFILE_STATUS = {
 };
 const PROFILE_TABS = { facts: "Facts", settings: "Settings" };
 
+// Setup is a guided path through these same sections while a new workspace is being set up. Its progress comes from
+// the server, which reads it from the files, so there's nothing here to keep in step.
+let profileDone = false; // Setup finished while this page was open, so the hub says so until you hide it.
+const profileGuiding = () => Boolean(profileData && profileData.guide && profileData.guide.active);
+
+// Every answer the server gives with the profile in it comes through here, which notices setup finishing: either the
+// answer that ended it says so, or the one before said setup was going and this one doesn't.
+function profileTake(data) {
+  const was = profileGuiding();
+  profileData = data;
+  if (data.guide && (data.guide.finished || (was && !data.guide.active))) profileDone = true;
+  profileRailCount(data.guide);
+}
+
+// The app rail's Profile count: how many required sections are set while setup is going, and nothing after. A save
+// here updates it at once, rather than at the dashboard's next refresh.
+function profileRailCount(guide) {
+  const el = document.getElementById("count-profile");
+  if (!el) return;
+  const going = guide && guide.active ? guide : null;
+  el.textContent = going ? `${going.set}/${going.required}` : "";
+  el.className = `rail-count${going ? " hot" : ""}`;
+  el.title = going ? `Setup: ${going.set} of ${profileCount(going.required, "required section")} set` : "";
+}
+
 const profileSection = (id) => (profileData ? profileData.steps.find((s) => s.id === id) : null);
+const profileBeside = (step, by) => {
+  const at = profileData.steps.findIndex((s) => s.id === step.id);
+  return at < 0 ? null : profileData.steps[at + by] || null;
+};
 const profileCount = (count, one, many) => `${count} ${count === 1 ? one : many || `${one}s`}`;
 const profileWhen = (iso) => new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 async function loadProfile() {
   try {
-    profileData = await api("/api/profile");
+    profileTake(await api("/api/profile"));
     profileError = "";
   } catch (err) {
     profileError = err.message;
@@ -242,7 +273,7 @@ async function profilePutBack(what, named, button, actions, error) {
   error.textContent = "";
   const body = { ...what, based_on: profileData.versions };
   const done = (data) => {
-    profileData = data;
+    profileTake(data);
     toast(`Put back ${named}. What ${what.whole ? "they" : "it"} replaced is in History.`);
     renderProfile();
   };
@@ -293,6 +324,46 @@ function profileHistory() {
     saves.length > shown.length ? h("p", { class: "muted" }, `${profileCount(saves.length - shown.length, "older save")} not shown.`) : null);
 }
 
+// How many required sections are set, as a bar. The numbers are in the text beside it too.
+function profileProgress(guide) {
+  const share = guide.required ? Math.round((guide.set / guide.required) * 100) : 100;
+  return h("div", {
+    class: "profile-progress", role: "progressbar", "aria-label": "Required sections set",
+    "aria-valuemin": "0", "aria-valuemax": String(guide.required), "aria-valuenow": String(guide.set),
+  }, h("i", { style: `width: ${share}%` }));
+}
+
+const profileProgressLine = (guide) => `${guide.set} of ${profileCount(guide.required, "required section")} set`;
+
+// While a new workspace is set up, the hub opens on where setup has got to and the section to do next. Once it's
+// done, it says so once, with the first board check a button away.
+function profileSetupPanel() {
+  const guide = profileData.guide;
+  if (profileDone) {
+    const blocked = typeof state !== "undefined" && state && state.not_ready ? state.not_ready.sweep : null;
+    return h("section", { class: "panel profile-setup done", "aria-label": "Setup" },
+      h("div", { class: "profile-setup-head" }, pill("good", "Setup done"), h("h2", {}, "Every required section is set")),
+      h("p", {}, "Pyrite can find, rank and draft for you now. Everything you set up stays here on Profile, which is also where "
+        + "Pyrite asks when it needs a decision. From here on, a change that lets drafts say more asks for a code sent to "
+        + "this computer's notifications."),
+      h("div", { class: "row" },
+        h("button", { class: "btn primary", type: "button", disabled: Boolean(blocked), title: blocked || null,
+          onclick: () => { profileDone = false; startRun("sweep"); showTab("todo"); } }, "Check the boards now"),
+        h("button", { class: "btn", type: "button", onclick: () => { profileDone = false; showTab("todo"); } }, "Open To do"),
+        h("button", { class: "btn", type: "button", onclick: () => { profileDone = false; renderProfile(); } }, "Hide")),
+      blocked ? h("p", { class: "muted" }, blocked) : null);
+  }
+  if (!profileGuiding()) return null;
+  const next = profileSection(guide.next) || profileData.steps.find((s) => s.status !== "set");
+  return h("section", { class: "panel profile-setup", "aria-label": "Setup" },
+    h("div", { class: "profile-setup-head" }, h("h2", {}, "Setting up"), h("span", { class: "muted" }, profileProgressLine(guide))),
+    profileProgress(guide),
+    h("p", {}, "Setup goes through the sections below in order, and the required ones are marked. Each says why it matters "
+      + "and what it writes. Leave whenever you like: what's done is read from your files, so setup picks up where they are."),
+    next ? h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: () => profileGo(next.id) },
+      guide.set ? `Continue setup: ${next.label}` : `Start setup: ${next.label}`)) : null);
+}
+
 function renderProfileHub(root) {
   fill(root,
     h("div", { class: "profile-top" },
@@ -300,6 +371,7 @@ function renderProfileHub(root) {
         h("p", { class: "muted" }, profileData.editable
           ? "Everything Pyrite knows about you and your search. Changes apply to the next draft and the next board check."
           : "Everything Pyrite knows about the demo's fictional candidate. Saving is off in the demo."))),
+    profileSetupPanel(),
     profileNeeds(),
     h("div", { class: "profile-groups" }, profileCards()),
     profileHistory());
@@ -320,8 +392,11 @@ function profileRail(current) {
     if (!groups.length || groups[groups.length - 1].name !== step.group) groups.push({ name: step.group, steps: [] });
     groups[groups.length - 1].steps.push(step);
   }
-  return h("nav", { class: "profile-rail", "aria-label": "Profile sections" },
+  // While setting up, the rail shows how far setup has got and which sections can wait.
+  const guiding = profileGuiding();
+  return h("nav", { class: "profile-rail", "aria-label": guiding ? "Setup sections" : "Profile sections" },
     h("button", { class: "btn small profile-back", type: "button", onclick: () => profileGo("") }, "← Profile"),
+    guiding ? h("div", { class: "profile-rail-progress" }, h("small", {}, profileProgressLine(profileData.guide)), profileProgress(profileData.guide)) : null,
     select,
     groups.map((group) => h("div", { class: "profile-rail-group" },
       h("p", {}, group.name),
@@ -329,6 +404,7 @@ function profileRail(current) {
         class: `profile-rail-step ${step.status}${step.id === current.id ? " current" : ""}`, type: "button",
         "aria-current": step.id === current.id ? "step" : null, onclick: () => profileGo(step.id),
       }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, step.label),
+      guiding && !step.required ? h("span", { class: "opt" }, "optional") : null,
       h("span", { class: "visually-hidden" }, `, ${PROFILE_STATUS[step.status] ? PROFILE_STATUS[step.status][1] : step.status}`))))))));
 }
 
@@ -351,6 +427,7 @@ function profileFallback(step) {
 }
 
 function profileFoot(step, built) {
+  if (profileGuiding()) return profileSetupFoot(step, built);
   const foot = h("div", { class: "profile-foot" });
   const status = h("span", { class: "profile-dirty", "aria-live": "polite" });
   const error = h("p", { class: "error", role: "alert" });
@@ -371,7 +448,41 @@ function profileFoot(step, built) {
   return foot;
 }
 
-async function profileSave(step, foot, button, error) {
+// The footer while setting up: back to the section before, and one button on to the next that saves first when
+// there's something to save. An optional section not set yet can be skipped. A required one can be left too, since
+// setup comes back to it, but it can't be finished without it.
+function profileSetupFoot(step, built) {
+  const foot = h("div", { class: "profile-foot" });
+  const status = h("span", { class: "profile-dirty", "aria-live": "polite" });
+  const error = h("p", { class: "error", role: "alert" });
+  const before = profileBeside(step, -1);
+  const after = profileBeside(step, 1);
+  const onward = () => profileGo(profileDone || !after ? "" : after.id);
+  const back = h("button", { class: "btn", type: "button", onclick: () => profileGo(before ? before.id : "") },
+    before ? `← ${before.label}` : "← Profile");
+  const discard = h("button", { class: "btn", type: "button", onclick: () => { profilePending = null; renderProfile(); } }, "Discard");
+  const go = h("button", { class: "btn primary", type: "button" });
+  const update = () => {
+    const count = profilePending ? profilePending.count : 0;
+    const skip = !step.required && step.status !== "set";
+    status.textContent = count ? profileCount(count, "unsaved change")
+      : step.required && step.status !== "set" ? "Required: setup comes back to this until it's set." : "";
+    status.classList.toggle("dirty", Boolean(count));
+    discard.hidden = !count;
+    go.textContent = count ? (profileData.editable ? (after ? "Save and continue" : "Save and finish") : "Saving is off in the demo")
+      : skip ? "Skip for now" : after ? "Continue" : "Finish";
+    go.classList.toggle("primary", Boolean(count) || !skip);
+    go.disabled = Boolean(count) && !profileData.editable;
+  };
+  go.addEventListener("click", () => (profilePending ? profileSave(step, foot, go, error, onward) : onward()));
+  foot.update = update;
+  update();
+  fill(foot, h("div", { class: "row" }, back, h("span", { class: "spacer" }), status, built ? discard : null, go), error);
+  return foot;
+}
+
+// `then` runs after a save instead of drawing the section again, as Save and continue moves on to the next one.
+async function profileSave(step, foot, button, error, then) {
   if (!profilePending) return;
   error.textContent = "";
   foot.querySelectorAll(".code-prompt, .profile-conflict").forEach((el) => el.remove());
@@ -380,10 +491,11 @@ async function profileSave(step, foot, button, error) {
     reason: `${step.label}: ${profileCount(profilePending.count, "change")}`,
   };
   const saved = (data) => {
-    profileData = data;
+    profileTake(data);
     profilePending = null;
     toast("Saved. The files as they were before are in History.");
-    renderProfile();
+    if (then) then();
+    else renderProfile();
   };
   button.disabled = true;
   try {
@@ -428,15 +540,19 @@ function renderProfileStep(root, step) {
     }
   }
   const heading = h("h2", { tabindex: "-1" }, step.label);
+  // A section without its own editor already says how to change it by hand, so only the others add that here.
+  const byHand = def && step.meanwhile ? h("p", { class: "muted" }, step.meanwhile) : null;
   fill(root, h("div", { class: "profile-step" },
     profileRail(step),
     h("div", { class: "profile-stage" },
-      h("header", { class: "profile-stage-head" }, heading, h("p", { class: "muted" }, step.why)),
+      h("header", { class: "profile-stage-head" },
+        profileGuiding() ? h("p", { class: "eyebrow" }, `Setup · ${step.group} · ${step.required ? "required" : "optional"}`) : null,
+        heading, h("p", { class: "muted" }, step.why)),
       h("div", { class: `profile-work${drawn.aside ? "" : " wide"}` },
         h("div", { class: "profile-main" }, drawn.main),
         drawn.aside ? h("aside", { class: "profile-aside", "aria-live": "polite" }, drawn.aside) : null),
-      step.writes.length ? h("details", { class: "profile-writes" }, h("summary", {}, "Where this goes"),
-        h("ul", {}, step.writes.map((line) => h("li", {}, line)))) : null,
+      step.writes.length || byHand ? h("details", { class: "profile-writes" }, h("summary", {}, "Where this goes"),
+        step.writes.length ? h("ul", {}, step.writes.map((line) => h("li", {}, line))) : null, byHand) : null,
       foot)));
   // A new section's heading takes focus, so a screen reader announces where you are.
   if (document.activeElement === document.body || root.contains(document.activeElement) || !document.activeElement) heading.focus({ preventScroll: true });

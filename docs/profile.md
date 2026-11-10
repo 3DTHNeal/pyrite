@@ -4,10 +4,11 @@
 
 ## Your profile
 
-The **Profile** tab brings together everything Pyrite knows about you and your search. It's being built a section at a time, and until a section has its own editor, it says where to change that part instead: the Facts or Settings tab, which work as before, or a file in your workspace.
+The **Profile** tab brings together everything Pyrite knows about you and your search. Two of its sections, What comes first and Schedule and mail, are set on the Settings tab, and open it there.
 
+- **Setting up** shows while a new workspace is being set up: how many required sections are set, and a button to the next. Each section then has **Save and continue**, **Skip for now** for an optional one, and a way back, and the rail beside it shows the progress. [The guided way](setup.md#the-guided-way) covers it. It ends for good once every required section is set, with **Setup done** shown once.
 - **Needs you** lists what setup still needs, the same findings as `pyrite doctor`, each with a button to the section that fixes it.
-- Each section shows what it holds now and when the Profile tab last changed it. **Where this goes** names the files and settings it writes.
+- Each section shows what it holds now and when the Profile tab last changed it. **Where this goes** names the files and settings it writes, and how to make the same change by hand.
 - **History** lists every save made on the Profile, Facts and Settings tabs, newest first. Pick a file to see what putting back its earlier copy would change, then **Put back**. A save that changed several files, such as your name in `search.toml` and the master resume, offers **Put back this whole save** too, so the files don't end up disagreeing. Putting back is a save like any other: the files as they are now are kept too, and a copy that would let drafts say more asks for a code. The latest 50 copies of each file are kept in `data/history/`.
 - A section with edits you haven't saved shows how many, with **Discard** and **Save changes**. Leaving it asks first. If a file changed on disk after the tab loaded it, the save is refused and nothing is written.
 - The address names the section, as `#profile/achievements`, so a bookmark or reload comes back to it.
