@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .store import CODE_ROOT, ROOT
+from .store import CODE_ROOT, NEEDS_SETUP, ROOT
 
 # The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
 # of its own unless told not to.
@@ -109,14 +109,18 @@ def _stop(pid: int, port: int) -> None:
         time.sleep(0.25)
 
 
-def start(port: int) -> subprocess.Popen[bytes]:
-    """Start `serve` in the background, with no window, so it keeps going after this ends."""
+def start(port: int, home: Path | None = None) -> subprocess.Popen[bytes]:
+    """Start `serve` in the background, with no window, so it keeps going after this ends. `home` is a workspace just
+    made, which this process didn't start on."""
     python = Path(sys.executable)
     args = [str(python), str(CODE_ROOT / "tools" / "pyrite.py"), "serve", "--port", str(port)]
     null = subprocess.DEVNULL
     # The workspace this found, by its whole path. The dashboard starts in the code folder, where a relative path from
-    # PYRITE_HOME or a .pyrite-home edited since would name some other folder, and it must open this one.
-    env = {**os.environ, "PYRITE_HOME": str(ROOT)}
+    # PYRITE_HOME or a .pyrite-home edited since would name some other folder, and it must open this one. With none
+    # set yet it's left unnamed, since naming the example would open the demo rather than setup.
+    env = {**os.environ, "PYRITE_HOME": str(home or ROOT)}
+    if home is None and NEEDS_SETUP:
+        env.pop("PYRITE_HOME")
     if sys.platform == "win32":
         # pythonw has no console of its own, and a detached process doesn't share this one, so closing it stops nothing.
         windowless = python.with_name("pythonw.exe")
@@ -127,13 +131,14 @@ def start(port: int) -> subprocess.Popen[bytes]:
     return subprocess.Popen(args, stdin=null, stdout=null, stderr=null, cwd=CODE_ROOT, env=env, start_new_session=True)
 
 
-def restart(port: int) -> bool:
-    """Start a new dashboard on the port this one just let go of. Whether one answers in time.
+def restart(port: int, home: Path | None = None) -> bool:
+    """Start a new dashboard on the port this one just let go of, on `home` if that's a workspace just made. Whether
+    one answers in time.
 
     A port can stay taken for a moment after its server closes, and then the new one stops at once, so it's tried again."""
     deadline = time.monotonic() + WAIT_SECONDS
     while time.monotonic() < deadline:
-        child = start(port)
+        child = start(port, home)
         while child.poll() is None and time.monotonic() < deadline:
             if answering(port, timeout=2):
                 return True

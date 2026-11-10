@@ -31,6 +31,9 @@ INIT_EXAMPLE_HEADER = (
 INIT_NAMED_FILES = ("resume.md", "cover-letter.md")
 # Its applications are the fictional candidate's, so a new workspace starts with none.
 INIT_SKIP = ("seed.toml",)
+# Made with a new workspace and deleted once its required Profile sections are all set. While it's there, changes
+# need no code, since there's nothing of the person's yet to loosen. See setting_up().
+SETTING_UP = "data/setting-up.json"
 
 # `pyrite init --blank` writes these profile files, with headings and comments on what goes where and nothing of the
 # fictional candidate's. Their `# Your Name` lines get the name. search.toml is made from the example's, below.
@@ -136,6 +139,24 @@ def blank_config(text: str, name: str) -> str:
         else:
             lines[at] = new
     return "\n".join(lines)
+
+
+def setting_up(root: Path | None = None) -> bool:
+    """Whether the workspace is new and still being set up, so a change to it needs no code from this computer: there's
+    nothing of yours in it yet for a change to loosen. Only a workspace this file made starts that way, and it ends for
+    good once every required Profile section is set, so an existing workspace is never treated as new."""
+    return (root or store.ROOT).joinpath(SETTING_UP).is_file() and not store.IS_EXAMPLE
+
+
+def finish_setup(root: Path | None = None) -> None:
+    """Setup is done: from now on, a change that loosens a check needs a code."""
+    (root or store.ROOT).joinpath(SETTING_UP).unlink(missing_ok=True)
+
+
+def _start_setup(folder: Path) -> None:
+    marker = folder / SETTING_UP
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"started": store.now()}) + "\n", encoding="utf-8")
 
 
 def _make_blank(profile: Path, name: str) -> None:
@@ -273,9 +294,11 @@ def create(folder_text: str, name: str, blank: bool = False, git: bool = False) 
         else:
             _copy_example(profile, name)
         (folder / "applications").mkdir(exist_ok=True)
+        _start_setup(folder)
     except OSError as err:
         # Half a profile would stop the next try with "already has a profile/ folder", so what this made goes again.
         shutil.rmtree(profile, ignore_errors=True)
+        (folder / SETTING_UP).unlink(missing_ok=True)
         if made:
             shutil.rmtree(folder, ignore_errors=True)
         raise Refused(f"Couldn't make a workspace at {folder}: {err.strerror or err}. Name a folder you can write to, such "

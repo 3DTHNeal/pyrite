@@ -1340,6 +1340,7 @@ async function startRun(kind) {
 
 function render() {
   $("demo-tag").hidden = !state.demo;
+  offerSetup();
   // The to-do count shows in the browser tab, so a background tab says when something needs you.
   document.title = state.orders.length ? `(${state.orders.length}) Pyrite` : "Pyrite";
   renderSweep();
@@ -2455,14 +2456,16 @@ async function openUpdate() {
   if (info) toast(info.error || "Pyrite is up to date.");
 }
 
-// After an update the server stops and a new one starts on the new code. The page reloads once the new one answers.
-async function waitForRestart(old) {
+// After an update, or setup making a workspace, the server stops and a new one starts. The page reloads once the new
+// one answers, at `hash` if one is given. `what` says what was done, for when it doesn't come back.
+async function waitForRestart(old, what = "The code was updated", hash = "") {
   const until = Date.now() + 60000;
   while (Date.now() < until) {
     await new Promise((resolve) => { setTimeout(resolve, 1000); });
     try {
       const { server } = await api("/api/alive");
       if (server !== old) {
+        if (hash) history.replaceState(null, "", hash);
         location.reload();
         return;
       }
@@ -2470,8 +2473,96 @@ async function waitForRestart(old) {
       // Down between the old server and the new one.
     }
   }
-  throw new Error("The code was updated, but the dashboard hasn't come back after a minute. Run `pyrite open`, or Pyrite.cmd on Windows, to start it.");
+  throw new Error(`${what}, but the dashboard hasn't come back after a minute. Run \`pyrite open\`, or Pyrite.cmd on Windows, to start it.`);
 }
+
+// ---- Setup: making a workspace, while nothing names one ----
+
+const SETUP_LATER = "pyrite-setup-later";
+const SETUP_DONE = "pyrite-setup-done";
+let setupGoing = false;
+
+function openSetup() {
+  const info = state.setup;
+  if (!info) return;
+  const folder = $("setup-folder");
+  if (!folder.value) folder.value = info.suggested;
+  $("setup-folder-help").textContent = `Anywhere outside Pyrite's code folder, ${info.code_folder}. A folder that doesn't exist yet is made.`;
+  const git = $("setup-git");
+  git.disabled = !info.git;
+  git.closest("label").title = info.git ? "" : "git isn't installed, or isn't on PATH, so this needs it first.";
+  const dialog = $("setup-dialog");
+  if (!dialog.open) dialog.showModal();
+  if (!$("setup-name").value) $("setup-name").focus();
+}
+
+// Opens by itself on the first load, and again on a later one unless you chose to look around first.
+function offerSetup() {
+  $("setup-open").hidden = !state.setup;
+  if (!state.setup || $("setup-dialog").open) return;
+  let later = false;
+  try { later = sessionStorage.getItem(SETUP_LATER) === "1"; } catch (err) { /* Then it just opens again. */ }
+  if (!later) openSetup();
+}
+
+function saySetUp() {
+  let said = null;
+  try {
+    said = sessionStorage.getItem(SETUP_DONE);
+    sessionStorage.removeItem(SETUP_DONE);
+  } catch (err) {
+    return;
+  }
+  if (said) toast(said);
+}
+
+$("setup-open").addEventListener("click", openSetup);
+$("setup-later").addEventListener("click", () => {
+  try { sessionStorage.setItem(SETUP_LATER, "1"); } catch (err) { /* It opens again on the next load, which is fine. */ }
+  $("setup-dialog").close();
+});
+// Escape doesn't close it while the workspace is being made, since the page still has to follow the restart.
+$("setup-dialog").addEventListener("cancel", (e) => { if (setupGoing) e.preventDefault(); });
+$("setup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const start = document.querySelector("input[name='setup-start']:checked");
+  const body = {
+    name: $("setup-name").value.trim(),
+    folder: $("setup-folder").value.trim(),
+    start: start ? start.value : "blank",
+    git: $("setup-git").checked && !$("setup-git").disabled,
+  };
+  setupGoing = true;
+  $("setup-go").disabled = true;
+  $("setup-later").disabled = true;
+  $("setup-error").textContent = "";
+  $("setup-note").textContent = "Making your workspace…";
+  let done;
+  try {
+    done = await api("/api/setup", body);
+  } catch (err) {
+    setupGoing = false;
+    $("setup-go").disabled = false;
+    $("setup-later").disabled = false;
+    $("setup-note").textContent = "";
+    $("setup-error").textContent = err.message;
+    return;
+  }
+  const said = `Made your workspace at ${done.folder}.`;
+  if (!done.restarting) {
+    $("setup-note").textContent = `${said} Restart the dashboard to open it.`;
+    return;
+  }
+  $("setup-note").textContent = `${said} Opening it…`;
+  try { sessionStorage.setItem(SETUP_DONE, `${said} The Profile tab lists what's left to set up.`); } catch (err) { /* A nicety. */ }
+  try {
+    // The Profile tab is where setup goes on: it lists what's left, most important first.
+    await waitForRestart(done.server, "Your workspace was made", "#profile");
+  } catch (err) {
+    setupGoing = false;
+    $("setup-error").textContent = err.message;
+  }
+});
 
 $("update-open").addEventListener("click", openUpdate);
 $("update-recheck").addEventListener("click", openUpdate);
@@ -2532,6 +2623,7 @@ function sayUpdated() {
 
 restoreRadarFilters();
 sayUpdated();
+saySetUp();
 checkUpdate();
 setInterval(() => { if (!document.hidden) checkUpdate(); }, 3600000);
 // A job's address opens its panel once the page has loaded what the panel needs, over the first tab.

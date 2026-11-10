@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import backup, doctor, factsdoc, gaps, score, settings, store
+from . import backup, doctor, factsdoc, gaps, score, settings, store, workspace
 
 # What may be written, by key. The paths are fixed here and never come from a request.
 FILES = {
@@ -326,7 +326,15 @@ def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: 
         attention = any(item["step"] == step["id"] for item in waiting)
         status = "attention" if attention else "set" if is_set else "not_set"
         steps.append({**step, "status": status, "summary": summary, "changed": changed.get(step["id"])})
-    return {"steps": steps, "needs": waiting}
+    setting_up = workspace.setting_up()
+    if setting_up and all(step["status"] == "set" for step in steps if step["required"]):
+        workspace.finish_setup()  # For good: from here on, loosening a check needs a code.
+        setting_up = False
+    if setting_up:
+        waiting.append({"severity": "info", "title": "Your workspace is new, so changes need no code from this computer yet.",
+                        "detail": "Once every required section is set, a change that lets drafts say more, such as "
+                                  "approving a term, asks for a code sent to this computer's notifications.", "step": None})
+    return {"steps": steps, "needs": waiting, "setting_up": setting_up}
 
 
 def _clean(key: str, text) -> str:

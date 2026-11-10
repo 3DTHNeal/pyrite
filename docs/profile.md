@@ -71,5 +71,6 @@ The notification can't accept or refuse anything itself: its **Close** button on
 
 - A code works once, for the change it names, for 2 minutes. Five wrong tries end it and nothing is saved. **Send a new code** replaces it.
 - No notification, or Focus Assist hid it? `pyrite code` in a terminal on this computer prints the code waiting and what it's for.
+- A new workspace, made by the dashboard's setup or `pyrite init`, needs no codes while it's being set up, since nothing in it is yours yet to loosen. **Needs you** says so. Once every required section on the Profile tab is set, codes start, for good: emptying a section afterwards doesn't stop them. A workspace made before this needs codes as it always did. `data/setting-up.json` marks a workspace that's still being set up.
 - The server decides what needs a code, by comparing the files before and after, so the page can't skip it. It's not a password: anyone who can see this screen can read the code. It stops a change made from another device, or by something driving the browser, without the person at this computer seeing it named.
 - Notifications come from each system's built-in route, with nothing to install: Windows PowerShell's toast, AppleScript on macOS, and `notify-send` on Linux.

@@ -104,6 +104,17 @@ def _windows_path(chosen: str) -> str:
 
 ROOT = find_workspace()
 IS_EXAMPLE = ROOT == EXAMPLE_ROOT
+
+
+def nothing_named() -> bool:
+    """Whether nothing names a workspace at all: no PYRITE_HOME, and no .pyrite-home naming one."""
+    return not os.environ.get("PYRITE_HOME", "").strip() and pointer_target() is None
+
+
+# The dashboard then opens on making a workspace, over the demo. The demo names the example on purpose, and a named
+# folder that's missing stopped above, so neither of those is this.
+NEEDS_SETUP = IS_EXAMPLE and nothing_named()
+
 DB_PATH = ROOT / "data" / "pyrite.db"
 CONFIG_PATH = ROOT / "profile" / "search.toml"
 
