@@ -13,6 +13,9 @@ from pathlib import Path
 
 from support import BAD_DRAFT, BRIEF, CFG, CONFIDENTIAL, LETTER, LETTER_ROLE, MODEL, RESUME, SOURCES, resume_errors
 
+from assay import factbank, links, names, terms
+from assay import numbers as number_checks
+from assay import text as reading
 from pyrite import checks, store
 
 MASTER = (store.ROOT / "profile" / "resume.md").read_text(encoding="utf-8")
@@ -67,9 +70,9 @@ class FactChecker(unittest.TestCase):
 
     def test_comments_in_a_source_approve_nothing(self):
         text = "# Fact bank\n<!-- Tools such as Kubernetes, and numbers such as 2026. -->\n## Skills\n- Python\n"
-        self.assertNotIn("Kubernetes", checks.claimable(text))
-        self.assertNotIn("2026", checks.claimable(text))
-        self.assertIn("- Python", checks.claimable(text))
+        self.assertNotIn("Kubernetes", factbank.claimable(text))
+        self.assertNotIn("2026", factbank.claimable(text))
+        self.assertIn("- Python", factbank.claimable(text))
 
     def test_a_placeholder_is_named_once_not_again_as_a_term(self):
         errors = resume_errors(RESUME + "\n- Led a [X] migration.\n")
@@ -175,8 +178,8 @@ class FactChecker(unittest.TestCase):
                 self.assertEqual(resume_errors(RESUME + f"\n{line}\n"), [])
 
     def test_do_not_use_and_unsupported_sections_approve_nothing(self):
-        self.assertNotIn("skylift", checks._vocabulary(SOURCES))
-        self.assertIn("firmware", checks._vocabulary(SOURCES))
+        self.assertNotIn("skylift", terms.vocabulary(SOURCES))
+        self.assertIn("firmware", terms.vocabulary(SOURCES))
         self.assertTrue(any("900" in e for e in resume_errors(RESUME + "\n- Shipped firmware to 900 robots.\n")))
 
     def test_spelled_out_numbers_blocked(self):
@@ -520,8 +523,8 @@ class Evasion(unittest.TestCase):
                 self.assertBlocked(line, "numbers not in the fact bank")
         errors, _ = checks.check_text(LETTER.rstrip() + "\n\nWe ran 212K automated tests on every merge.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
         self.assertTrue(any("212000" in e for e in errors), errors)
-        self.assertEqual(checks._numbers("$1.5M, 1,500,000 and 1.5 million"), {"1500000"})
-        self.assertEqual(checks._numbers("4.0 and 4"), {"4"})
+        self.assertEqual(number_checks.numbers("$1.5M, 1,500,000 and 1.5 million"), {"1500000"})
+        self.assertEqual(number_checks.numbers("4.0 and 4"), {"4"})
 
     def test_a_percentage_is_a_percentage_however_it_is_written(self):
         # 7 is a team size and 35 a percentage in the fact bank. Neither is the other.
@@ -543,16 +546,16 @@ class Evasion(unittest.TestCase):
             with self.subTest(disguised=disguised):
                 self.assertBlocked(f"- Delivered the {disguised} controller.", "look-alike letters")
         # Words in another language, and names with letters of their own, are neither.
-        self.assertFalse(checks._lookalike("Русский"))
-        self.assertFalse(checks._disguises("Søren Łukasz Işık José", "Resume"))
-        for table in (checks.LOOKALIKES, checks.PLAIN_LATIN):
+        self.assertFalse(reading.is_lookalike("Русский"))
+        self.assertFalse(reading.disguises("Søren Łukasz Işık José", "Resume"))
+        for table in (reading.LOOKALIKES, reading.PLAIN_LATIN):
             plain = [value if isinstance(value, str) else chr(value) for value in table.values()]
             self.assertTrue(all(not chr(key).isascii() and value.isascii() for key, value in zip(table, plain, strict=True)))
-        self.assertEqual(len(checks.LOOKALIKES), 20 + 18 + 14 + 24)
+        self.assertEqual(len(reading.LOOKALIKES), 20 + 18 + 14 + 24)
 
     def test_a_company_name_is_set_aside_only_as_a_whole_word(self):
-        self.assertEqual(checks._set_aside("Meta and Metadata at Meta's office", "Meta"), "  and Metadata at  's office")
-        self.assertEqual(checks._set_aside("Anything", ""), "Anything")
+        self.assertEqual(reading.set_aside("Meta and Metadata at Meta's office", "Meta"), "  and Metadata at  's office")
+        self.assertEqual(reading.set_aside("Anything", ""), "Anything")
 
     def test_contact_details_approve_no_numbers(self):
         # The example's phone number is (555) 010-0142. None of its parts is a measurement.
@@ -560,8 +563,8 @@ class Evasion(unittest.TestCase):
                      "- Improved bench throughput 10x."):
             with self.subTest(line):
                 self.assertBlocked(line)
-        self.assertNotIn("555", checks.without_contact(SOURCES))
-        self.assertIn("1,400", checks.without_contact(SOURCES))
+        self.assertNotIn("555", factbank.without_contact(SOURCES))
+        self.assertIn("1,400", factbank.without_contact(SOURCES))
 
     def test_praise_in_any_tense_is_no_denial(self):
         for line in ("- Led ISO 26262 certification for the fleet, and I could not have done it alone.",
@@ -586,7 +589,7 @@ class Evasion(unittest.TestCase):
                 self.assertBlocked(line, "confidential term")
         errors, _ = checks.check_text(LETTER.rstrip() + "\n\nI delivered the Blue Bird controller.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
         self.assertTrue(any("confidential term" in e for e in errors), errors)
-        self.assertEqual(checks._flexible(r"\bhives?\b"), r"\bhives?\b")  # A pattern is taken as written.
+        self.assertEqual(names.flexible(r"\bhives?\b"), r"\bhives?\b")  # A pattern is taken as written.
 
     def test_a_name_alone_on_a_do_not_use_line_is_blocked(self):
         listed = "## Do not use\n- Nightjar\n- Kestrel, the arm controller\n- Osprey Systems (a customer)\n- Customer names\n- Project Heron\n"
@@ -619,13 +622,13 @@ class Evasion(unittest.TestCase):
         for line in ("- Portfolio and demos at alexrivera.pro", "- Demos at alex-rivera.design.", "- Write to alex@rivera.studio."):
             with self.subTest(line):
                 self.assertBlocked(line, "link or domain")
-        own = checks._own_links("- Interned at Booking.com\n- Telemetry over Socket.IO and ASP.NET\n")
+        own = links.own_links("- Interned at Booking.com\n- Telemetry over Socket.IO and ASP.NET\n")
         for line in ("I interned at Booking.com.", "Telemetry over Socket.IO.", "Dashboards in ASP.NET."):
             with self.subTest(line):
-                self.assertIsNone(checks._link(line, own))
+                self.assertIsNone(links.link(line, own))
         for fine in ("Built dashboards in Node.js/React.", "Ph.D. and B.S. holders, e.g. the team.", "Ran it at 2.5 Hz.", "deploy.sh"):
             with self.subTest(fine):
-                self.assertIsNone(checks._link(fine, set()))
+                self.assertIsNone(links.link(fine, set()))
 
     def test_multiples_and_points_in_digits_are_measurements(self):
         for line, reason in (("- Improved bench throughput 8x.", "claims a multiple"), ("- Owned a seven-figure firmware budget.", "multiple"),
@@ -648,19 +651,19 @@ class Evasion(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 10)
 
     def test_comment_lines_in_a_plain_text_source_approve_nothing(self):
-        self.assertNotIn("Zigbee", checks.source_body("profile/approved-terms.txt", "CAN\n# Zigbee LoRaWAN\n"))
-        self.assertIn("# Fact bank", checks.source_body("profile/facts.md", "# Fact bank\n- Python\n"))
+        self.assertNotIn("Zigbee", factbank.source_body("profile/approved-terms.txt", "CAN\n# Zigbee LoRaWAN\n"))
+        self.assertIn("# Fact bank", factbank.source_body("profile/facts.md", "# Fact bank\n- Python\n"))
 
     def test_do_not_use_and_unsupported_approve_nothing_at_any_heading_level(self):
         bank = ("# Facts\n## Record\n- Shipped 3 launches\n### Do not use\n- Project Nightjar, 900 units\n#### Customers\n- Globex\n"
                 "### Skills\n- Python\n# Unsupported claims\n- Kubernetes at 4000 nodes\n")
-        kept = checks.claimable(bank)
+        kept = factbank.claimable(bank)
         for gone in ("Nightjar", "900", "Globex", "Kubernetes", "4000"):
             self.assertNotIn(gone, kept)
         for stays in ("3 launches", "Python"):
             self.assertIn(stays, kept)
-        self.assertIn("Globex", checks.do_not_use(bank))
-        self.assertNotIn("Kubernetes", checks.do_not_use(bank))
+        self.assertIn("Globex", factbank.do_not_use(bank))
+        self.assertNotIn("Kubernetes", factbank.do_not_use(bank))
 
     def letter_errors(self, sentence, sources=SOURCES):
         return checks.check_text(LETTER.rstrip() + f"\n\n{sentence}\n", "letter", CFG, sources, *LETTER_ROLE)[0]
@@ -673,9 +676,9 @@ class Evasion(unittest.TestCase):
                 errors = self.letter_errors(f"I delivered the {name} controller.")
                 self.assertTrue(any("confidential term" in e for e in errors), errors)
         # The full stop that ends a sentence joins nothing.
-        self.assertIsNone(re.search(checks._flexible("Bluebird"), "The sky was blue. Birds sang.", re.I))
+        self.assertIsNone(re.search(names.flexible("Bluebird"), "The sky was blue. Birds sang.", re.I))
         # Plain words with a space between are joined the same way, and so is a pattern "Block it" wrote earlier.
-        for pattern in (checks._flexible("SkyLift 900"), checks._widen(checks.term_pattern("SkyLift 900"))):
+        for pattern in (names.flexible("SkyLift 900"), names.widen(names.term_pattern("SkyLift 900"))):
             for text in ("SkyLift 900", "skylift‑900", "SkyLift900", "SkyLift_900"):
                 with self.subTest(pattern=pattern, text=text):
                     self.assertTrue(re.search(pattern, text, re.I))
@@ -719,8 +722,8 @@ class Evasion(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual(resume_errors(RESUME + f"\n{line}\n"), [])
         # Each way of writing a multiple reads as the same one, so the fact bank's 3× approves "3 times faster" and no other.
-        self.assertEqual(checks._number_errors("Resume", "about 3 times faster, a 3-fold gain", "about 3× per machine-hour", "x"), [])
-        errors = checks._number_errors("Resume", "5,000× faster", "350,000× one core", "x")
+        self.assertEqual(number_checks.number_errors("Resume", "about 3 times faster, a 3-fold gain", "about 3× per machine-hour", "x"), [])
+        errors = number_checks.number_errors("Resume", "5,000× faster", "350,000× one core", "x")
         self.assertTrue(any("5000x" in e for e in errors), errors)
 
     def test_a_scale_is_a_scale_however_it_is_written(self):
@@ -730,9 +733,9 @@ class Evasion(unittest.TestCase):
             with self.subTest(line):
                 self.assertBlocked(line, "numbers not in the fact bank")
                 self.assertTrue(any("numbers not in the fact bank" in e for e in self.letter_errors(line[2:])), line)
-        self.assertEqual(checks._numbers("$3m, $3 MM, $3 mil, 3 Million, 3M and 3 bn"), {"3000000", "3000000000"})
+        self.assertEqual(number_checks.numbers("$3m, $3 MM, $3 mil, 3 Million, 3M and 3 bn"), {"3000000", "3000000000"})
         # Without a currency sign, a lowercase m or a letter after a space is as likely a unit.
-        self.assertEqual(checks._numbers("30m of cable, a 5 mil film and 300 K"), {"30", "5", "300"})
+        self.assertEqual(number_checks.numbers("30m of cable, a 5 mil film and 300 K"), {"30", "5", "300"})
         # A number's scale letter isn't a term of its own, so an honest 1.4K for 1,400 passes.
         self.assertEqual(resume_errors(RESUME + "\n- Wrote firmware for a fleet of 1.4K warehouse robots.\n"), [])
 
@@ -747,14 +750,14 @@ class Evasion(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def test_units_with_a_micro_or_ohm_sign_are_not_disguises(self):
-        self.assertEqual(checks._disguises("p95 3.8 µm, 0.17 µs, 4.7 μF and a 10 kΩ load", "Resume"), [])
+        self.assertEqual(reading.disguises("p95 3.8 µm, 0.17 µs, 4.7 μF and a 10 kΩ load", "Resume"), [])
         richer = SOURCES + "\n- Position error p95 3.8 µm\n"
         errors, _ = checks.check_text(RESUME + "\n- Held position error to p95 3.8 µm.\n", "resume", CFG, richer, "Acme", "Principal Engineer")
         self.assertEqual(errors, [])
         # The same sign inside a word is still a letter that doesn't belong there.
         for disguised in ("Blµebird", "µBluebird"):
             with self.subTest(disguised=disguised):
-                self.assertTrue(checks._disguises(f"Delivered the {disguised} controller.", "Resume"))
+                self.assertTrue(reading.disguises(f"Delivered the {disguised} controller.", "Resume"))
 
     def test_the_parts_of_a_compound_the_sources_use_are_known_terms(self):
         richer = SOURCES + "\n- GPU-batched kinetics, tuned over CI/CD\n"
@@ -778,7 +781,7 @@ class Evasion(unittest.TestCase):
         more = facts.rstrip() + "\n- Any Six Sigma belt\n- Percentages for fleet uptime\n"
         read = lambda rel: more if rel == "profile/facts.md" else (store.ROOT / rel).read_text(encoding="utf-8")
         self.assertEqual(checks.unenforced_claims(CFG, read), [("Any Six Sigma belt", "profile/facts.md")])
-        self.assertEqual(checks.unsupported_claims("## Skills\n- Python\n## Unsupported\n<!-- what you can't claim -->\n- Rust\n### More\n* Go\n"),
+        self.assertEqual(factbank.unsupported_claims("## Skills\n- Python\n## Unsupported\n<!-- what you can't claim -->\n- Rust\n### More\n* Go\n"),
                          ["Rust", "Go"])
         # The line the example's rules missed until now, in the order the fact bank writes it.
         self.assertBlocked("- Field failures reproduced in simulation.", "unsupported claim")

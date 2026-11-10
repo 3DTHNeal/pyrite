@@ -8,7 +8,7 @@ doesn't read as either is left alone rather than guessed at.
 import re
 from dataclasses import dataclass, field
 
-from .checks import EXCLUDED_SECTION
+from assay.factbank import EXCLUDED_SECTION
 
 HEADING = re.compile(r"##[ \t]+(?P<title>.+?)\s*$")
 BULLET = re.compile(r"(?P<indent>[ \t]*)[-*][ \t]+(?P<text>.*?)\s*$")

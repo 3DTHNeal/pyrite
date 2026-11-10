@@ -44,7 +44,8 @@ Security = "https://github.com/3DTHNeal/pyrite/security/policy"
 
 [tool.setuptools]
 package-dir = { "" = "tools" }
-packages = ["pyrite"]
+# assay is the fact checker's general half, which knows nothing about resumes. See tools/assay/__init__.py.
+packages = ["pyrite", "assay"]
 
 [tool.setuptools.package-data]
 pyrite = ["*.md", "*.toml", "imap.env.example", "static/*", "static/icons/*", "systemd/*", "blank/*"]
@@ -86,7 +87,7 @@ ignore = [
 "tools/pyrite/daily.py" = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pyrite", "check_public", "build_resume", "changelog"]
+known-first-party = ["pyrite", "assay", "check_public", "build_resume", "changelog"]
 split-on-trailing-comma = false
 # The tests' support module points PYRITE_HOME at a throwaway workspace, so it has to load before anything from pyrite.
 section-order = ["future", "standard-library", "third-party", "test-support", "first-party", "local-folder"]
@@ -96,7 +97,7 @@ test-support = ["support"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["tools/pyrite", "tools/check_public.py", "tools/build_resume.py", "tools/changelog.py"]
+files = ["tools/pyrite", "tools/assay", "tools/check_public.py", "tools/build_resume.py", "tools/changelog.py"]
 mypy_path = "tools"
 ignore_missing_imports = true
 # Without this, mypy skips the body of every function that has no annotations, which is most of the commands.

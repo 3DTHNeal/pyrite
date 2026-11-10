@@ -15,7 +15,9 @@ from typing import Any
 
 from support import CFG
 
-from pyrite import checks, doctor, facts, inbox, options, profile, score, server, settings, store
+from assay import factbank
+from assay import numbers as number_checks
+from pyrite import doctor, facts, inbox, options, profile, score, server, settings, store
 
 SETTINGS_TOML = """# Top of the file
 [run]
@@ -359,7 +361,7 @@ class FactsTab(SettingsBase):
 
     def test_the_checker_uses_what_was_saved(self):
         self.save(SETTINGS_FACTS.replace("## Do not use", "- Shipped to 4,321 sites\n## Do not use"))
-        self.assertIn("4321", checks._numbers(checks.claimable(self.facts_path().read_text(encoding="utf-8"))))
+        self.assertIn("4321", number_checks.numbers(factbank.claimable(self.facts_path().read_text(encoding="utf-8"))))
 
     def test_a_stale_page_is_refused(self):
         version = self.file()["version"]

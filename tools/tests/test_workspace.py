@@ -14,6 +14,7 @@ from pathlib import Path
 from support import CFG, CODE_ROOT, FACTS_STILL_EXAMPLE, WORKSPACE, WORKSPACE_TODOS, Base
 
 import pyrite
+from assay import factbank
 from pyrite import checks, cli, doctor, launch, score, server, store, tasks, workspace
 from pyrite.workspace import INIT_EXAMPLE_HEADER, INIT_NAMED_FILES
 
@@ -843,8 +844,8 @@ class Init(unittest.TestCase):
         self.init("--name", "Sam Doe", "--blank")
         facts = (self.folder / "profile" / "facts.md").read_text(encoding="utf-8")
         self.assertIsNone(factsdoc.Doc(facts).contact())  # The comment under ## Contact isn't taken for the line.
-        self.assertEqual(checks.claimable(facts).count("<!--"), 0)
-        self.assertNotIn("Education", checks.claimable(facts))  # A word in a comment approves nothing.
+        self.assertEqual(factbank.claimable(facts).count("<!--"), 0)
+        self.assertNotIn("Education", factbank.claimable(facts))  # A word in a comment approves nothing.
         self.assertEqual(checks.listed_terms(self.cfg(), lambda rel: (self.folder / rel).read_text(encoding="utf-8")), ([], []))
 
     def test_the_claude_runs_wait_for_a_blank_fact_bank(self):

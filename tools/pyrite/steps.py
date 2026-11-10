@@ -17,6 +17,10 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
+from assay import factbank
+from assay.names import term_pattern
+from assay.text import matchable
+
 from . import checks, confirm, discover, doctor, factsdoc, gaps, market, profile, score, store, tomledit, workspace
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
@@ -177,7 +181,7 @@ def _excluded(doc: factsdoc.Doc, kind: str) -> factsdoc.Section | None:
     for section in doc.sections():
         if section.kind != "excluded":
             continue
-        is_never = bool(checks.DO_NOT_USE_SECTION.match(section.title))
+        is_never = bool(factbank.DO_NOT_USE_SECTION.match(section.title))
         if is_never == (kind == "never"):
             return section
     return None
@@ -977,8 +981,8 @@ def _sync_headings(text: str, moves: list[dict[str, Any]], removed: list[factsdo
 
 # ---------- Off limits ----------
 
-# The pattern Block it writes, which is also how the assay blocks a name listed under Do not use with none of its own.
-term_pattern = checks.term_pattern
+# The pattern Block it writes, term_pattern, is also how the assay blocks a name listed under Do not use with none of
+# its own.
 
 
 def _pattern(raw) -> str:
@@ -1220,7 +1224,7 @@ def _fact_notes(texts: dict[str, Any], cfg: dict[str, Any], facts: list[str]) ->
     guard = checks.with_listed(cfg.get("guard", {}), cfg, _reader(texts))
     for fact in facts:
         for hit in checks.explain(fact, guard)["hits"]:
-            words = checks._matchable(fact)[hit["start"]:hit["end"]]
+            words = matchable(fact)[hit["start"]:hit["end"]]
             if hit["kind"] == "never":
                 notes.append(f"“{fact}” names “{words}”, which is on Never mention, so any draft that uses it will be blocked.")
             elif hit["kind"] == "claim":
@@ -1355,7 +1359,7 @@ def _assay(texts: dict[str, Any], cfg: dict[str, Any], key: str, kind: str) -> d
     source = _reader(texts)
     blocked = checks.blocked_patterns(checked, source)
     approved = list(guard["approved_sources"])
-    every = "\n".join(checks.source_body(rel, source(rel)) for rel in approved)
+    every = "\n".join(factbank.source_body(rel, source(rel)) for rel in approved)
     errors, warnings = checks.check_text(texts[key], kind, checked, every, blocked=blocked)
     if kind == "resume" and guard.get("heading_source") == own:
         more, also = checks.check_resume_structure(texts[key], checked)
@@ -1368,7 +1372,7 @@ def _assay(texts: dict[str, Any], cfg: dict[str, Any], key: str, kind: str) -> d
         errors.append(f"It has {problem}, so no draft made from it can pass. {fix}")
     only = []
     if own in approved:
-        others = "\n".join(checks.source_body(rel, source(rel)) for rel in approved if rel != own)
+        others = "\n".join(factbank.source_body(rel, source(rel)) for rel in approved if rel != own)
         found, _ = checks.check_text(texts[key], kind, checked, others, blocked=blocked)
         only = [error.split(". Remove them")[0] for error in found if error not in errors and " not in " in error]
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}
