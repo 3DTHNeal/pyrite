@@ -2,7 +2,9 @@
 
 Boards write pay every way there is: "$130,700 to $205,200 USD", "$257K – $285K • Offers Equity", "CA$250K – CA$535K",
 "$45 - $60 an hour". This reads the first range, scales k and M, and turns an hourly, weekly or monthly figure into a
-year's (2,080 working hours, 52 weeks, 12 months), so every range compares as annual pay.
+year's (2,080 working hours, 52 weeks, 12 months), so every range compares as annual pay. A figure with three
+places after a point ("$194.390") is a thousands separator typed wrong, and a range whose top is more than MAX_SPREAD
+times its bottom isn't read at all, since one end of it has to be wrong.
 
 The yardstick is the position, not you: the median middle of the ranges Pyrite has seen for postings like this one,
 in the same track and at the same level (level_top or level_mid in the title), widening to the whole track and then
@@ -28,6 +30,7 @@ TOO_LOW = 0.75  # The top of the range under this share of the typical middle.
 LOW = 0.8  # The middle under this share.
 HIGH = 1.4
 WIDE = 1.8
+MAX_SPREAD = 5  # A top over this many times the bottom is a misread or a typo, not a range.
 DEFAULT_POINTS = 5
 PER_YEAR = {"hour": 2080, "week": 52, "month": 12, "year": 1}
 LEVELS = {"top": "senior-most", "mid": "senior", "": "unlevelled"}
@@ -38,6 +41,7 @@ _RANGE = re.compile(
     rf"(?<![A-Za-z])([A-Z]{{1,2}})?([$€£])\s?{_AMOUNT}"
     rf"(?:\s*(?:-|–|—|�|to|and)\s*(?:[A-Z]{{1,2}})?[$€£]?\s?{_AMOUNT})?"
 )
+_DOT_THOUSANDS = re.compile(r"\d{1,3}\.\d{3}")
 _CODE = re.compile(r"\b(USD|CAD|AUD|NZD|EUR|GBP|CHF|SGD|INR|JPY)\b")
 _SYMBOL = {"$": "USD", "€": "EUR", "£": "GBP"}
 _PREFIX = {"US": "USD", "CA": "CAD", "C": "CAD", "A": "AUD", "AU": "AUD", "NZ": "NZD", "S": "SGD"}
@@ -67,12 +71,17 @@ def parse(text: str) -> Range | None:
     scale = {"k": 1e3, "m": 1e6}
 
     def value(digits: str, unit: str | None, other: str | None) -> float:
-        return float(digits.replace(",", "")) * scale.get((unit or other or "").lower(), 1)
+        unit = (unit or other or "").lower()
+        if not unit and _DOT_THOUSANDS.fullmatch(digits):
+            digits = digits.replace(".", "")  # No pay is written to a tenth of a cent, so "$194.390" is $194,390.
+        return float(digits.replace(",", "")) * scale.get(unit, 1)
 
     # "$150-200k" means thousands at both ends.
     first = value(low, low_scale, high_scale)
     second = value(high, high_scale, low_scale) if high else first
     lo, hi = min(first, second), max(first, second)
+    if lo and hi / lo > MAX_SPREAD:
+        return None  # No real range spans that much: one end is a typo the text can't settle.
     if _HOURLY.search(text):
         per = "hour"
     elif _WEEKLY.search(text):

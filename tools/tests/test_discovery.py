@@ -260,6 +260,17 @@ class PostingText(unittest.TestCase):
         self.assertEqual(sources.find_comp("Pay range: $180,000 - $250,000 per year"), "$180,000 - $250,000 per year")
         self.assertEqual(sources.find_comp("We have 100 - 200 staff"), "")
 
+    def test_comp_takes_the_band_for_the_titles_level(self):
+        text = ("Base pay by level:\nE05 / Senior: $141,380 - $194,390\nE06 / Staff: $163,270 - $224,500\n"
+                "Senior Staff: $190,000 - $260,000\nPay Range\n$141,380—$224,500 USD")
+        self.assertEqual(sources.find_comp(text, "Staff Software Engineer, Robotics"), "$163,270 - $224,500")
+        self.assertEqual(sources.find_comp(text, "Sr. Software Engineer"), "$141,380 - $194,390")
+        self.assertEqual(sources.find_comp(text, "Senior Staff Engineer"), "$190,000 - $260,000")
+        self.assertEqual(sources.find_comp(text, "Software Engineer"), "$141,380 - $194,390")  # No level: the first.
+        self.assertEqual(sources.find_comp(text, "Principal Engineer"), "$141,380 - $194,390")  # No band for it.
+        self.assertEqual(sources.find_comp("Senior: $100,000 - $120,000; Staff: $130,000 - $150,000", "Staff Engineer"),
+                         "$130,000 - $150,000")
+
 
 class AshbyParsing(unittest.TestCase):
     def test_hybrid_role_flagged_isremote_is_not_remote(self):
