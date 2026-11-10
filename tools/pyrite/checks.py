@@ -659,6 +659,48 @@ def _set_aside(body: str, phrase: str) -> str:
     return re.sub(rf"(?<!\w){re.escape(phrase)}(?!\w)", " ", body) if phrase else body
 
 
+# A job's requisition number, as a posting labels it: "Requisition ID: R-0145", "Req #: 5123", "Job ID JR2026528875".
+# The number must have a digit in it and four characters or more, so "Job no. 1" names nothing.
+REQUISITION_LABEL = (r"(?:requisition|req\.?|job|position|posting)(?:[ \t]+(?:id|number|no\.?|num))?[ \t]*[:#]?[ \t]*#?[ \t]*")
+REQUISITION_ID = r"[A-Za-z]{0,6}[-_]?\d[\w-]{2,30}"
+POSTED_REQUISITION = re.compile(
+    rf"\b(?:requisition(?:[ \t]+(?:id|number|no\.?|num))?|req(?:\.|[ \t]*(?:id|#|no\.?|number))|job[ \t]*(?:id|#|no\.?|number)"
+    rf"|(?:position|posting)[ \t]*(?:id|#|number))[ \t]*[:#]?[ \t]*#?[ \t]*({REQUISITION_ID})",
+    re.I,
+)
+# Workday names a job by its path, which ends in the requisition: "/job/Remote/Lead-Engineer_REQ-14879-1", where -1
+# numbers the posting of that requisition.
+WORKDAY_POSTING = re.compile(r"-\d{1,2}$")
+
+
+def requisitions(posting: str = "", source_key: str = "", source_id: str = "") -> list[str]:
+    """The job's own requisition numbers, which a cover letter may cite: the board's id for the job, and any number the
+    posting labels as its requisition or job id. A job added by hand has an id Pyrite made up, which no one cites."""
+    found: list[str] = []
+    source_id = str(source_id or "").strip()
+    if source_id and not source_key.startswith("manual"):
+        if source_id.startswith("/") and "_" in source_id:
+            tail = source_id.rsplit("_", 1)[1]
+            found += [tail, WORKDAY_POSTING.sub("", tail)]
+        elif re.search(r"\d", source_id) and "/" not in source_id:
+            found.append(source_id)
+    found += [match.group(1).rstrip("-_") for match in POSTED_REQUISITION.finditer(posting or "")]
+    # Longest first, so a posting's own suffix goes with it rather than leaving a stray number behind.
+    return sorted({ident for ident in found if len(ident) >= 4 and re.search(r"\d", ident)}, key=lambda i: (-len(i), i))
+
+
+def _set_aside_requisitions(body: str, idents: list[str]) -> str:
+    """A letter's body with the job's requisition numbers blanked out: each as written anywhere, in any case, and its
+    digits alone where a label says what they are, as in "requisition 0145" for R-0145."""
+    for ident in idents:
+        ident = _matchable(ident).strip()
+        body = re.sub(rf"(?<!\w){re.escape(ident)}(?!\w)", " ", body, flags=re.I)
+        digits = re.sub(r"\D", "", ident)
+        if digits != ident and len(digits) >= 4:
+            body = re.sub(rf"\b{REQUISITION_LABEL}{re.escape(digits)}(?!\w)", " ", body, flags=re.I)
+    return body
+
+
 def _unsupported(text: str, guard: dict[str, Any], label: str) -> tuple[list[str], list[str]]:
     """Errors for unsupported claims, and the exact words of the claims that were properly disclaimed."""
     errors, disclaimed = [], []
@@ -702,10 +744,11 @@ def explain(sentence: str, guard: dict[str, Any]) -> dict[str, Any]:
 
 def check_text(
     text: str, kind: str, cfg: dict[str, Any], sources: str, company: str = "", title: str = "", contact_line: str | None = None,
-    posting: str = "", blocked: list[tuple[str, str]] | None = None,
+    posting: str = "", blocked: list[tuple[str, str]] | None = None, requisition: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Check one document's Markdown. kind is 'resume' or 'letter'. posting is the job's text, when there is one.
-    blocked is what blocked_patterns() gives, for sources that aren't saved yet; by default it's read from the files."""
+    blocked is what blocked_patterns() gives, for sources that aren't saved yet; by default it's read from the files.
+    requisition is the job's own requisition numbers, from requisitions(), which a letter may cite."""
     errors, warnings = [], []
     guard = cfg["guard"]
     blocked = blocked_patterns(cfg) if blocked is None else blocked
@@ -744,6 +787,9 @@ def check_text(
     if kind == "letter":
         # Only a letter is dated. A date alone on a line of a resume is a claim, and its numbers are checked.
         body = DATE_LINE.sub(" ", body)
+        # A letter may cite the job's requisition number, as an application form asks. It measures nothing, and only a
+        # letter needs it: on a resume it would be a claim.
+        body = _set_aside_requisitions(body, requisition or [])
     # A confidential term or a disclaimed claim has been dealt with above, so its own words aren't judged again.
     for pattern, _where in blocked:
         body = re.sub(pattern, " ", body, flags=re.I)
@@ -1021,8 +1067,9 @@ def keyword_overlap(resume: str, description: str, cfg: dict[str, Any]) -> dict[
     return {"pct": pct, "covered": covered, "missing": missing}
 
 
-def check_application(folder: Path, cfg: dict[str, Any], company: str, title: str, description: str = "") -> dict[str, Any]:
-    """Run every gate over an application folder."""
+def check_application(folder: Path, cfg: dict[str, Any], company: str, title: str, description: str = "",
+                      source_key: str = "", source_id: str = "") -> dict[str, Any]:
+    """Run every gate over an application folder. source_key and source_id are the job's, which name its requisition."""
     errors, warnings = [], []
     sources = _read_sources(cfg)
     warnings += [f"approved_sources under [guard] in profile/search.toml names {rel!r}, which isn't in your workspace, "
@@ -1053,7 +1100,8 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
     warnings += new_warnings
 
     if "cover-letter.md" in drafts:
-        new_errors, new_warnings = check_text(drafts["cover-letter.md"], "letter", cfg, sources, company, title, posting=posting)
+        new_errors, new_warnings = check_text(drafts["cover-letter.md"], "letter", cfg, sources, company, title, posting=posting,
+                                              requisition=requisitions(posting, source_key, source_id))
         errors += new_errors
         warnings += new_warnings
 
