@@ -17,7 +17,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, discover, factsdoc, gaps, profile, store, tomledit
+from . import checks, confirm, discover, factsdoc, gaps, profile, store, tomledit, workspace
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -297,7 +297,9 @@ def draft(step: str, edits, based_on) -> dict[str, Any]:
         "changes": changes,
         "count": max(result.count, 1) if changes else 0,
         "notes": result.notes,
-        "code": [phrase for key, text in changes.items() for phrase in confirm.loosening(key, texts[key], text)],
+        # A new workspace needs no code until it's set up, as confirm.require says.
+        "code": [] if workspace.setting_up() else
+                [phrase for key, text in changes.items() for phrase in confirm.loosening(key, texts[key], text)],
         "diffs": [{"key": key, "path": profile.FILES[key], **_diff(texts[key], text)} for key, text in changes.items()],
         "preview": result.preview,
     }
