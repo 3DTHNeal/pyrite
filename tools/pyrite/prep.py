@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import checks, claude_code
-from .claude_code import ClaudeFailed, NoDocument, find_claude, sign_in_help, spawn_worker
+from .claude_code import ClaudeFailed, NoDocument, find_claude
 from .cli import _collect_files, write_posting
 from .store import IS_EXAMPLE, ROOT, get_job, log_event
 
@@ -46,33 +46,13 @@ def refusal(conn, job) -> str | None:
 
 def begin(conn, job_id: int) -> None:
     """Claim the job, so a double click can't start two runs writing one file."""
-    conn.commit()
-    conn.execute("BEGIN IMMEDIATE")
-    problem = refusal(conn, get_job(conn, job_id))
-    if problem:
-        conn.rollback()
-        raise ValueError(problem)
-    log_event(conn, job_id, STARTED)
-    conn.commit()
+    claude_code.claim(conn, job_id, refusal, STARTED)
 
 
 def start(conn, job_id: int) -> None:
     """The dashboard button: check it can work, then run in the background so the page doesn't wait."""
-    problem = refusal(conn, get_job(conn, job_id))
-    if problem:
-        raise ValueError(problem)
-    claude = find_claude()
-    if not claude:
-        raise ValueError("Claude Code wasn't found on this PC, so the brief can't be written.")
-    if not claude_code.signed_in(claude):
-        raise ValueError(sign_in_help(claude))
-    begin(conn, job_id)
-    try:
-        spawn_worker("prep", job_id, ROOT)
-    except OSError as err:
-        log_event(conn, job_id, FAILED, f"Couldn't start: {err}")
-        conn.commit()
-        raise ValueError(f"Couldn't start the interview prep: {err}") from err
+    claude_code.start_run(conn, job_id, "prep", refusal=refusal, begin=begin, failed=FAILED, find=find_claude, cwd=ROOT,
+                          cannot="the brief can't be written", name="the interview prep")
 
 
 def command(claude: str, cfg: dict[str, Any] | None = None) -> list[str]:

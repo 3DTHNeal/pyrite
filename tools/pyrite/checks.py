@@ -149,13 +149,29 @@ def missing_sources(cfg: dict[str, Any]) -> list[str]:
     return [rel for rel in cfg["guard"]["approved_sources"] if not (ROOT / rel).exists()]
 
 
+def _decode(raw: bytes) -> str:
+    """Bytes as `read_text(encoding="utf-8")` would give them, line endings made \\n, so text and hash come from one read."""
+    return raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _read_sources(cfg: dict[str, Any]) -> str:
-    parts = []
-    for rel in cfg["guard"]["approved_sources"]:
+    return _sealed_sources(cfg)[0]
+
+
+def _sealed_sources(cfg: dict[str, Any]) -> tuple[str, str | None, dict[str, str]]:
+    """The approved sources' text, the heading source's text (None when it's missing), and a hash of the very bytes
+    each was read from, keyed as source_fingerprints() keys them. One read of each file serves all three, so a source
+    saved while a check runs can't be recorded as the version the draft was judged against."""
+    guard = cfg["guard"]
+    raw: dict[str, bytes | None] = {}
+    for rel in dict.fromkeys([*guard["approved_sources"], guard["heading_source"]]):
         path = ROOT / rel
-        if path.exists():
-            parts.append(source_body(rel, path.read_text(encoding="utf-8")))
-    return "\n".join(parts)
+        raw[rel] = path.read_bytes() if path.exists() else None
+    parts = [source_body(rel, _decode(data)) for rel in guard["approved_sources"] if (data := raw[rel]) is not None]
+    heading = raw[guard["heading_source"]]
+    prints = {rel: seal.digest(data) if data is not None else "missing" for rel, data in raw.items()}
+    prints[GUARD_KEY] = seal.value_digest(guard)
+    return "\n".join(parts), _decode(heading) if heading is not None else None, prints
 
 
 def saved_posting(folder: Path) -> str:
@@ -168,8 +184,9 @@ def saved_posting(folder: Path) -> str:
 
 def _pages(pdf: Path) -> int | None:
     try:
-        out = subprocess.run(["pdfinfo", str(pdf)], capture_output=True, text=True, check=True, creationflags=NO_WINDOW).stdout
-    except (OSError, subprocess.CalledProcessError):
+        out = subprocess.run(["pdfinfo", str(pdf)], capture_output=True, text=True, check=True, timeout=60,
+                             creationflags=NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
         # Without poppler, count page objects. A PDF that hides them in compressed streams reads as unknown, not as zero pages.
         try:
             return len(re.findall(rb"/Type\s*/Page\b", pdf.read_bytes())) or None
@@ -401,15 +418,18 @@ def check_brief(text: str, cfg: dict[str, Any], sources: str, company: str = "",
     return errors, warnings
 
 
-def check_resume_structure(text: str, cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
+def check_resume_structure(text: str, cfg: dict[str, Any], reference: str | None = None) -> tuple[list[str], list[str]]:
+    """The draft's employers, titles and dates against the heading source. `reference` is that source's text when the
+    caller has read it already, as check_application does so that what it hashes is what was compared."""
     errors: list[str] = []
     warnings: list[str] = []
     source = ROOT / cfg["guard"]["heading_source"]
-    if not source.exists():
+    if reference is None and source.exists():
+        reference = source.read_text(encoding="utf-8")
+    if reference is None:
         # Nothing to compare the employers, titles and dates with, so nothing can pass that check.
         return [f"heading_source under [guard] in profile/search.toml is {cfg['guard']['heading_source']!r}, which isn't in "
                 "your workspace. Point it at your own master resume."], warnings
-    reference = source.read_text(encoding="utf-8")
     # Stripped first, as the builder does: an indented heading still prints as a heading.
     headings = lambda doc: {row.strip() for row in doc.splitlines() if row.strip().startswith(("### ", "#### "))}
     approved, present = headings(reference), headings(text)
@@ -560,9 +580,13 @@ def keyword_overlap(resume: str, description: str, cfg: dict[str, Any]) -> dict[
 
 def check_application(folder: Path, cfg: dict[str, Any], company: str, title: str, description: str = "",
                       source_key: str = "", source_id: str = "") -> dict[str, Any]:
-    """Run every gate over an application folder. source_key and source_id are the job's, which name its requisition."""
+    """Run every gate over an application folder. source_key and source_id are the job's, which name its requisition.
+
+    A pass records, under `checked` and `checked_sources`, a hash of the bytes this check read: each draft and built
+    document, and each source it was judged against. Hashing a second read instead would let a file saved in between
+    be recorded as passed without ever being checked."""
     errors, warnings = [], []
-    sources = _read_sources(cfg)
+    sources, heading_source, checked_sources = _sealed_sources(cfg)
     warnings += [f"approved_sources under [guard] in profile/search.toml names {rel!r}, which isn't in your workspace, "
                  "so nothing in it counts as a source." for rel in missing_sources(cfg)]
     posting = description or saved_posting(folder)
@@ -571,12 +595,15 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
     if not resume_path.exists():
         return {"ok": False, "errors": ["resume.md is missing."], "warnings": [], "overlap": None}
     drafts: dict[str, str] = {}
+    checked: dict[str, str] = {}
     for name in ("resume.md", "cover-letter.md"):
         path = folder / name
         if name == "cover-letter.md" and not path.exists():
             continue
         try:
-            drafts[name] = path.read_text(encoding="utf-8")
+            raw = path.read_bytes()
+            drafts[name] = _decode(raw)
+            checked[name] = seal.digest(raw)
         except UnicodeDecodeError:
             return {"ok": False, "errors": [f"{name} isn't saved as UTF-8 text. Save it as UTF-8 and check again."],
                     "warnings": [], "overlap": None}
@@ -586,7 +613,7 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
     new_errors, new_warnings = check_text(resume, "resume", cfg, sources, company, title, posting=posting)
     errors += new_errors
     warnings += new_warnings
-    new_errors, new_warnings = check_resume_structure(resume, cfg)
+    new_errors, new_warnings = check_resume_structure(resume, cfg, heading_source)
     errors += new_errors
     warnings += new_warnings
 
@@ -598,6 +625,14 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
 
     if not (folder / "notes.md").exists():
         warnings.append("notes.md is missing.")
+
+    # The built documents are hashed here, before their page counts are read, rather than after the verdict.
+    for path in sorted(folder.iterdir()):
+        if path.is_file() and _built(path):
+            try:
+                checked[path.name] = seal.digest(path.read_bytes())
+            except OSError as exc:
+                errors.append(f"Couldn't read {path.name}: {exc.strerror or exc}.")
 
     guard = cfg["guard"]
     for pdf in folder.glob("*.pdf"):
@@ -618,6 +653,10 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
 
     overlap = keyword_overlap(resume, description, cfg) if description else None
     report = {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
+    if report["ok"]:
+        # What exactly passed, so a later change to any of it shows on the dashboard.
+        report["checked"] = checked
+        report["checked_sources"] = checked_sources
     if sent:
         # What was sent is the record, so an older drafter is only a fact about it. Rebuilding would make the folder
         # differ from what the company has, which the dashboard then flags as changed after sending.

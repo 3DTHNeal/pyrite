@@ -37,7 +37,7 @@ The rules behind that, in the order a draft meets them:
 
 ### After the pass
 
-- **A pass is a sealed record.** It stores SHA-256 hashes of the draft, the documents built from it, every approved source and the `[guard]` rules. Change any of them and the pass no longer counts.
+- **A pass is a sealed record.** It stores SHA-256 hashes of the draft, the documents built from it, every approved source and the `[guard]` rules, taken from the same bytes the assay read, so a file saved while it checks can't slip in. Change any of them and the pass no longer counts.
 - **Loosening the gate takes a person.** Tightening a rule is free. A change that lets drafts say more, such as approving a term or taking a line off "Unsupported", asks for a one-time code sent to this computer's notifications.
 - **A person makes the last call.** Code catches what rules can catch. Everything else is for the reader of the draft.
 

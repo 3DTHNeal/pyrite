@@ -5,6 +5,7 @@ Import this before anything from pyrite. It points PYRITE_HOME at the copy, so n
 job search, whatever workspace this machine normally uses.
 """
 import atexit
+import faulthandler
 import gc
 import json
 import os
@@ -45,6 +46,37 @@ def _fail_on_leaks():
 
 warnings.showwarning = _note_leak
 atexit.register(_fail_on_leaks)  # Registered before the workspace's cleanup below, so it runs after it.
+
+# A test that waits forever for a thread, a server or a worker would otherwise run until CI cancels the whole job, with
+# nothing in the log to say where. So each test gets a time limit, far over what any test takes and far under the job's
+# 20 minutes. Past it, faulthandler prints "Timeout" and every thread's stack, the hung test's frame among them, and ends
+# the run as failed. It's re-armed as each test starts and ends, so a class's setUpClass or tearDownClass is held to it
+# too. Its watchdog is a thread of faulthandler's own, so it fires even while every Python thread is stuck.
+# PYRITE_TEST_LIMIT sets the seconds, and 0 turns it off, as for a session paused in a debugger.
+TEST_LIMIT_SECONDS = float(os.environ.get("PYRITE_TEST_LIMIT") or 300)
+
+
+def _arm_watchdog() -> None:
+    if TEST_LIMIT_SECONDS > 0:
+        faulthandler.dump_traceback_later(TEST_LIMIT_SECONDS, exit=True)  # Calling it again replaces the last one.
+
+
+_run_test = unittest.TestCase.run
+
+
+def _run_with_limit(self, result=None):
+    _arm_watchdog()
+    try:
+        return _run_test(self, result)
+    finally:
+        _arm_watchdog()
+
+
+# Every test module imports this, but under its own name when run alone, so it's guarded against wrapping twice.
+if not getattr(unittest.TestCase.run, "time_limited", False):
+    _run_with_limit.time_limited = True  # type: ignore[attr-defined]
+    unittest.TestCase.run = _run_with_limit  # type: ignore[method-assign]
+    atexit.register(faulthandler.cancel_dump_traceback_later)
 
 CODE_ROOT = Path(__file__).resolve().parents[2]
 _workspace = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

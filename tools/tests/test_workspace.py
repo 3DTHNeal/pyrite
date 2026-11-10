@@ -115,17 +115,20 @@ class Workspace(unittest.TestCase):
             env = {**os.environ, "PYRITE_HOME": str(target)}
             env.pop(store.MAY_BE_MISSING, None)
             script = str(CODE_ROOT / "tools" / "pyrite.py")
-            ran = subprocess.run([sys.executable, script, "--help"], env=env, capture_output=True, text=True, encoding="utf-8")
+            ran = subprocess.run([sys.executable, script, "--help"], env=env, capture_output=True, text=True, encoding="utf-8",
+                                 stdin=subprocess.DEVNULL, timeout=120)
             self.assertEqual(ran.returncode, 0, ran.stderr)
             # So does help on one command, wherever the flag is.
             for argv in (["queue", "--help"], ["fill", "-h"]):
-                ran = subprocess.run([sys.executable, script, *argv], env=env, capture_output=True, text=True, encoding="utf-8")
+                ran = subprocess.run([sys.executable, script, *argv], env=env, capture_output=True, text=True, encoding="utf-8",
+                                 stdin=subprocess.DEVNULL, timeout=120)
                 self.assertEqual(ran.returncode, 0, ran.stderr)
                 self.assertIn(f"usage: pyrite {argv[0]}", ran.stdout)
-            ran = subprocess.run([sys.executable, script, "doctor"], env=env, capture_output=True, text=True, encoding="utf-8")
+            ran = subprocess.run([sys.executable, script, "doctor"], env=env, capture_output=True, text=True, encoding="utf-8",
+                                 stdin=subprocess.DEVNULL, timeout=120)
             self.assertIn("doesn't exist", ran.stderr)
             ran = subprocess.run([sys.executable, script, "init", str(target), "--name", "Sam Doe"], env=env, capture_output=True,
-                                 text=True, encoding="utf-8", cwd=folder)
+                                 text=True, encoding="utf-8", cwd=folder, stdin=subprocess.DEVNULL, timeout=120)
             self.assertEqual(ran.returncode, 0, ran.stderr)
             self.assertIn("PYRITE_HOME already names it", ran.stdout)
             self.assertTrue((target / "profile" / "facts.md").is_file())
@@ -885,7 +888,7 @@ class Init(unittest.TestCase):
     # ---- --git ----
 
     def git(self, *args):
-        return subprocess.run(["git", "-C", str(self.folder), *args], capture_output=True, text=True, check=False)
+        return subprocess.run(["git", "-C", str(self.folder), *args], capture_output=True, text=True, check=False, timeout=60)
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     def test_git_makes_a_private_repository_that_keeps_the_database_and_leaves_out_working_files(self):

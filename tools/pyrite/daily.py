@@ -288,10 +288,7 @@ def briefing(judged: dict[str, Any], unjudged: int, ready: list[str], blocked: l
 def _research_skills(conn, cfg: dict[str, Any], waiting: list[dict[str, Any]], claude: str, report) -> list[dict[str, Any]] | None:
     """Date the skills these postings ask years of that the table doesn't know, and queue again with what was learned.
     Returns None when there was nothing to look up. A failed lookup costs only itself: the run goes on without it."""
-    ids = [job["id"] for job in waiting]
-    marks = ",".join("?" * len(ids))
-    texts = [row[0] or "" for row in conn.execute(f"SELECT description FROM jobs WHERE id IN ({marks})", ids)] if ids else []
-    phrases = skillage.to_research(texts)
+    phrases = skillage.waiting_to_research(conn, waiting)
     if not phrases:
         return None
     report(f"Looking up how long {_count(len(phrases), 'skill')} in the new postings have existed")

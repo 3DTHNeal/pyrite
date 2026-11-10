@@ -22,18 +22,18 @@ class Updating(unittest.TestCase):
 
     def git(self, repo, *args):
         return subprocess.run(["git", "-C", str(repo), "-c", "user.name=Sam Doe", "-c", "user.email=sam@example.com", *args],
-                              capture_output=True, text=True, check=True).stdout.strip()
+                              capture_output=True, text=True, check=True, timeout=60).stdout.strip()
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
         self.origin, self.upstream, self.copy = root / "origin.git", root / "upstream", root / "copy"
-        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
-        subprocess.run(["git", "clone", "-q", str(self.origin), str(self.upstream)], check=True, capture_output=True)
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True, timeout=60)
+        subprocess.run(["git", "clone", "-q", str(self.origin), str(self.upstream)], check=True, capture_output=True, timeout=60)
         self.git(self.upstream, "symbolic-ref", "HEAD", "refs/heads/main")
         self.push("README.md", "Pyrite.\n", "Start")
-        subprocess.run(["git", "clone", "-q", str(self.origin), str(self.copy)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "-q", str(self.origin), str(self.copy)], check=True, capture_output=True, timeout=60)
         update.forget()
         self.addCleanup(update.forget)
 

@@ -602,9 +602,9 @@ class ToolsAndWorkspace(Profile):
             self.skipTest("git isn't installed")
         self.database()
         git = ["git", "-C", str(self.root), "-c", "user.name=Test", "-c", "user.email=test@example.com"]
-        subprocess.run([*git, "init", "-q"], check=True)
-        subprocess.run([*git, "add", "data/pyrite.db"], check=True)
-        subprocess.run([*git, "commit", "-q", "-m", "Back up"], check=True)
+        subprocess.run([*git, "init", "-q"], check=True, timeout=60)
+        subprocess.run([*git, "add", "data/pyrite.db"], check=True, timeout=60)
+        subprocess.run([*git, "commit", "-q", "-m", "Back up"], check=True, timeout=60)
         state = backup.about(self.root)["git"]
         self.assertEqual((state["repo"], state["tracked"], state["changed"], state["remote"]), (True, True, False, False))
         self.assertTrue(state["committed"].startswith("20"))

@@ -83,7 +83,7 @@ FAR_FUTURE_LOOKBACK = {"inbox": {"lookback_days": 100000, "domains": {"Hooli": [
 def share_with_others(path):
     if os.name == "nt":
         # S-1-1-0 is Everyone, whatever language Windows is set to.
-        subprocess.run(["icacls", str(path), "/grant", "*S-1-1-0:R"], capture_output=True, check=True)
+        subprocess.run(["icacls", str(path), "/grant", "*S-1-1-0:R"], capture_output=True, check=True, timeout=30)
     else:
         path.chmod(0o644)
 

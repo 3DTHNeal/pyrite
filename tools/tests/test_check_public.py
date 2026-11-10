@@ -240,7 +240,7 @@ class Repository(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Sam Doe", "-c", "user.email=sam@example.com", *args],
-                              capture_output=True, text=True, check=True).stdout.strip()
+                              capture_output=True, text=True, check=True, timeout=60).stdout.strip()
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
