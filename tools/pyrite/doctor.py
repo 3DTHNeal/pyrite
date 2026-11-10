@@ -58,7 +58,7 @@ BLANK_FILES = {"profile/facts.md": "basics", "profile/run-notes.md": None, "prof
 # The Profile section that edits the patterns in each table of search.toml. [promote] is set on the Settings tab, which
 # What comes first opens.
 PATTERN_STEPS = {"location": "where", "track": "roles", "scoring": "roles", "promote": "priorities"}
-# A line that holds nothing yet:a bullet that's only its bold label, such as "- **Who:**", or a bare = or @ marker.
+# A line that holds nothing yet: a bullet that's only its bold label, such as "- **Who:**", or a bare = or @ marker.
 EMPTY_LINE = re.compile(r"[-*][ \t]+\*\*[^*]+\*\*:?|[=@]")
 
 

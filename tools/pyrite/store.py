@@ -398,7 +398,7 @@ def read_config(path: Path) -> dict[str, Any]:
 def parse_config(text: str, name: str) -> dict[str, Any]:
     """search.toml's text, read as read_config reads it. `name` is the file as an error names it."""
     try:
-        return tomllib.loads(text.removeprefix("﻿"))
+        return tomllib.loads(text.removeprefix("﻿"))  # A byte order mark, as Notepad can save one.
     except tomllib.TOMLDecodeError as err:
         found = re.fullmatch(r"(.*) \(at line (\d+), column \d+\)", str(err), re.S)
         if found:
