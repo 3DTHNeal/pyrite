@@ -464,6 +464,45 @@ class Hub(Profile):
         ranks = [{"bad": 0, "warn": 1, "info": 2}[item["severity"]] for item in view["needs"]]
         self.assertEqual(ranks, sorted(ranks))
 
+    def test_settings_that_cant_be_read_need_you_and_the_tab_still_opens(self):
+        config = profile.read("config")
+        (self.root / "profile" / "search.toml").write_bytes(config.encode() + b"\nbroken = oops\n")
+        with mock.patch.object(profile.doctor, "workspace_todos", support.WORKSPACE_TODOS):
+            view = profile.view()
+        first = view["needs"][0]
+        self.assertEqual((first["severity"], first["step"]), ("bad", None))
+        self.assertRegex(first["title"], r"^profile/search\.toml line \d+: .*Fix that line")
+        # A list left open is only found at the end of the file, which has no line to name.
+        (self.root / "profile" / "search.toml").write_bytes(config.encode() + b"\nbroken = [\n")
+        self.assertIn("at the end of the file", profile.view()["needs"][0]["title"])
+        # What doctor would say of settings that look empty only because they can't be read is left out.
+        self.assertFalse(any("lists no roles" in item["title"] for item in view["needs"]), view["needs"])
+        self.assertEqual([s["id"] for s in view["steps"]], [s["id"] for s in profile.STEPS])
+
+    def test_a_setting_of_the_wrong_kind_needs_you(self):
+        config = tomledit.set_value(profile.read("config"), "run", "min_score", "forty")
+        (self.root / "profile" / "search.toml").write_bytes(config.encode())
+        first = profile.view()["needs"][0]
+        self.assertEqual(first["severity"], "bad")
+        self.assertIn("min_score under [run]", first["title"])
+
+    def test_a_bad_pattern_opens_the_section_that_edits_it(self):
+        config = profile.read("config")
+        broken = {
+            "where": tomledit.set_value(config, "location", "local", ["(unclosed"]),
+            "roles": tomledit.set_value(config, "scoring", "exclude_titles", ["(unclosed"]),
+            "priorities": config.replace("match = 'hill valley", "match = '(hill valley", 1),
+        }
+        for step, text in broken.items():
+            with self.subTest(step=step):
+                self.assertNotEqual(text, config)
+                (self.root / "profile" / "search.toml").write_bytes(text.encode())
+                with mock.patch.object(profile.doctor, "workspace_todos", support.WORKSPACE_TODOS):
+                    view = profile.view()
+                found = [item for item in view["needs"] if "isn't a valid pattern" in item["title"]]
+                self.assertEqual([(item["step"], item["severity"]) for item in found], [(step, "bad")], view["needs"])
+                self.assertEqual(next(s for s in view["steps"] if s["id"] == step)["status"], "attention")
+
     def test_the_demo_has_nothing_to_set_up(self):
         with mock.patch.object(store, "IS_EXAMPLE", True), mock.patch.object(profile.doctor, "workspace_todos", support.WORKSPACE_TODOS):
             self.assertEqual(profile.view()["needs"], [])
@@ -621,6 +660,15 @@ class PageScripts(unittest.TestCase):
         self.assertLessEqual(sections, set(loaded))
         self.assertEqual(len(loaded), len(set(loaded)))
         self.assertNotIn(server.SECTIONS_MARK, page)
+
+    def test_what_needs_you_opens_a_section_set_on_settings_there(self):
+        # A finding can name What comes first, whose settings are on the Settings tab, so its button goes the way the
+        # section's card does rather than to an empty section here.
+        script = (server.STATIC / "profile.js").read_text(encoding="utf-8")
+        needs = script[script.index("function profileNeeds("):script.index("function profileOpen(")]
+        self.assertIn("onclick: () => profileOpen(step)", needs)
+        self.assertNotIn("profileGo(", needs)
+        self.assertIn("profileOpenLabel(step)", needs)
 
     def test_the_page_served_is_the_one_with_the_section_scripts(self):
         httpd = server.make_server(0)
