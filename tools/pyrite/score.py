@@ -1,7 +1,7 @@
 """Deterministic filtering and ranking. Claude only judges what gets through here."""
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from functools import lru_cache
 from typing import Any
 
@@ -12,7 +12,7 @@ from . import quality
 # it's kept. The next sweep then rescores the prospects nobody has acted on, so none keeps an old score or a reason in old
 # words. Changes to `freshness`, `promotion` and `signals` don't need it, since the dashboard works those out afresh on
 # every load.
-VERSION = 3
+VERSION = 4
 
 FOREIGN = re.compile(
     r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|(?<!new\s)mexico|brazil|argentina|colombia|"
@@ -75,10 +75,19 @@ class Verdict:
 
 
 def parse_date(value) -> date | None:
+    """The day a date or timestamp falls on here. A timestamp is turned to this computer's time zone first: a posting
+    published at 00:00 UTC on the 7th went up on the 6th anywhere in the Americas, where today is the 6th too."""
+    text = str(value or "").strip()
     try:
-        return date.fromisoformat(str(value)[:10])
-    except (TypeError, ValueError):
-        return None
+        if len(text) > 10:
+            moment = datetime.fromisoformat(text)
+            return moment.astimezone().date() if moment.tzinfo else moment.date()
+        return date.fromisoformat(text)
+    except ValueError:
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
 
 
 def _named(name: str) -> str:

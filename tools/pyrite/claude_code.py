@@ -36,7 +36,7 @@ def sign_in_help(claude: str) -> str:
         command = f'"{claude}" auth login'
     return f"Claude Code isn't signed in for background use. Run this once in a terminal: {command}"
 KIND_LABELS = {"refresh": "Refresh resume", "prep": "Interview prep", "triage": "Judging postings", "tailor": "Tailoring resumes",
-               "mail": "Checking mail", "outlook": "Industry outlook", "culture": "Employer research"}
+               "mail": "Checking mail", "outlook": "Industry outlook", "culture": "Employer research", "skills": "Skill ages"}
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 # The longest a single Claude run of a judging or writing job may take. How long a task can go quiet before it
 # counts as dead is worked out from this, so it covers one step, not a whole job.
@@ -378,6 +378,24 @@ def _count(value) -> float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def cut_short(output: str | bytes | None) -> dict[str, Any]:
+    """What a stream-json run that was stopped had used by then, read from the messages it printed, as a result
+    `record` takes. Claude Code reports a cost only when a run ends, so there's none, and `json` output, which prints
+    nothing until the end, has nothing to count."""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    events, _ = _events(output or "")
+    # A message with several parts is printed once for each, so each message is counted once, at its last.
+    used: dict[Any, dict[str, Any]] = {}
+    for event in events:
+        message = event.get("message") if event.get("type") == "assistant" else None
+        if isinstance(message, dict) and isinstance(message.get("usage"), dict):
+            used[message.get("id") or len(used)] = message["usage"]
+    if not used:
+        return {}
+    return {"usage": {key: sum(_count(each.get(key)) or 0 for each in used.values()) for key in (*INPUT_KEYS, "output_tokens")}}
+
+
 def record(conn, job_id: int | None, kind: str, result: dict[str, Any], seconds: float, ok: bool) -> int:
     """Keep what one run used, and return its row. Committed straight away, so a run that fails and rolls back is still counted."""
     raw_usage = result.get("usage")
@@ -436,13 +454,14 @@ def run_process(cmd: list[str], input: str, cwd: Path, timeout: float,
     with process:
         try:
             stdout, stderr = process.communicate(input, timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as err:
             _kill_tree(process)
             try:
-                process.communicate(timeout=30)
+                # What it printed before it was stopped, so what it had used so far can still be counted.
+                err.output = process.communicate(timeout=30)[0]  # err.stdout reads it from here.
             except subprocess.TimeoutExpired:
                 pass  # Something outside the tree kept the pipes open. The run is over either way.
-            raise
+            raise err
     return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
 
@@ -458,7 +477,7 @@ def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Pat
     try:
         out = run_process(cmd, input=text, cwd=cwd, timeout=seconds, env=env)
     except subprocess.TimeoutExpired as err:
-        record(conn, job_id, kind, {}, time.monotonic() - began, ok=False)
+        record(conn, job_id, kind, cut_short(err.stdout), time.monotonic() - began, ok=False)
         raise ClaudeFailed(f"Claude hadn't finished after {limit_minutes} minutes.") from err
     except OSError as err:
         raise ClaudeFailed(f"Couldn't run Claude Code: {err}") from err
@@ -484,6 +503,8 @@ def _totals(row) -> dict[str, Any]:
         "input_tokens": row["input_tokens"] or 0,
         "output_tokens": row["output_tokens"] or 0,
         "cost_usd": round(row["cost_usd"] or 0, 2),
+        # Runs stopped before Claude Code reported a cost, so the cost above leaves them out and is low.
+        "uncosted": row["uncosted"] or 0,
     }
 
 
@@ -491,7 +512,7 @@ def usage(conn) -> dict[str, Any]:
     """What the Claude runs Pyrite started have used: the daily run, Refresh resume, Interview prep and checking mail.
     A Claude Code session of your own, such as one following daily_run.md, isn't one of them, so it isn't counted."""
     sums = """COUNT(*) AS runs, SUM(ok = 0) AS failed, SUM(seconds) AS seconds, SUM(input_tokens) AS input_tokens,
-              SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd"""
+              SUM(output_tokens) AS output_tokens, SUM(cost_usd) AS cost_usd, SUM(cost_usd IS NULL) AS uncosted"""
     since = (datetime.now(UTC) - timedelta(days=7)).isoformat(timespec="seconds")
     kinds = conn.execute(f"SELECT kind, {sums} FROM claude_runs GROUP BY kind ORDER BY kind").fetchall()
     return {

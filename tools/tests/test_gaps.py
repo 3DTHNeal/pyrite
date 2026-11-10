@@ -64,6 +64,19 @@ class Reading(unittest.TestCase):
         self.assertIn("c", gaps.tokens("C and Python"))
         self.assertIn("c++", gaps.tokens("Hands-on C/C++"))
 
+    def test_a_category_name_is_matched_by_what_follows_it(self):
+        # Three gaps called "Domain" in three postings: two about data centers, one about wearables.
+        notes = {
+            "a": "## Gaps to prepare for\n\n1. **Domain.** Data center power infrastructure.\n",
+            "b": "## Gaps to prepare for\n\n1. **Domain.** Data center power infrastructure experience.\n",
+            "c": "## Gaps to prepare for\n\n1. **Domain.** Consumer wearables.\n",
+        }
+        found = gaps.group([gap for folder, text in notes.items() for gap in gaps.parse(text, folder)])
+        self.assertEqual(sorted(len(g.folders) for g in found), [1, 2])
+        # With nothing after the name either, each stands alone.
+        bare = gaps.group(gaps.parse("## Gaps to prepare for\n\n1. **Domain.**\n", "a") + gaps.parse("## Gaps to prepare for\n\n1. **Domain.**\n", "b"))
+        self.assertEqual([g.folders for g in bare], [["a"], ["b"]])
+
     def test_the_example_ranks_what_both_applications_raise(self):
         found = gaps.view()
         self.assertEqual(found["applications"], 2)

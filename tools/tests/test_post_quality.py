@@ -1,7 +1,7 @@
 """Whether a listing is a real opening: talent pools, evergreen roles, scam tells, unconfirmed listings and reposts."""
 import json
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 from support import CFG, Base, Clock, stub_feed
 
@@ -75,19 +75,28 @@ class FreshnessSignals(unittest.TestCase):
 
     def test_the_day_it_was_found_is_a_floor_on_age(self):
         # The board says it was posted yesterday, but the sweep has seen it since June.
-        moved = self.view(posted_at="2026-11-04", first_seen="2026-06-01T00:00:00+00:00")
+        moved = self.view(posted_at="2026-11-04", first_seen="2026-06-01T12:00:00+00:00")
         self.assertEqual(moved["age_days"], 157)
         self.assertFalse(moved["is_new"])
         self.assertTrue(moved["ghost_risk"])
-        self.assertEqual(self.view(posted_at="2026-11-04", first_seen="2026-11-04T09:00:00+00:00")["age_days"], 1)
+        self.assertEqual(self.view(posted_at="2026-11-04", first_seen="2026-11-04T12:00:00+00:00")["age_days"], 1)
 
     def test_with_no_date_the_day_it_was_found_only_raises_a_ghost(self):
-        found_today = self.view(first_seen="2026-11-05T06:00:00+00:00")
+        found_today = self.view(first_seen="2026-11-05T12:00:00+00:00")
         self.assertEqual((found_today["age_days"], found_today["rank"], found_today["is_new"], found_today["ghost_risk"]),
                          (None, 60, False, False))
-        long_ago = self.view(first_seen="2026-05-01T06:00:00+00:00")
+        long_ago = self.view(first_seen="2026-05-01T12:00:00+00:00")
         self.assertIsNone(long_ago["age_days"])
         self.assertEqual(long_ago["ghost_reason"], "listed for at least 188 days")
+
+    def test_a_timestamp_counts_on_the_day_it_falls_here(self):
+        # Published at midnight UTC: the day before in the Americas, the same day in Europe. Whichever it is here.
+        stamp = "2026-11-07T00:00:52.344+00:00"
+        self.assertEqual(score.parse_date(stamp), datetime.fromisoformat(stamp).astimezone().date())
+        self.assertEqual(score.parse_date("2026-11-07"), date(2026, 11, 7))  # A date alone is that date anywhere.
+        self.assertEqual(score.parse_date("2026-11-07T23:00:00"), date(2026, 11, 7))  # No zone: taken as written.
+        self.assertIsNone(score.parse_date("soon"))
+        self.assertIsNone(score.parse_date(None))
 
     def test_a_job_you_added_keeps_its_own_dates(self):
         added = self.view(source_key="manual", posted_at="2026-11-04", first_seen="2026-06-01T00:00:00+00:00")

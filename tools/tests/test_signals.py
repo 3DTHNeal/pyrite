@@ -10,7 +10,7 @@ from unittest import mock
 
 from support import CFG, Base  # Also sets up the throwaway workspace every path points into.
 
-from pyrite import cli, daily, deadline, discover, pay, server, signals, skillage, store
+from pyrite import cli, daily, deadline, discover, pay, server, signals, skillage, sources, store
 
 TODAY = date(2026, 11, 8)
 
@@ -34,6 +34,28 @@ class Deadlines(unittest.TestCase):
         (folder / "notes.md").write_text("- **Deadline:** accepted at least until November 20, 2026\n", encoding="utf-8")
         info = deadline.for_job("Apply by November 1, 2026.", folder, TODAY)
         self.assertEqual((info["deadline"], info["deadline_firm"], info["days_to_deadline"]), ("2026-11-20", False, 12))
+
+    def test_notes_restating_a_floor_date_dont_make_it_firm(self):
+        folder = store.ROOT / "applications" / self.id().replace(".", "_")
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "notes.md").write_text("- **Deadline:** November 6, 2026\n", encoding="utf-8")
+        info = deadline.for_job("Applications will be accepted at least until November 6, 2026.", folder, TODAY)
+        self.assertEqual((info["deadline"], info["deadline_firm"]), ("2026-11-06", False))
+        self.assertFalse(deadline.expired(info))
+        # A date of its own in the notes still keeps the notes' firmness.
+        self.assertTrue(deadline.for_job("Applications will be accepted at least until November 1, 2026.", folder, TODAY)["deadline_firm"])
+
+    def test_a_date_without_a_year_is_the_nearest_one_and_never_expires_a_job(self):
+        self.assertEqual(deadline.in_posting("Applications accepted until Dec 1.", TODAY), ("2026-12-01", True))
+        self.assertEqual(deadline.in_posting("Applications accepted until January 15th.", TODAY), ("2027-01-15", True))
+        # Gone by, with its year guessed: a floor, so it doesn't pass on the job.
+        self.assertEqual(deadline.in_posting("Applications accepted until November 1.", TODAY), ("2026-11-01", False))
+        self.assertEqual(deadline.in_posting("Applications accepted until Dec 1."), (None, True))  # No today, no guess.
+
+    def test_only_closing_words_make_a_deadline(self):
+        self.assertEqual(deadline.in_posting("You must relocate no later than March 1, 2027."), (None, True))
+        self.assertEqual(deadline.in_posting("Applications must be received no later than March 1, 2027."), ("2027-03-01", True))
+        self.assertEqual(deadline.in_posting("Apply by November 20, 2026 or once filled."), ("2026-11-20", False))
 
     def test_only_a_firm_deadline_gone_by_expires(self):
         self.assertTrue(deadline.expired({"days_to_deadline": -1, "deadline_firm": True}))
@@ -124,11 +146,11 @@ class Pay(unittest.TestCase):
         self.assertEqual(pay.parse("$1.250M").high, 1250000)  # A scaled figure keeps its point.
         self.assertIsNone(pay.parse("$150,000 - $15,000,000"))  # One end has to be wrong, and nothing says which.
 
-    def labels(self, comp: str, known: dict[str, tuple[float, int]], track: str = "AI systems", level: str = "top") -> list[str]:
+    def labels(self, comp: str, known: dict[str, list[float]], track: str = "AI systems", level: str = "top") -> list[str]:
         return [s["label"] for s in pay.judge(comp, track, level, {}, known)["pay_signs"]]
 
     def test_judged_against_the_role_not_the_candidate(self):
-        known = {"AI systems|top": (200000.0, 10)}
+        known = {"AI systems|top": [200000.0] * 10}
         self.assertEqual(self.labels("$190,000 - $230,000", known), [])
         self.assertEqual(self.labels("$140,000 - $175,000", known), ["Pays under the going rate"])
         self.assertEqual(self.labels("$300,000 - $340,000", known), ["Pays well above similar roles"])
@@ -139,18 +161,75 @@ class Pay(unittest.TestCase):
         self.assertEqual(self.labels("CA$100K – CA$140K", known), ["Paid in CAD"])  # Another currency isn't compared.
 
     def test_the_narrowest_group_with_enough_postings_is_the_yardstick(self):
-        known = {"AI systems|top": (300000.0, 2), "AI systems": (200000.0, 9), "*": (130000.0, 30)}
+        known = {"AI systems|top": [300000.0] * 2, "AI systems": [200000.0] * 9, "*": [130000.0] * 30}
         self.assertEqual(self.labels("$140,000 - $175,000", known), ["Pays under the going rate"])  # Against the track.
         self.assertEqual(self.labels("$140,000 - $175,000", known, track="Rare track"), [])  # Against every track.
-        self.assertEqual(self.labels("$140,000 - $175,000", {"*": (300000.0, 3)}), [])  # Too few to say.
+        self.assertEqual(self.labels("$140,000 - $175,000", {"*": [300000.0] * 3}), [])  # Too few to say.
+
+    def test_too_low_to_bother_takes_postings_at_its_own_level(self):
+        # Against its whole track, which is mostly senior-most roles, it's only under the going rate: the run still judges it.
+        widened = pay.judge("$110,000 - $140,000", "T", "", {}, {"T": [215000.0] * 30})
+        self.assertEqual(([s["label"] for s in widened["pay_signs"]], widened["pay_too_low"]), (["Pays under the going rate"], False))
+        self.assertTrue(pay.judge("$110,000 - $140,000", "T", "", {}, {"T|": [215000.0] * 5})["pay_too_low"])
 
     def test_a_wide_range_says_so(self):
         self.assertIn("Wide range", self.labels("$120,000 - $260,000", {}))
 
-    def test_peers_take_the_median_middle_at_each_level(self):
+    def test_peers_take_the_middles_at_each_level(self):
         rows = ([{"comp": f"${n}0,000 - ${n + 2}0,000", "track": "T", "level": "top"} for n in (10, 12, 14)]
                 + [{"comp": "$50,000 - $70,000", "track": "T", "level": "mid"}, {"comp": "", "track": "T", "level": "top"}])
-        self.assertEqual(pay.peers(rows), {"T|top": (130000.0, 3), "T|mid": (60000.0, 1), "T": (120000.0, 4), "*": (120000.0, 4)})
+        self.assertEqual(pay.peers(rows), {"T|top": [110000.0, 130000.0, 150000.0], "T|mid": [60000.0],
+                                           "T": [60000.0, 110000.0, 130000.0, 150000.0], "*": [60000.0, 110000.0, 130000.0, 150000.0]})
+
+    def test_a_posting_isnt_measured_against_itself(self):
+        # Five others pay a middle of $200k. Counted in, its own $120k middle would pull the median down to $190k.
+        known = {"T|top": sorted([200000.0] * 5 + [120000.0])}
+        judged = pay.judge("$110,000 - $130,000", "T", "top", {}, known, counted=True)
+        self.assertIn("$200k", judged["pay_signs"][0]["detail"])
+        self.assertIn("5 other", judged["pay_signs"][0]["detail"])
+        # With only four others it has too few to compare with, though five ranges are on file.
+        self.assertEqual(pay.judge("$110,000 - $130,000", "T", "top", {}, {"T|top": [120000.0] + [200000.0] * 4}, counted=True)["pay_signs"], [])
+
+    def test_a_product_manager_isnt_senior_most_and_entry_level_stands_apart(self):
+        cfg = {"scoring": {"level_top": ["principal", "director", "manager"], "level_mid": ["senior", "sr", "lead"]}}
+        self.assertEqual(pay.level("Product Manager, Software", cfg), "")
+        self.assertEqual(pay.level("Technical Program Manager - Entry Level", cfg), "entry")
+        self.assertEqual(pay.level("Manager, Software Engineering", cfg), "top")
+        self.assertEqual(pay.level("Principal Product Manager", cfg), "top")
+        self.assertEqual(pay.level("Senior Program Manager", cfg), "mid")
+        # Entry-level pay is compared only with other entry-level pay, never with the senior pay of its track.
+        known = {"T": [200000.0] * 20, "*": [200000.0] * 20}
+        self.assertEqual(self.labels("$110,000 - $140,000", known, track="T", level="entry"), [])
+
+    def test_the_period_and_currency_beside_the_range_count(self):
+        cases = {
+            "$12,000 - $15,000 per month": (144000, 180000, "USD"),
+            "$400 - $450 per day": (104000, 117000, "USD"),
+            "$120k-$160k/yr; contractors $90/hr": (120000, 160000, "USD"),
+            "Hourly: $45 - $60": (93600, 124800, "USD"),
+            "$150,000 - $200,000 CAD": (150000, 200000, "CAD"),
+            "MX$400,000 - MX$500,000": (400000, 500000, "MX$"),
+        }
+        for text, (low, high, currency) in cases.items():
+            found = pay.parse(text)
+            self.assertEqual((found.low, found.high, found.currency), (low, high, currency), text)
+
+    def test_pay_text_keeps_what_it_says_about_the_range(self):
+        self.assertEqual(sources.find_comp("Pays $12,000 - $15,000 per month."), "$12,000 - $15,000 per month")
+        self.assertEqual(sources.find_comp("The range is between $132,000 and $198,000 annually."), "$132,000 - $198,000 annually")
+        self.assertEqual(sources.find_comp("$150,000 - $200,000 CAD plus equity"), "$150,000 - $200,000 CAD")
+        # A sign-on bonus isn't the pay, whether it's named before the range or after it.
+        self.assertEqual(sources.find_comp("Sign-on bonus: $10,000 - $20,000. Base salary $150,000 - $180,000."), "$150,000 - $180,000")
+        self.assertEqual(sources.find_comp("A $10,000 - $20,000 sign-on bonus, and $150,000 - $180,000 base."), "$150,000 - $180,000")
+        self.assertEqual(sources.find_comp("Base pay $150,000 - $180,000, plus bonus."), "$150,000 - $180,000")
+        self.assertEqual(sources._lever_pay({"currency": "cad", "interval": "per-hour-wage", "min": 40, "max": 50}), "$40 - $50 CAD per hour")
+
+    def test_pay_missed_when_found_is_read_from_the_description(self):
+        job = {"comp": "", "description": "Pay is between $132,000 and $198,000.", "title": "Manager"}
+        self.assertEqual(signals.comp_for(job), "$132,000 - $198,000")
+        self.assertEqual(signals.comp_for({**job, "comp": "$257K – $285K • Offers Equity"}), "$257K – $285K • Offers Equity")
+        older = {"comp": "$12,000 - $15,000", "description": "Pays $12,000 - $15,000 per month.", "title": ""}
+        self.assertEqual(signals.comp_for(older), "$12,000 - $15,000 per month")
 
 
 class SkillAges(unittest.TestCase):

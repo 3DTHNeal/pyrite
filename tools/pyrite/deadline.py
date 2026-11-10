@@ -24,11 +24,18 @@ _MONTH_FIRST = re.compile(rf"\b{_MONTH}\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(20\d\
 _DAY_FIRST = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?{_MONTH},?\s+(20\d\d)\b", re.I)
 # 11/30/2026, as US boards write it. One whose first number can't be a month is read the other way round.
 _SLASHED = re.compile(r"\b(\d{1,2})/(\d{1,2})/(20\d\d)\b")
+# "December 1" and "1 December" with no year after them, as a posting near its closing date often writes them.
+_NO_YEAR = re.compile(rf"\b{_MONTH}\s+(\d{{1,2}})(?:st|nd|rd|th)?\b(?!,?\s*20\d\d)"
+                      rf"|\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?{_MONTH}(?!,?\s*20\d\d)", re.I)
+# A date without a year is read as the one nearest today, within this many days of it.
+_HALF_YEAR = 183
 
-# What a posting says just before its closing date. The date has to follow within a few words.
+# What a posting says just before its closing date. The date has to follow within a few words. "No later than" counts
+# only about applying, as "relocate no later than March 1" isn't a closing date.
 _CUE = re.compile(
     r"accepted (?:at least )?until|(?:expected|anticipated|scheduled|planned) to close|will close|closes? on"
-    r"|closing date|application deadline|deadline (?:to apply|for applications)|apply by|no later than"
+    r"|closing date|application deadline|deadline (?:to apply|for applications)|apply by"
+    r"|(?:apply|applications?|submit\w*|received)\b[^.\n]{0,40}?no later than"
     r"|posting (?:will )?(?:end|expire)s?",
     re.I,
 )
@@ -42,7 +49,9 @@ _CUE_STOP = re.compile(
 )
 
 # Words that make a date a floor rather than a closing date.
-_FLOOR = re.compile(r"at least|or until (?:the )?(?:position|role|job) is filled|rolling", re.I)
+_FLOOR = re.compile(
+    r"at least|until (?:the )?(?:position|role|job|opening) (?:is|has been) filled|(?:once|when|until) (?:it is |it's )?filled|rolling",
+    re.I)
 # How long after a floor date a posting still counts as closing any day. After that it's simply old.
 FLOOR_GRACE_DAYS = 14
 DECIDE_DAYS = 5  # A deadline this close puts the tailor-or-pass decision on the to-do list.
@@ -86,15 +95,38 @@ def first_date(text: str) -> date | None:
     return None
 
 
-def in_posting(description: str) -> tuple[str | None, bool]:
-    """The closing date a posting states, as an ISO date or None, and whether it's firm rather than a floor."""
+def _without_year(text: str, today: date) -> date | None:
+    """The first month and day written with no year, in the year that puts it nearest today."""
+    for match in _NO_YEAR.finditer(text):
+        month_name, day = (match[1], match[2]) if match[1] else (match[4], match[3])
+        month = _MONTHS.index(month_name[:3].lower()) + 1
+        options = []
+        for year in (today.year - 1, today.year, today.year + 1):
+            try:
+                options.append(date(year, month, int(day)))
+            except ValueError:
+                continue
+        nearest = min(options, key=lambda when: abs((when - today).days), default=None)
+        if nearest and abs((nearest - today).days) <= _HALF_YEAR:
+            return nearest
+    return None
+
+
+def in_posting(description: str, today: date | None = None) -> tuple[str | None, bool]:
+    """The closing date a posting states, as an ISO date or None, and whether it's firm rather than a floor. Given
+    `today`, a date written without a year is read as the one nearest today. That year is a guess, so once the date
+    has gone by it counts as a floor: it never passes on a job by itself."""
     for cue in _CUE.finditer(description or ""):
         after = description[cue.end():cue.end() + _CUE_REACH]
         stop = _CUE_STOP.search(after)
-        when = first_date(after[:stop.start()] if stop else after)
+        near = after[:stop.start()] if stop else after
+        when, guessed = first_date(near), False
+        if not when and today:
+            when, guessed = _without_year(near, today), True
         if when:
             # "Or until the position is filled" sits past the stop, so the floor test reads the whole reach.
-            return when.isoformat(), not _FLOOR.search(cue.group(0) + after)
+            floor = bool(_FLOOR.search(cue.group(0) + after)) or (guessed and today is not None and when < today)
+            return when.isoformat(), not floor
     return None, True
 
 
@@ -210,11 +242,15 @@ def for_job(description: str, folder: Path | None, today: date) -> dict[str, Any
     which a list shows in its place.
 
     A deadline in the notes wins: it was read from the whole posting, or set by you, where the posting's own words
-    are matched by pattern. The posting's is the fallback for a job with no notes yet.
+    are matched by pattern. The posting's is the fallback for a job with no notes yet. Notes that restate the
+    posting's floor date without its "at least" don't make it firm, since the posting's own words say it isn't.
     """
     when, firm, blockers = _notes(folder) if folder else (None, True, [])
+    posted, posted_firm = in_posting(description, today)
     if not when:
-        when, firm = in_posting(description)
+        when, firm = posted, posted_firm
+    elif when == posted and not posted_firm:
+        firm = False
     days = (date.fromisoformat(when) - today).days if when else None
     return {"deadline": when, "deadline_firm": firm, "days_to_deadline": days,
             "blockers": [whole for _label, whole in blockers], "blocker_labels": {whole: label for label, whole in blockers}}
