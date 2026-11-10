@@ -1630,11 +1630,116 @@ def _and(names: list[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
+def _manual_entries(text: str, count: int) -> list[dict[str, str]]:
+    """Each [[manual_check]] in search.toml as written: its header line, its keys, the comment and blank lines after
+    its keys (`tail`), and those just above its header (`lead`, the one before's tail), which are about it."""
+    headers = [item for item in tomledit.scan(text) if isinstance(item, tomledit.Header)]
+    entries: list[dict[str, str]] = []
+    for at, header in enumerate(headers):
+        if header.name[:1] != ("manual_check",):
+            continue
+        if header.name != ("manual_check",) or not header.array:
+            raise ValueError("search.toml has a table inside [[manual_check]], which this section can't change. "
+                             "Change it in the file.")
+        stop = headers[at + 1].start if at + 1 < len(headers) else len(text)
+        lines = text[header.end:stop].splitlines(keepends=True)
+        keep = len(lines)
+        while keep and (not lines[keep - 1].strip() or lines[keep - 1].lstrip().startswith("#")):
+            keep -= 1
+        entries.append({"header": text[header.start:header.end], "body": "".join(lines[:keep]),
+                        "tail": "".join(lines[keep:]), "lead": entries[-1]["tail"] if entries else ""})
+    if len(entries) != count:
+        raise ValueError("search.toml's companies to check by hand aren't each written under a [[manual_check]] line, so "
+                         "this section can't change them. Change them in the file.")
+    return entries
+
+
+def _manual_body(body: str, old: dict[str, Any], new: dict[str, Any]) -> str:
+    """One [[manual_check]]'s keys with the form's changes made a key at a time, read as a file of its own, so its
+    comments and any key the form doesn't show stay as they were."""
+    for part in MANUAL_FIELDS:
+        if new.get(part) == old.get(part):
+            continue
+        body = (tomledit.set_value(body, (), part, new[part]) if part in new else tomledit.delete_value(body, (), part))
+    return body
+
+
+def _manual_new(entry: dict[str, Any], eol: str) -> str:
+    return f"[[manual_check]]{eol}" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}{eol}"
+                                              for part, value in entry.items())
+
+
+def _manual_replaced(text: str, start: int, end: int, block: str, expected: list[Any]) -> str | None:
+    """The text with text[start:end] replaced by `block`, if it then reads as before with [[manual_check]] as
+    `expected`, or None."""
+    new = text[:start] + block + text[end:]
+    try:
+        before, after = tomllib.loads(text), tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return None
+    got = after.pop("manual_check", None)
+    before.pop("manual_check", None)
+    return new if got == expected and before == after else None
+
+
+def _manual_in_place_of_example(text: str, block: str, expected: list[Any]) -> str | None:
+    """The text with the commented-out [[manual_check]] left when the last one was taken off turned into `block`, so a
+    list emptied and filled again stays where it was. None if there's no such example."""
+    lines = text.splitlines(keepends=True)
+    for at, line in enumerate(lines):
+        if not re.fullmatch(r"\s*#\s*\[\[\s*manual_check\s*\]\]\s*", line):
+            continue
+        stop = at + 1
+        while stop < len(lines) and re.match(r"\s*#\s*[A-Za-z0-9_-]+\s*=", lines[stop]):
+            stop += 1
+        start = len("".join(lines[:at]))
+        found = _manual_replaced(text, start, start + len("".join(lines[at:stop])), block, expected)
+        if found is not None:
+            return found
+    return None
+
+
+def _manual_write(config: str, old: list[Any], wanted: list[tuple[int | None, dict[str, Any]]]) -> str:
+    """search.toml with [[manual_check]] as `wanted`, each (where it was in the list, or None for a new one, and its
+    table). An entry that's unchanged and still next to the one before it is written back exactly as it was, a changed
+    one is changed a key at a time, a new one goes after the last, and one taken off goes with its own lines: its keys
+    and the comments just above it."""
+    expected = [entry for _, entry in wanted]
+    eol = "\r\n" if "\r\n" in config else "\n"
+    if not wanted:
+        return tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
+    if not old:
+        block = eol.join(_manual_new(entry, eol) for entry in expected)
+        placed = _manual_in_place_of_example(config, block, expected)
+        return placed if placed is not None else tomledit.replace_table(config, "manual_check", block, expected)
+    entries = _manual_entries(config, len(old))
+    pieces: list[str] = []
+    previous: int | None = None
+    for at, (index, entry) in enumerate(wanted):
+        if index is None:
+            if pieces and not pieces[-1].endswith("\n"):
+                pieces[-1] += eol
+            pieces.append(eol + _manual_new(entry, eol))
+            continue
+        written = entries[index]
+        lead = written["lead"]
+        if at == 0:
+            lead = lead.lstrip("\r\n")
+        elif previous is None or index != previous + 1:
+            lead = lead if lead.startswith(("\n", "\r\n")) else eol + lead
+        pieces.append(lead + written["header"] + _manual_body(written["body"], old[index], entry))
+        previous = index
+    if pieces[0].startswith(("\n", "\r\n")):  # Every entry before a new first one was taken off.
+        pieces[0] = pieces[0].lstrip("\r\n")
+    return tomledit.replace_table(config, "manual_check", "".join(pieces), expected)
+
+
 def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
-    """[[manual_check]] as the form has it. It's a list of tables, so a change writes the whole list again: comments
-    between its entries go, and the ones above and below it stay."""
+    """[[manual_check]] as the form has it, changed an entry at a time, so comments between entries stay with them.
+    A new one goes after the last."""
     old = _manual(cfg)
-    new: list[Any] = []
+    kept: list[tuple[int, dict[str, Any]]] = []
+    added: list[tuple[None, dict[str, Any]]] = []
     seen: set[int] = set()
     for raw in _list(raws, "Companies to check by hand"):
         if not isinstance(raw, dict):
@@ -1649,7 +1754,7 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
                                  "Reload and try again.")
             seen.add(at)
             if _manual_form(old[at]) == fields:
-                new.append(old[at])
+                kept.append((at, old[at]))
                 continue
         if not fields["name"]:
             raise ValueError("Every company to check by hand needs a name.")
@@ -1665,17 +1770,17 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
                 entry[part] = value
             else:
                 entry.pop(part, None)
-        new.append(entry)
+        if at is None:
+            added.append((None, entry))
+        else:
+            kept.append((at, entry))
+    wanted: list[tuple[int | None, dict[str, Any]]] = [*kept, *added]
+    new = [entry for _, entry in wanted]
     if new == old:
         return config, 0
-    if new:
-        block = "\n".join("[[manual_check]]\n" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}\n"
-                                                         for part, value in entry.items()) for entry in new)
-        config = tomledit.replace_table(config, "manual_check", block, expected=new)
-    else:
-        config = tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
-    changed = sum(entry not in old for entry in new) + sum(entry not in new for entry in old)
-    return config, max(changed, 1)
+    changed = len(added) + (len(old) - len(kept)) + sum(entry != old[at] for at, entry in kept)
+    changed += [at for at, _ in kept] != sorted(at for at, _ in kept)
+    return _manual_write(config, old, wanted), max(changed, 1)
 
 
 @drafter("companies")
