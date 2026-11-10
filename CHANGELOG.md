@@ -6,6 +6,7 @@ What changed in each release that you'd notice when running Pyrite. The format f
 
 ### Added
 
+- Short reasons: each thing to settle before applying has a short bold label, such as **Oregon residency**, which tailoring now writes at the start of each **Check before applying** line. The to-do list and a card's **Check first** tag show the label alone, and the job panel shows it with the whole reason. Older notes use their first clause.
 - A cover letter may cite the job's own requisition number: the board's id for the job, or one the posting labels as its requisition or job id. It was the most common false alarm on numbers. A resume still can't, and the number approves nothing else.
 - **Tools check** and **Workspace and backup** on the Profile tab. Tools check shows what `pyrite doctor` checks on this computer, each with what it's for, what works without it and how to get it, and a missing program every draft needs goes on **Needs you**. Workspace and backup names the folder in use and whether git keeps its database, and **Back up now** copies `data/pyrite.db` into `data/backups/`, keeping the newest 10. `pyrite init --git` leaves `data/backups/` out of the repository, which keeps the database already.
 - **What comes first** and **Schedule and mail** on the Profile tab no longer say they're waiting for an editor: they're set on the Settings tab, and their cards open it there.

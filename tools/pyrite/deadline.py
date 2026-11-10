@@ -55,6 +55,14 @@ _ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.*)")
 _BOLD_LEAD = re.compile(r"^\*\*(.+?)\*\*")
 _MAX_BLOCKERS = 6
 _MAX_CHARS = 220
+# A label a list shows in place of the whole reason: at most this many words.
+_SHORT_WORDS = 6
+# Where a reason's first clause ends: a sentence's end, a comma, a colon or semicolon, a dash or an aside. A full stop
+# after a single letter, as in "U.S." or "e.g.", ends nothing.
+_CLAUSE_END = re.compile(r"(?<=\w\w[.!?])\s|[,;:]\s|\s[-–—]\s|\s\(")
+# How a reason often opens, which says nothing a label needs: "The posting requires 8+ years" is "8+ years".
+_OPENING = re.compile(
+    r"^(?:the (?:posting|role|job|position)|it|this (?:role|job|posting))\s+(?:requires|asks for|wants|needs|is|says)\s+", re.I)
 
 
 def first_date(text: str) -> date | None:
@@ -100,23 +108,41 @@ def _plain(text: str) -> str:
     return text if len(text) <= _MAX_CHARS else text[:_MAX_CHARS - 1].rstrip() + "…"
 
 
-def _lead(item: str) -> str:
-    """A list item's bold lead if it has one, otherwise its first sentence."""
-    bold = _BOLD_LEAD.match(item.strip())
-    if bold:
-        return bold[1].strip().rstrip(".:")
-    return re.split(r"(?<=[.!?])\s", item.strip(), maxsplit=1)[0]
+def short(text: str) -> str:
+    """A thing to settle before applying, cut to a label a list can show: notes written before tailoring gave each
+    one a bold label of its own. Its first clause, without an opening such as "The posting requires", and at most
+    _SHORT_WORDS words."""
+    clause = _CLAUSE_END.split(text.strip(), maxsplit=1)[0].strip().rstrip(".:;,")
+    clause = _OPENING.sub("", clause, count=1) or clause
+    words = clause.split()
+    if len(words) > _SHORT_WORDS:
+        clause = " ".join(words[:_SHORT_WORDS]).rstrip(",;:") + "…"
+    return clause[:1].upper() + clause[1:]
+
+
+def _labelled(body: str) -> tuple[str, str]:
+    """A note's (short label, whole text). The label is its bold lead when it has one, and otherwise its first clause.
+    The whole text keeps the label as written, so it still reads as a sentence on its own."""
+    body = body.strip()
+    bold = _BOLD_LEAD.match(body)
+    text = _plain(body)
+    if bold and bold[1].strip().rstrip(".:"):
+        lead = bold[1].strip().rstrip(".:")
+        # A bold lead of a whole sentence or more is the reason itself, and too long for a label.
+        return (lead if len(lead.split()) <= _SHORT_WORDS else short(lead)), text
+    return short(text), text
 
 
 def from_notes(text: str) -> tuple[str | None, list[str]]:
     """The deadline and the things to settle before applying, from a job's notes.md."""
     deadline, _, blockers = _read(text)
-    return deadline, blockers
+    return deadline, [whole for _label, whole in blockers]
 
 
-def _read(text: str) -> tuple[str | None, bool, list[str]]:
-    """from_notes, with whether the deadline is firm."""
-    deadline, firm, blockers = None, True, []
+def _read(text: str) -> tuple[str | None, bool, list[tuple[str, str]]]:
+    """from_notes, with whether the deadline is firm, and each thing to settle as (short label, whole text)."""
+    deadline, firm = None, True
+    blockers: list[tuple[str, str]] = []
     in_section = False
     for line in (text or "").splitlines():
         if line.startswith("#"):
@@ -131,9 +157,9 @@ def _read(text: str) -> tuple[str | None, bool, list[str]]:
         check = _CHECK_LINE.search(line)
         item = _ITEM.match(line)
         if check and check[1].strip():
-            blockers.append(_plain(check[1]))
+            blockers.append(_labelled(check[1]))
         elif in_section and item:
-            blockers.append(_plain(_lead(item[1])))
+            blockers.append(_labelled(item[1]))
         elif _BEFORE.search(line) and not in_section:
             body = item[1] if item else line
             label = _BOLD_LEAD.match(body.strip())
@@ -141,15 +167,21 @@ def _read(text: str) -> tuple[str | None, bool, list[str]]:
             sentence = next((s for s in re.split(r"(?<=[.!?])\s", rest) if _BEFORE.search(s)), rest)
             if re.match(r"see\b", sentence.strip(), re.I):
                 continue  # A pointer to a "Before you apply" section, whose items are read on their own.
-            blockers.append(_plain(f"{label[1].rstrip(':')}: {sentence}" if label else sentence))
-    unique = list(dict.fromkeys(b for b in blockers if b))
-    return deadline, firm, unique[:_MAX_BLOCKERS]
+            if label:
+                blockers.append((label[1].strip().rstrip(".:"), _plain(f"{label[1].rstrip(':').rstrip('.')}: {sentence}")))
+            else:
+                blockers.append((short(_plain(sentence)), _plain(sentence)))
+    unique: dict[str, tuple[str, str]] = {}
+    for named, whole in blockers:
+        if whole and whole not in unique:
+            unique[whole] = (named, whole)
+    return deadline, firm, list(unique.values())[:_MAX_BLOCKERS]
 
 
-_cache: dict[Path, tuple[int, tuple[str | None, bool, list[str]]]] = {}
+_cache: dict[Path, tuple[int, tuple[str | None, bool, list[tuple[str, str]]]]] = {}
 
 
-def _notes(folder: Path) -> tuple[str | None, bool, list[str]]:
+def _notes(folder: Path) -> tuple[str | None, bool, list[tuple[str, str]]]:
     path = folder / "notes.md"
     try:
         stamp = path.stat().st_mtime_ns
@@ -169,12 +201,13 @@ def _notes(folder: Path) -> tuple[str | None, bool, list[str]]:
 def read_notes(folder: Path) -> tuple[str | None, list[str]]:
     """from_notes for a folder's notes.md, read again only when the file changes."""
     deadline, _, blockers = _notes(folder)
-    return deadline, blockers
+    return deadline, [whole for _label, whole in blockers]
 
 
 def for_job(description: str, folder: Path | None, today: date) -> dict[str, Any]:
     """A job's deadline and the things to settle before applying. Returns deadline (ISO or None), deadline_firm,
-    days_to_deadline and blockers.
+    days_to_deadline, blockers as whole sentences, and blocker_labels, the short label of each, keyed by its sentence,
+    which a list shows in its place.
 
     A deadline in the notes wins: it was read from the whole posting, or set by you, where the posting's own words
     are matched by pattern. The posting's is the fallback for a job with no notes yet.
@@ -183,7 +216,8 @@ def for_job(description: str, folder: Path | None, today: date) -> dict[str, Any
     if not when:
         when, firm = in_posting(description)
     days = (date.fromisoformat(when) - today).days if when else None
-    return {"deadline": when, "deadline_firm": firm, "days_to_deadline": days, "blockers": blockers}
+    return {"deadline": when, "deadline_firm": firm, "days_to_deadline": days,
+            "blockers": [whole for _label, whole in blockers], "blocker_labels": {whole: label for label, whole in blockers}}
 
 
 def expired(info: dict[str, Any]) -> bool:
