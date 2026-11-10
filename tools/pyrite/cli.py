@@ -368,7 +368,8 @@ def finish_job(conn, cfg: dict[str, Any], job_id: int, say_building: bool = Fals
             "A new application is a new job with its own folder."]}
 
     # Check the text first: nothing confidential should be built into a .docx, even briefly.
-    report = checks.check_application(folder, cfg, job["company"], job["title"], job["description"])
+    report = checks.check_application(folder, cfg, job["company"], job["title"], job["description"],
+                                      job["source_key"], job["source_id"])
     if report["ok"]:
         token = _file_token(job["company"])
         prefix, author = _file_prefix(cfg), cfg["candidate"]["name"]
@@ -393,7 +394,8 @@ def finish_job(conn, cfg: dict[str, Any], job_id: int, say_building: bool = Fals
             report["errors"].append(f"Build failed: making the documents took over {BUILD_TIMEOUT_SECONDS // 60} minutes, so it was stopped.")
         else:
             # Page counts only exist once the PDFs do.
-            report = checks.check_application(folder, cfg, job["company"], job["title"], job["description"])
+            report = checks.check_application(folder, cfg, job["company"], job["title"], job["description"],
+                                              job["source_key"], job["source_id"])
     if report["ok"]:
         # What exactly passed, so a later change to any of it shows on the dashboard.
         report["checked"] = checks.fingerprints(folder)

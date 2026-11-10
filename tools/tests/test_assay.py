@@ -206,6 +206,71 @@ class FactChecker(unittest.TestCase):
             self.assertTrue(any("Kubernetes" in e for e in report["errors"]), report["errors"])
 
 
+class Requisition(unittest.TestCase):
+    """A cover letter may cite the job's own requisition number, which measures nothing. It was the most common false
+    alarm on numbers. A resume may not, and nothing else in a letter is let through by it."""
+
+    WORKDAY = ("workday:acme", "/job/United-States---Remote/Lead-Software-Engineer---Embedded_REQ-14879-1")
+    OPENING = "I am applying for the Principal Robotics Software Engineer role at Acme Robotics."
+
+    def letter_errors(self, sentence, requisition):
+        letter = LETTER.replace(self.OPENING, f"{self.OPENING} {sentence}")
+        self.assertNotEqual(letter, LETTER)
+        return checks.check_text(letter, "letter", CFG, SOURCES, *LETTER_ROLE, requisition=requisition)[0]
+
+    def test_the_job_names_its_requisition(self):
+        self.assertEqual(checks.requisitions("", *self.WORKDAY), ["REQ-14879-1", "REQ-14879"])
+        self.assertEqual(checks.requisitions("", "workday:acme", "/job/Remote-CT/Program-Manager_JR2026528875"), ["JR2026528875"])
+        self.assertEqual(checks.requisitions("", "greenhouse:acme", "5786075004"), ["5786075004"])
+        # Pyrite makes up the id of a job you add by hand, so no one would cite it.
+        self.assertEqual(checks.requisitions("", "manual:acme", "90140f979c794596"), [])
+        posting = ("About the role\nRequisition ID: R-0145\nJob ID JR77001\nReq #: 5123\nJob no. 1 of 3\n"
+                   "We hire 2500 people a year.")
+        self.assertEqual(checks.requisitions(posting), ["JR77001", "R-0145", "5123"])
+
+    def test_a_letter_may_cite_it(self):
+        # A number glued to letters, such as JR2026528875, was never read as a number. One set apart from them was.
+        idents = checks.requisitions("", *self.WORKDAY)
+        for sentence in ("The requisition is REQ-14879.", "I'm applying to requisition REQ-14879-1.", "(Req #req-14879)"):
+            with self.subTest(sentence):
+                self.assertEqual(self.letter_errors(sentence, idents), [])
+                self.assertTrue(self.letter_errors(sentence, []), "without the job's requisition it's a number from nowhere")
+        idents = checks.requisitions("", "greenhouse:acme", "5786075004")
+        for sentence in ("Job ID 5786075004.", "I saw the posting, 5786075004, on your site."):
+            with self.subTest(sentence):
+                self.assertEqual(self.letter_errors(sentence, idents), [])
+                self.assertTrue(self.letter_errors(sentence, []))
+
+    def test_its_digits_alone_only_where_a_label_says_what_they_are(self):
+        idents = ["REQ-14879"]
+        self.assertEqual(self.letter_errors("This is for requisition 14879.", idents), [])
+        self.assertEqual(self.letter_errors("This is for Job ID: 14879.", idents), [])
+        errors = self.letter_errors("I ran 14879 tests a night.", idents)
+        self.assertTrue(any("14879" in e for e in errors), errors)
+
+    def test_it_approves_nothing_else(self):
+        errors = self.letter_errors("The requisition is REQ-14879, and I cut defects by 91%.", ["REQ-14879"])
+        self.assertTrue(any("91%" in e for e in errors), errors)
+        self.assertEqual(len(errors), 1, errors)
+
+    def test_a_resume_may_not_cite_it(self):
+        resume = RESUME.replace("## Experience", "Requisition REQ-14879\n\n## Experience", 1)
+        self.assertNotEqual(resume, RESUME)
+        errors, _ = checks.check_text(resume, "resume", CFG, SOURCES, "Acme", "Principal Engineer", requisition=["REQ-14879"])
+        self.assertTrue(any("14879" in e for e in errors), errors)
+
+    def test_a_folders_posting_names_it(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            folder = Path(tmp) / "app"
+            shutil.copytree(MODEL, folder)
+            letter = (folder / "cover-letter.md").read_text(encoding="utf-8").replace(self.OPENING, f"{self.OPENING} Requisition R-0145.")
+            (folder / "cover-letter.md").write_text(letter, encoding="utf-8")
+            report = checks.check_application(folder, CFG, *LETTER_ROLE, "Requisition ID: R-0145\nBuild motor control.")
+            self.assertFalse(any("145" in e for e in report["errors"]), report["errors"])
+            report = checks.check_application(folder, CFG, *LETTER_ROLE, "Build motor control.")
+            self.assertTrue(any("145" in e for e in report["errors"]), report["errors"])
+
+
 @unittest.skipUnless(importlib.util.find_spec("docx"), "python-docx isn't installed: pip install -r tools/requirements.txt")
 class Builder(unittest.TestCase):
     """The documents a parser sees: plain text for paste boxes, and a PDF read back the way an ATS reads it."""
