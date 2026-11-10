@@ -84,10 +84,10 @@ profileStep("companies", {
       if (!found.ok) {
         fill(pasted, h("div", { class: "callout info" }, h("p", {}, found.error),
           /\.[a-z]{2,}/i.test(found.url) ? h("div", { class: "row" }, h("button", { class: "btn small", type: "button", disabled: off, onclick: () => {
-            form.manual.unshift({ at: null, name: "", url: found.url, why: "" });
+            form.manual.push({ at: null, name: "", url: found.url, why: "" });
             form.paste = "";
             pasteField.value = "";
-            focusManual = form.manual[0];
+            focusManual = form.manual[form.manual.length - 1];
             drawManual();
             changed(true);
           } }, "Add it under Check by hand")) : null));
