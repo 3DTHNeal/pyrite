@@ -109,6 +109,8 @@ cities = [
 # `wants` are skills the industry looks for. The Settings tab checks them against facts.md,
 # and they don't change the ranking. Add `points` to any industry to override industry_points.
 # `naics` are the industry's codes, for the official numbers on the Industries tab.
+# `anywhere = true` keeps a job elsewhere in your country, marked as such, when its employer is listed
+# or a term is in the employer's name or the title.
 [[promote.industry]]
 name = "Robotics"
 terms = ['\brobotics?\b', '\brobots?\b']

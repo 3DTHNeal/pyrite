@@ -17,6 +17,7 @@ import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
 from .sources import USER_AGENT, Posting, _Text, find_comp, html_to_text, strip_invisible, workday_detail
@@ -103,9 +104,9 @@ def _name(value: object) -> str:
     return _line(value.get("name")) if isinstance(value, dict) else _line(value)
 
 
-def _job_postings(markup: str) -> list[dict]:
+def _job_postings(markup: str) -> list[dict[str, Any]]:
     """Every JobPosting in a page's structured data, wherever it's nested."""
-    found: list[dict] = []
+    found: list[dict[str, Any]] = []
 
     def walk(node: object) -> None:
         if isinstance(node, list):
@@ -135,7 +136,7 @@ def _place(place: object) -> str:
     return town or _name(address.get("addressCountry"))
 
 
-def _location(job: dict) -> str:
+def _location(job: dict[str, Any]) -> str:
     places = job.get("jobLocation")
     named = [_place(place) for place in (places if isinstance(places, list) else [places])]
     unique = list(dict.fromkeys(filter(None, named)))
@@ -144,7 +145,7 @@ def _location(job: dict) -> str:
     return " | ".join(unique)[:MAX_FIELD]
 
 
-def _pay(job: dict) -> str:
+def _pay(job: dict[str, Any]) -> str:
     """baseSalary as a range in dollars, such as "$120,000 - $150,000 per year", or nothing if it isn't one."""
     salary = job.get("baseSalary")
     value = salary.get("value") if isinstance(salary, dict) else None
@@ -161,7 +162,7 @@ def _pay(job: dict) -> str:
     return f"${amount.format(low)} - ${amount.format(high)} {per}".strip()
 
 
-def _from_data(job: dict) -> dict:
+def _from_data(job: dict[str, Any]) -> dict[str, Any]:
     raw = job.get("description")
     raw = raw if isinstance(raw, str) else ""
     # Some sites escape the description's HTML a second time, so it arrives as "&lt;p&gt;" with no tags at all.
@@ -210,7 +211,7 @@ class _Head(_Text):
             self._into.append(data)
 
 
-def _from_page(markup: str) -> dict:
+def _from_page(markup: str) -> dict[str, Any]:
     """The heading and visible text of a page with no posting data. The company and place aren't marked on such a
     page, so they're left for whoever is adding it."""
     head = _Head()
@@ -229,7 +230,7 @@ def _from_page(markup: str) -> dict:
     return {"company": "", "title": title, "location": "", "description": text if len(text) >= MIN_PAGE_TEXT else ""}
 
 
-def parse(markup: str) -> dict:
+def parse(markup: str) -> dict[str, Any]:
     """The company, title, location and description a page gives, each empty if it doesn't say."""
     postings = _job_postings(markup)
     found = _from_data(postings[0]) if postings else {}
@@ -242,7 +243,7 @@ def parse(markup: str) -> dict:
     return found
 
 
-def _from_workday(url: str, detail: Callable[..., Posting]) -> dict | None:
+def _from_workday(url: str, detail: Callable[..., Posting]) -> dict[str, Any] | None:
     """A Workday posting from the endpoint its own page calls, which keeps the paragraphs and lists that the page's
     structured data flattens into one line. None if the link isn't Workday's or the endpoint doesn't answer."""
     found = WORKDAY.match(url)
@@ -258,7 +259,7 @@ def _from_workday(url: str, detail: Callable[..., Posting]) -> dict | None:
             "description": posting.description[:MAX_DESCRIPTION]}
 
 
-def read(url: str, fetch: Callable[[str], str] = fetch_page, workday: Callable[..., Posting] = workday_detail) -> dict:
+def read(url: str, fetch: Callable[[str], str] = fetch_page, workday: Callable[..., Posting] = workday_detail) -> dict[str, Any]:
     """The posting at a link, as the fields the Add a posting form asks for."""
     url = url.strip()
     return _from_workday(url, workday) or parse(fetch(url))

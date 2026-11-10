@@ -52,6 +52,16 @@ class Codes(SettingsBase):
         self.assertEqual(saved["naics"], ["333998", "3345"])
         self.assertIn('naics = ["333998", "3345"]', self.text())
 
+    def test_kept_anywhere_is_written_only_when_on(self):
+        industry = {"name": "Robotics", "terms": [r"\brobots?\b"]}
+        settings.save(self.body(industry=[{**industry, "anywhere": True}]))
+        self.assertIs(tomllib.loads(self.text())["promote"]["industry"][0]["anywhere"], True)
+        self.assertEqual(settings.unkept(tomllib.loads(self.text())["promote"]), [])
+        settings.save(self.body(industry=[{**industry, "anywhere": False}]))
+        self.assertNotIn("anywhere", tomllib.loads(self.text())["promote"]["industry"][0])
+        with self.assertRaisesRegex(ValueError, "on or off"):
+            settings.validate(self.form(industry=[{**industry, "anywhere": "yes"}]))
+
     def test_a_code_that_isnt_one_is_refused(self):
         for bad in (["33a"], ["1"], ["1234567"], ["3332", "3332"]):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
