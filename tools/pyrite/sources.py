@@ -18,7 +18,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
-from typing import cast
+from typing import Any, cast
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) job-search-pyrite/1.0"
 TIMEOUT = 60  # Per socket read, so slow but steady downloads still finish.
@@ -169,7 +169,7 @@ def find_comp(text: str) -> str:
     return re.sub(r"\s+", " ", match.group(0)).strip() if match else ""
 
 
-def _request(url: str, payload: dict | None = None, retries: int = 3) -> dict | list:
+def _request(url: str, payload: dict[str, Any] | None = None, retries: int = 3) -> dict[str, Any] | list[Any]:
     data = json.dumps(payload).encode() if payload is not None else None
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Accept-Encoding": "gzip"}
     if data:
@@ -196,7 +196,7 @@ def _request(url: str, payload: dict | None = None, retries: int = 3) -> dict | 
 def fetch_greenhouse(board: str, company: str) -> list[Posting]:
     """The light listing. Descriptions come from greenhouse_detail, for candidates only."""
     key = f"greenhouse:{board}"
-    data = cast(dict, _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"))
+    data = cast(dict[str, Any], _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"))
     return [
         Posting(key, str(job["id"]), company, job["title"].strip(), (job.get("location") or {}).get("name", ""), "",
                 job.get("absolute_url", ""), "", "", job.get("first_published") or job.get("updated_at"))
@@ -205,7 +205,7 @@ def fetch_greenhouse(board: str, company: str) -> list[Posting]:
 
 
 def greenhouse_detail(board: str, company: str, job_id: str) -> Posting:
-    job = cast(dict, _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job_id}", retries=1))
+    job = cast(dict[str, Any], _request(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job_id}", retries=1))
     # Greenhouse sends the description's HTML escaped, as "&lt;p&gt;".
     description = html_to_text(job.get("content", ""), escaped=True)
     return Posting(
@@ -217,7 +217,7 @@ def greenhouse_detail(board: str, company: str, job_id: str) -> Posting:
 
 def fetch_lever(board: str, company: str) -> list[Posting]:
     key = f"lever:{board}"
-    data = _request(f"https://api.lever.co/v0/postings/{board}?mode=json")
+    data = cast(list[dict[str, Any]], _request(f"https://api.lever.co/v0/postings/{board}?mode=json"))
     postings = []
     for job in data:
         categories = job.get("categories") or {}
@@ -248,7 +248,7 @@ def fetch_lever(board: str, company: str) -> list[Posting]:
 
 def fetch_ashby(board: str, company: str) -> list[Posting]:
     key = f"ashby:{board}"
-    data = cast(dict, _request(f"https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true"))
+    data = cast(dict[str, Any], _request(f"https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true"))
     postings = []
     for job in data.get("jobs", []):
         if job.get("isListed") is False:
@@ -271,7 +271,7 @@ def fetch_ashby(board: str, company: str) -> list[Posting]:
     return postings
 
 
-def workday_base(spec: dict) -> tuple[str, str]:
+def workday_base(spec: dict[str, Any]) -> tuple[str, str]:
     host = f"{spec['tenant']}.{spec['wd']}.myworkdayjobs.com"
     return (
         f"https://{host}/wday/cxs/{spec['tenant']}/{spec['site']}",
@@ -279,9 +279,9 @@ def workday_base(spec: dict) -> tuple[str, str]:
     )
 
 
-def workday_detail(spec: dict, company: str, path: str) -> Posting:
+def workday_detail(spec: dict[str, Any], company: str, path: str) -> Posting:
     api, site = workday_base(spec)
-    info = cast(dict, _request(f"{api}{path}", retries=1))["jobPostingInfo"]
+    info = cast(dict[str, Any], _request(f"{api}{path}", retries=1))["jobPostingInfo"]
     places = [info.get("location", "")] + (info.get("additionalLocations") or [])
     description = html_to_text(info.get("jobDescription", ""))
     return Posting(
@@ -292,13 +292,13 @@ def workday_detail(spec: dict, company: str, path: str) -> Posting:
     )
 
 
-def workday_search(spec: dict, queries: list[str], max_pages: int) -> dict[str, dict]:
+def workday_search(spec: dict[str, Any], queries: list[str], max_pages: int) -> dict[str, dict[str, Any]]:
     """Search one Workday site. Returns {external path: summary}."""
     api, _ = workday_base(spec)
-    found: dict[str, dict] = {}
+    found: dict[str, dict[str, Any]] = {}
     for query in queries:
         for page in range(max_pages):
-            data = cast(dict, _request(f"{api}/jobs", {
+            data = cast(dict[str, Any], _request(f"{api}/jobs", {
                 "limit": 20, "offset": page * 20, "searchText": query, "appliedFacets": {},
             }))
             jobs = data.get("jobPostings", [])
@@ -327,7 +327,7 @@ def workday_posted_date(text: str | None, today: date) -> str | None:
     return (today - timedelta(days=days)).isoformat()
 
 
-def is_workday_closed(spec: dict, path: str) -> bool | None:
+def is_workday_closed(spec: dict[str, Any], path: str) -> bool | None:
     """True if a posting is gone, False if live, None if we couldn't tell."""
     api, _ = workday_base(spec)
     try:

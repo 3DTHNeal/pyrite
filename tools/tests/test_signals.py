@@ -5,6 +5,7 @@ import unittest
 from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from support import CFG, Base  # Also sets up the throwaway workspace every path points into.
@@ -116,7 +117,7 @@ class Pay(unittest.TestCase):
         self.assertIsNone(pay.parse("Up to 15% bonus"))
         self.assertIsNone(pay.parse(""))
 
-    def labels(self, comp: str, known: dict, track: str = "AI systems", level: str = "top") -> list[str]:
+    def labels(self, comp: str, known: dict[str, tuple[float, int]], track: str = "AI systems", level: str = "top") -> list[str]:
         return [s["label"] for s in pay.judge(comp, track, level, {}, known)["pay_signs"]]
 
     def test_judged_against_the_role_not_the_candidate(self):
@@ -209,10 +210,10 @@ class SkillAges(unittest.TestCase):
 
 
 class Rarity(unittest.TestCase):
-    def ctx(self, local: dict, watched: int = 60) -> signals.Context:
+    def ctx(self, local: dict[str, int], watched: int = 60) -> signals.Context:
         return signals.Context(TODAY, {}, Counter(local), watched, 5)
 
-    def job(self, **kw) -> dict:
+    def job(self, **kw) -> dict[str, Any]:
         return {"track": "AI systems", "location_kind": "local", "first_seen": TODAY.isoformat(), **kw}
 
     def test_a_local_role_few_others_share(self):

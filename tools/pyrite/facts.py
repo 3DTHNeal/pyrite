@@ -7,6 +7,7 @@ the file from before each save is kept in History on the Profile tab, where it c
 patterns that block a term by name, under [guard] in search.toml, still can't be changed from the browser.
 """
 import hashlib
+from typing import Any
 
 from . import profile, settings, store
 
@@ -37,7 +38,7 @@ def _version(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def view() -> dict:
+def view() -> dict[str, Any]:
     files = []
     for key, (name, title) in FILES.items():
         text = _read(key)
@@ -62,7 +63,7 @@ def _clean(key, text) -> tuple[str, str]:
     return key, text
 
 
-def save(body: dict) -> dict:
+def save(body: dict[str, Any]) -> dict[str, Any]:
     if store.IS_EXAMPLE:
         raise ValueError("This is the demo, so the fictional candidate's facts can't be changed. Point PYRITE_HOME at your own workspace to edit yours.")
     key, text = _clean(body.get("file"), body.get("text"))

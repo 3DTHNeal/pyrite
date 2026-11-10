@@ -10,6 +10,7 @@ import re
 import time
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from . import checks, claude_code, confirm, discover, signals, skillage
 from .claude_code import ClaudeFailed, find_claude
@@ -70,7 +71,7 @@ def parse_verdict(message: str) -> tuple[str, str] | None:
     return found
 
 
-def markings(marks: dict | None) -> str:
+def markings(marks: dict[str, Any] | None) -> str:
     """Pyrite's own read of a listing: whether it may be a ghost, any scam signs in its text, its deadline, what its pay
     says and whether it's rare nearby, then how old the skills it asks for are. The code words these from the listing's
     dates, reposts, fixed patterns and its own tables, so they go outside the posting's fence."""
@@ -83,7 +84,7 @@ def markings(marks: dict | None) -> str:
             f"- Possible ghost: {ghost}\n- Scam signs: {scam}\n{more}" + skillage.prompt_section(marks))
 
 
-def triage_prompt(job, marks: dict | None = None) -> str:
+def triage_prompt(job, marks: dict[str, Any] | None = None) -> str:
     board = {key: job[key] for key in BOARD_FIELDS}
     # Triage runs with no tools, so a posting can't steer it into reading anything: the two files it judges by come with it.
     return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.profile_section(ROOT, claude_code.PROFILE_FILES[:2])
@@ -91,13 +92,13 @@ def triage_prompt(job, marks: dict | None = None) -> str:
             + claude_code.posting_block(board, job["description"]) + "\n")
 
 
-def tailor_files(folder: str, cfg: dict) -> list[str]:
+def tailor_files(folder: str, cfg: dict[str, Any]) -> list[str]:
     """The only files a tailoring run may change."""
     names = ["resume.md", "notes.md"] + (["cover-letter.md"] if cfg["run"].get("cover_letters", True) else [])
     return [f"{folder}/{name}" for name in names]
 
 
-def tailor_prompt(job, folder: str, cfg: dict, feedback: str = "", polish: str = "") -> str:
+def tailor_prompt(job, folder: str, cfg: dict[str, Any], feedback: str = "", polish: str = "") -> str:
     letters = cfg["run"].get("cover_letters", True)
     files = " and ".join(f"`{path}`" for path in tailor_files(folder, cfg))
     text = TAILOR_INSTRUCTIONS.read_text(encoding="utf-8").replace("{letter_section}", LETTER_SECTION if letters else "")
@@ -123,7 +124,7 @@ def _ask(conn, job_id: int, kind: str, cmd: list[str], text: str, deadline: floa
         raise
 
 
-def judge(conn, job_id: int, claude: str, deadline: float, marks: dict | None = None, cfg: dict | None = None) -> str | None:
+def judge(conn, job_id: int, claude: str, deadline: float, marks: dict[str, Any] | None = None, cfg: dict[str, Any] | None = None) -> str | None:
     """Have Claude judge one posting, and record the verdict here. Returns the fit, or None if it couldn't be judged.
 
     `marks` is the posting as the queue ranked it, whose ghost and scam markings go to Claude with it. `cfg` is
@@ -186,7 +187,7 @@ def _time_left(deadline: float) -> bool:
     return deadline - time.monotonic() >= claude_code.MIN_ASK_SECONDS
 
 
-def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambda step: None) -> bool:
+def tailor(conn, cfg: dict[str, Any], job_id: int, claude: str, deadline: float, say=lambda step: None) -> bool:
     """Have Claude write one application, and let the fact checker decide. Returns whether it's ready.
 
     `say` hears each step before it starts, so a long job keeps showing signs of life on the dashboard."""
@@ -217,7 +218,7 @@ def tailor(conn, cfg: dict, job_id: int, claude: str, deadline: float, say=lambd
     return False
 
 
-def polish(conn, cfg: dict, job_id: int, folder: str, cmd: list[str], report: dict, deadline: float, profile: dict[str, bytes],
+def polish(conn, cfg: dict[str, Any], job_id: int, folder: str, cmd: list[str], report: dict[str, Any], deadline: float, profile: dict[str, bytes],
            say=lambda step: None) -> None:
     """One more pass over a draft that passed with warnings a rewrite can clear, such as a letter naming unapproved
     terms or a resume that copies the posting's skill terms. Unless that pass passes the assay, the passing draft goes
@@ -260,7 +261,7 @@ def _count(number: int, one: str, many: str | None = None) -> str:
     return f"{number} {one if number == 1 else many or one + 's'}"
 
 
-def briefing(judged: dict, unjudged: int, ready: list[str], blocked: list[str], failing: list[str], first_reason: str) -> str:
+def briefing(judged: dict[str, Any], unjudged: int, ready: list[str], blocked: list[str], failing: list[str], first_reason: str) -> str:
     """The morning briefing, written from what the run did. No model writes it, so no posting can word it."""
     parts = []
     total = sum(judged.values())
@@ -283,7 +284,7 @@ def briefing(judged: dict, unjudged: int, ready: list[str], blocked: list[str], 
     return " ".join(parts)
 
 
-def _research_skills(conn, cfg: dict, waiting: list[dict], claude: str, report) -> list[dict] | None:
+def _research_skills(conn, cfg: dict[str, Any], waiting: list[dict[str, Any]], claude: str, report) -> list[dict[str, Any]] | None:
     """Date the skills these postings ask years of that the table doesn't know, and queue again with what was learned.
     Returns None when there was nothing to look up. A failed lookup costs only itself: the run goes on without it."""
     ids = [job["id"] for job in waiting]
@@ -303,7 +304,7 @@ def _research_skills(conn, cfg: dict, waiting: list[dict], claude: str, report) 
     return queue(conn, cfg)["to_triage"]
 
 
-def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) -> str:
+def run(conn, cfg: dict[str, Any], report=lambda text: None, claude: str | None = None) -> str:
     """Judge the new postings, tailor the best, and leave a briefing. Returns the briefing."""
     claude = claude or find_claude()
     if not claude:
@@ -367,7 +368,7 @@ def run(conn, cfg: dict, report=lambda text: None, claude: str | None = None) ->
 BATCH_LIMIT = 1000  # a batch takes everything that's waiting, not the daily share
 
 
-def tailor_batch(conn, cfg: dict, report=lambda text: None, claude: str | None = None) -> str:
+def tailor_batch(conn, cfg: dict[str, Any], report=lambda text: None, claude: str | None = None) -> str:
     """Write every draft waiting under Being tailored, stretch jobs included, and say how it went.
 
     The Tailor these now button. It judges nothing and leaves no briefing: the drafts land as ready

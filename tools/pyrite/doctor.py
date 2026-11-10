@@ -12,6 +12,7 @@ import sys
 import tomllib
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 from . import discover, factsdoc, inbox, score
 from .checks import listed_terms, uncommented, unenforced_claims
@@ -60,14 +61,14 @@ def _and(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else "".join(items)
 
 
-def _setting(cfg: dict, path: tuple[str, ...]):
+def _setting(cfg: dict[str, Any], path: tuple[str, ...]):
     value: object = cfg
     for key in path:
         value = value.get(key) if isinstance(value, dict) else None
     return value
 
 
-def example_settings_left(cfg: dict, example: dict) -> str:
+def example_settings_left(cfg: dict[str, Any], example: dict[str, Any]) -> str:
     """The example's settings still in cfg, grouped by table, as "[location] local and local_exact; [[track]]"."""
     tables: dict[str, list[str]] = {}
     for path, table, key in EXAMPLE_SETTINGS:
@@ -84,7 +85,7 @@ def _text(path: Path) -> str | None:
         return None
 
 
-def _example_config() -> dict:
+def _example_config() -> dict[str, Any]:
     with (EXAMPLE_ROOT / "profile" / "search.toml").open("rb") as handle:
         return tomllib.load(handle)
 
@@ -139,7 +140,7 @@ def still_blank(root: Path) -> list[str]:
     return blank
 
 
-def not_written_yet(root: Path, cfg: dict) -> dict | None:
+def not_written_yet(root: Path, cfg: dict[str, Any]) -> dict[str, Any] | None:
     """What a fact bank that's been started still lacks before a draft can be written from it, as a to-do, or None.
     A contact line or one employer makes facts.md no longer blank, but with no achievements Claude has nothing to
     write, and with a blank master resume every draft's employers and dates are blocked. Either way a run would
@@ -161,7 +162,7 @@ def not_written_yet(root: Path, cfg: dict) -> dict | None:
     return None
 
 
-def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
+def workspace_todos(root: Path, cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
     """What a workspace still needs before Pyrite can do its job, each as {"what", "fix"}. Empty once it's set up.
 
     Most also name the Profile section that fixes them as "step". The ones that block every draft, or let a
@@ -270,7 +271,7 @@ def workspace_todos(root: Path, cfg: dict | None) -> list[dict]:
     return todos
 
 
-def _unenforced_todos(root: Path, cfg: dict) -> list[dict]:
+def _unenforced_todos(root: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Lines under "Unsupported" that no pattern under [guard] unsupported matches. The assay blocks an unsupported
     claim by pattern, so a draft can make these and pass."""
     if "profile/facts.md" in still_example(root):
@@ -307,7 +308,7 @@ def master_problems(text: str, kind: str, name: str = "", contact: str | None = 
     return problems
 
 
-def _master_todos(root: Path, cfg: dict) -> list[dict]:
+def _master_todos(root: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """The master resume and letter, checked for the form the assay reads. A master in another form gets past a
     look at the files and then fails every draft made from it, which is the wrong place to find out."""
     guard = cfg.get("guard", {})
@@ -328,7 +329,7 @@ def _master_todos(root: Path, cfg: dict) -> list[dict]:
     return todos
 
 
-def _unguarded_todos(root: Path, cfg: dict) -> list[dict]:
+def _unguarded_todos(root: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Names under "Do not use" that the assay can't block by name, because your sources also state them as fact.
     Every other name listed there is blocked as it is, with no pattern of its own."""
     if "profile/facts.md" in still_example(root):
@@ -352,7 +353,7 @@ def seed_still_example(root: Path) -> bool:
     return root.resolve() != EXAMPLE_ROOT and path.exists() and _text(path) == _text(EXAMPLE_ROOT / "profile" / "seed.toml")
 
 
-def _seed_todos(root: Path) -> list[dict]:
+def _seed_todos(root: Path) -> list[dict[str, Any]]:
     path = root / "profile" / "seed.toml"
     if not path.exists():
         return []
@@ -412,7 +413,7 @@ def last_mail_error(source: str) -> str:
     return last_mail_check(source)[1]
 
 
-def claude_check() -> dict:
+def claude_check() -> dict[str, Any]:
     """Whether Claude Code is here and signed in, as {"ok", "what", "fix"}. Asking it takes a second or two."""
     claude = find_claude()
     if not claude:
@@ -423,7 +424,7 @@ def claude_check() -> dict:
     return {"ok": True, "what": f"Claude Code, signed in, at {claude}", "fix": ""}
 
 
-def mail_check(cfg: dict | None) -> dict:
+def mail_check(cfg: dict[str, Any] | None) -> dict[str, Any]:
     """Where replies are read from and whether the last read worked, as {"ok", "what", "fix"}. None means it's
     optional and not set up."""
     source = (cfg or {}).get("inbox", {}).get("source", "imap")
@@ -437,7 +438,7 @@ def mail_check(cfg: dict | None) -> dict:
     return {"ok": None, "what": "Reply detection isn't set up", "fix": 'Optional. See docs/mail.md.'}
 
 
-def tool_checks(cfg: dict | None) -> list[dict]:
+def tool_checks(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The programs Pyrite uses, each as {"ok": True | False | None, "what", "fix"}. None means optional and missing."""
     found = []
     has_docx = importlib.util.find_spec("docx") is not None

@@ -6,6 +6,7 @@ as it is, even in Windows PowerShell 5.1, which would decode piped output with t
 Text from a job board can carry terminal control codes, so every string that came from outside goes through `plain`.
 """
 import re
+from typing import Any
 
 # Everything below a space except tab and newline, and DEL with the C1 codes after it. That covers ESC and CSI,
 # which start the sequences that move the cursor, clear the screen or retitle the window.
@@ -38,7 +39,7 @@ def _ago(hours: float) -> str:
     return f"{plural(round(hours / 24), 'day')} ago"
 
 
-def discover(stats: dict, new_jobs: list[dict]) -> str:
+def discover(stats: dict[str, Any], new_jobs: list[dict[str, Any]]) -> str:
     """A pan in two or three lines, then the best of what it found. `new_jobs` holds each new job's id, company, title and score."""
     read = f"Read {stats['postings']:,} postings from {plural(stats['sources'], 'source')}"
     if stats.get("partial"):
@@ -64,7 +65,7 @@ def discover(stats: dict, new_jobs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def rescore(result: dict) -> str:
+def rescore(result: dict[str, Any]) -> str:
     """What `rescore` did to the prospects, naming the ones it dropped, since nothing else of them is left."""
     held = result.get("held", 0)
     total = result["kept"] + result["dropped"] + held
@@ -79,7 +80,7 @@ def rescore(result: dict) -> str:
     return "\n".join(lines)
 
 
-def _queue_line(job: dict) -> str:
+def _queue_line(job: dict[str, Any]) -> str:
     where = f", {plain(job['location'])}" if job.get("location") else ""
     said = [f"score {job['score']}"]
     if job.get("age_days") is not None:
@@ -99,7 +100,7 @@ def _queue_line(job: dict) -> str:
     return f"  #{job['id']} {plain(job['company'])}, {plain(job['title'])}{where}. {_sentence('; '.join(said))}"
 
 
-def queue(data: dict) -> str:
+def queue(data: dict[str, Any]) -> str:
     """`pyrite queue` for a person: when the boards were last read, then each list, best first."""
     hours = data["hours_since_sweep"]
     lines = [f"The last full pan finished {_ago(hours)}." if hours is not None
@@ -118,7 +119,7 @@ def queue(data: dict) -> str:
     return "\n".join(lines)
 
 
-def job(data: dict) -> str:
+def job(data: dict[str, Any]) -> str:
     """What you and the filters know about a job. What its board supplied is printed after this, fenced off as data."""
     said = [data["status"].replace("_", " "), f"score {data['score']}"]
     if data.get("track"):
@@ -139,7 +140,7 @@ def job(data: dict) -> str:
     return "\n".join(lines)
 
 
-def check(report: dict) -> str:
+def check(report: dict[str, Any]) -> str:
     """The assay's verdict: whether it passed, each error and warning on a line of its own, and which drafter built the files."""
     errors, warnings = report["errors"], report["warnings"]
     lines = ["The assay passed this draft." if report["ok"] else f"The assay blocked this draft: {plural(len(errors), 'problem')} to fix."]
@@ -161,13 +162,13 @@ def check(report: dict) -> str:
     return "\n".join(lines)
 
 
-def _totals(label: str, totals: dict) -> str:
+def _totals(label: str, totals: dict[str, Any]) -> str:
     failed = f", {totals['failed']:,} failed" if totals["failed"] else ""
     return (f"  {label}: {plural(totals['runs'], 'run')}{failed}, {totals['minutes']:g} minutes, "
             f"{totals['input_tokens']:,} tokens in and {totals['output_tokens']:,} out, ${totals['cost_usd']:.2f}")
 
 
-def usage(data: dict) -> str:
+def usage(data: dict[str, Any]) -> str:
     """`pyrite usage` for a person: the Claude runs Pyrite started, this week, all time and by kind."""
     if not data["all"]["runs"]:
         return "Pyrite hasn't started any Claude runs yet."
@@ -176,7 +177,7 @@ def usage(data: dict) -> str:
     return "\n".join(lines)
 
 
-def sources(report: list[dict]) -> str:
+def sources(report: list[dict[str, Any]]) -> str:
     """One line a source, the failing ones first, then how many answered."""
     lines = []
     for row in sorted(report, key=lambda r: (r["ok"], r["source"])):

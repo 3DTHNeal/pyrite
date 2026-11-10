@@ -14,6 +14,7 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .store import CODE_ROOT, ROOT
 
@@ -31,7 +32,7 @@ STOP_SECONDS = 5
 SERVE = re.compile(r"(?:^|[\\/\s\"'])pyrite(?:\.py|\.exe)?[\"']?\s+serve\b|-m\s+pyrite\s+serve\b", re.I)
 
 
-def dashboard_port(cfg: dict) -> int:
+def dashboard_port(cfg: dict[str, Any]) -> int:
     """The port under [dashboard] in search.toml, so `serve`, `open` and Pyrite.cmd agree on one. 8787 if unset."""
     port = cfg.get("dashboard", {}).get("port", DEFAULT_PORT)
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
@@ -108,7 +109,7 @@ def _stop(pid: int, port: int) -> None:
         time.sleep(0.25)
 
 
-def start(port: int) -> subprocess.Popen:
+def start(port: int) -> subprocess.Popen[bytes]:
     """Start `serve` in the background, with no window, so it keeps going after this ends."""
     python = Path(sys.executable)
     args = [str(python), str(CODE_ROOT / "tools" / "pyrite.py"), "serve", "--port", str(port)]

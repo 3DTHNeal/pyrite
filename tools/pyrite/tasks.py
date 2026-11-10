@@ -6,6 +6,7 @@ drafts, so only one of those two goes at a time.
 """
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from . import claude_code, discover, doctor, mail
 from .claude_code import find_claude, sign_in_help
@@ -27,7 +28,7 @@ def _minutes_since(iso: str) -> float:
     return (datetime.now(UTC) - datetime.fromisoformat(iso)).total_seconds() / 60
 
 
-def _problem(row) -> dict | None:
+def _problem(row) -> dict[str, Any] | None:
     """What stopped a failed run, in a form the dashboard can act on, when the run said."""
     try:
         found = json.loads(row["problem"]) if row["problem"] else None
@@ -36,7 +37,7 @@ def _problem(row) -> dict | None:
     return found if isinstance(found, dict) else None
 
 
-def latest(conn) -> dict[str, dict]:
+def latest(conn) -> dict[str, dict[str, Any]]:
     """The latest run of each kind, by kind: its state, when it started and what it last said.
 
     A failed run you've cleared, by saying the profile change that stopped it was yours, is "cleared" rather than
@@ -94,7 +95,7 @@ def _facts_still_example() -> bool:
     return "profile/facts.md" in doctor.still_example(ROOT)
 
 
-def _config() -> dict:
+def _config() -> dict[str, Any]:
     """search.toml as it reads now, or nothing while it's missing or can't be read, which is reported on its own."""
     try:
         return read_config(ROOT / "profile" / "search.toml")
@@ -162,7 +163,7 @@ def progress(conn, task_id: int, detail: str) -> None:
     conn.commit()
 
 
-def _finish(conn, task_id: int, ok: bool, detail: str, problem: dict | None = None) -> None:
+def _finish(conn, task_id: int, ok: bool, detail: str, problem: dict[str, Any] | None = None) -> None:
     ts = now()
     conn.execute("UPDATE tasks SET finished_at = ?, updated_at = ?, ok = ?, detail = ?, problem = ? WHERE id = ?",
                  (ts, ts, int(ok), detail[:1500], json.dumps(problem) if problem else None, task_id))
@@ -188,7 +189,7 @@ def start(conn, kind: str) -> None:
         raise ValueError(f"Couldn't start the {LABELS[kind]}: {err}") from err
 
 
-def _sweep(conn, cfg: dict, task_id: int) -> str:
+def _sweep(conn, cfg: dict[str, Any], task_id: int) -> str:
     progress(conn, task_id, "Reading the job boards")
     stats = discover.run(conn=conn, cfg=cfg)
     said = (f"{stats['postings']:,} postings read across {stats['sources']} sources, {stats['new']} new"
@@ -204,7 +205,7 @@ def _sweep(conn, cfg: dict, task_id: int) -> str:
     return f"{said} {mail.summary(result)}"
 
 
-def run(conn, cfg: dict, task_id: int) -> bool:
+def run(conn, cfg: dict[str, Any], task_id: int) -> bool:
     """Do the work of a claimed run, in this process. Returns whether it worked."""
     kind = conn.execute("SELECT kind FROM tasks WHERE id = ?", (task_id,)).fetchone()["kind"]
     try:

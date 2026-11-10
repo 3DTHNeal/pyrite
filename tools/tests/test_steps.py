@@ -7,6 +7,7 @@ import tomllib
 import unittest
 import unittest.mock as mock
 from pathlib import Path
+from typing import Any
 
 import support  # noqa: F401  Points Pyrite at a throwaway workspace before it loads.
 
@@ -15,7 +16,7 @@ from pyrite import checks, factsdoc, profile, server, steps, store, tomledit
 EXAMPLE_PROFILE = store.EXAMPLE_ROOT / "profile"
 
 
-def lf(result: dict, key: str) -> str:
+def lf(result: dict[str, Any], key: str) -> str:
     """A drafted file with Unix line endings. A checkout may have either, and a draft keeps whichever the file has."""
     return result["changes"][key].replace("\r\n", "\n")
 

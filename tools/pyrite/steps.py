@@ -39,7 +39,7 @@ class Draft:
     texts: dict[str, str]
     count: int
     notes: list[str] = field(default_factory=list)
-    preview: dict = field(default_factory=dict)
+    preview: dict[str, Any] = field(default_factory=dict)
 
 
 def _one_line(value, what: str) -> str:
@@ -52,7 +52,7 @@ def _one_line(value, what: str) -> str:
     return value.strip()
 
 
-def _list(value, what: str, of: type | None = None) -> list:
+def _list(value, what: str, of: type | None = None) -> list[Any]:
     """A list from a form, or [] for none. With `of`, every item must be that type, since one used as a key or a set
     member would otherwise fail as a server error rather than a refusal."""
     if value is None:
@@ -69,7 +69,7 @@ def _keep_end(old: str, text: str) -> str:
     return text + old[len(old.rstrip("\r\n")):]
 
 
-def _config(text: str) -> dict:
+def _config(text: str) -> dict[str, Any]:
     try:
         return tomllib.loads(text) if text.strip() else {}
     except tomllib.TOMLDecodeError as err:
@@ -80,7 +80,7 @@ def _written(rel: str) -> bool:
     return rel in profile.FILES.values()
 
 
-def _diff(old: str, new: str) -> dict:
+def _diff(old: str, new: str) -> dict[str, Any]:
     lines = list(difflib.unified_diff(old.splitlines(), new.splitlines(), "now", "after", n=1, lineterm=""))[2:]
     return {"lines": lines[:profile.DIFF_LINES], "cut": max(0, len(lines) - profile.DIFF_LINES)}
 
@@ -117,7 +117,7 @@ class Plan:
 
 # ---------- reading what the editors show ----------
 
-def contact_parts(line: str) -> tuple[list[dict], str]:
+def contact_parts(line: str) -> tuple[list[dict[str, Any]], str]:
     """A contact line's parts, each with what kind it reads as, and the separator it uses."""
     pieces = CONTACT_SEP.split(line)
     seps = pieces[1::2]
@@ -132,7 +132,7 @@ def contact_parts(line: str) -> tuple[list[dict], str]:
     return parts, seps[0] if seps else " · "
 
 
-def contact_source(cfg: dict) -> tuple[str, str] | None:
+def contact_source(cfg: dict[str, Any]) -> tuple[str, str] | None:
     """The file the fact check takes the contact line from, and that line: the first "@ " line in the approved
     sources, in the order search.toml lists them."""
     for rel in cfg.get("guard", {}).get("approved_sources", []):
@@ -155,7 +155,7 @@ def _excluded(doc: factsdoc.Doc, kind: str) -> factsdoc.Section | None:
     return None
 
 
-def _reader(texts: dict) -> Callable[[str], str]:
+def _reader(texts: dict[str, Any]) -> Callable[[str], str]:
     """A source's text as the page has it drafted, or as saved for a file the Profile tab doesn't write."""
     by_path = {path: texts[key] for key, path in profile.FILES.items()}
 
@@ -167,16 +167,16 @@ def _reader(texts: dict) -> Callable[[str], str]:
     return read
 
 
-def _by_name(cfg: dict, read: Callable[[str], str]) -> dict:
+def _by_name(cfg: dict[str, Any], read: Callable[[str], str]) -> dict[str, Any]:
     """The names under "Do not use" that the assay blocks with no pattern of their own, and the ones it can't block
     that way because your sources also state them."""
     blocked, shared = checks.listed_terms(cfg, read)
     return {"blocked": [term for term, _pattern, _rel in blocked], "shared": [term for term, _rel in shared]}
 
 
-def _term_lines(text: str) -> list[dict]:
+def _term_lines(text: str) -> list[dict[str, Any]]:
     """approved-terms.txt as groups: each comment block, and the terms on the lines after it."""
-    groups: list[dict] = [{"note": "", "terms": []}]
+    groups: list[dict[str, Any]] = [{"note": "", "terms": []}]
     for index, row in enumerate(text.splitlines()):
         stripped = row.strip()
         if stripped.startswith("#"):
@@ -201,7 +201,7 @@ def _body(doc: factsdoc.Doc, start: int, stop: int) -> tuple[int, str]:
     return end, "\n".join(doc.bare(i) for i in range(start, end))
 
 
-def master_blocks(text: str, kind: str) -> dict:
+def master_blocks(text: str, kind: str) -> dict[str, Any]:
     """A master resume or letter as the Master resume section edits it. A resume is its headline and a block of text
     under each heading; the name, contact line and headings themselves are set by other sections. A letter is its
     body: everything after the name and contact lines."""
@@ -222,7 +222,7 @@ def master_blocks(text: str, kind: str) -> dict:
     return found
 
 
-def view() -> dict:
+def view() -> dict[str, Any]:
     """What the section editors need beyond profile.view(): the contact line in parts and where the check reads it, the
     off-limits lists with their patterns, the approved terms by line, and the masters a block at a time."""
     texts = {key: profile.read(key) for key in profile.FILES}
@@ -264,7 +264,7 @@ def view() -> dict:
     }
 
 
-def _gaps_view() -> dict:
+def _gaps_view() -> dict[str, Any]:
     """The gaps that keep coming up, with which job each application is, so the section can say which are sent."""
     try:
         with closing(store.connect()) as conn:
@@ -275,7 +275,7 @@ def _gaps_view() -> dict:
 
 # ---------- drafting ----------
 
-def draft(step: str, edits, based_on) -> dict:
+def draft(step: str, edits, based_on) -> dict[str, Any]:
     """A section's form as the files it would write, without writing them."""
     if step not in DRAFTERS:
         raise ValueError("That section can't be edited here yet.")
@@ -311,7 +311,7 @@ def fill_from_resume(reason: str) -> list[str]:
     resume = profile.read("resume")
     path = profile.FILES["facts"]
 
-    def save(step: str, edits: dict, what: str) -> None:
+    def save(step: str, edits: dict[str, Any], what: str) -> None:
         try:
             changes = draft(step, edits, profile.versions())["changes"]
             # Only facts.md: the resume is the source here, so it stays as it was imported.
@@ -328,7 +328,7 @@ def fill_from_resume(reason: str) -> list[str]:
         if parts:
             save("basics", {"contact": parts}, "the Contact line")
     if not facts.timeline(profile.known_titles(_config(profile.read("config"))))[0]:
-        employers: list[dict] = []
+        employers: list[dict[str, Any]] = []
         for head in _heads(factsdoc.Doc(resume)):
             parts = head["parts"]
             dates = head["dates"]
@@ -349,7 +349,7 @@ def fill_from_resume(reason: str) -> list[str]:
 
 # ---------- Name and contact ----------
 
-def _basics(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _basics(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
     old_name = str(cfg.get("candidate", {}).get("name", "")).strip()
@@ -457,7 +457,7 @@ def _value(text: str) -> str:
         return text
 
 
-def _role(raw) -> dict:
+def _role(raw) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("A role should be a title, place and dates.")
     title = _one_line(raw.get("title"), "A title")
@@ -477,7 +477,7 @@ def _span(roles: list[tuple[str, str]]) -> tuple[str, str]:
     return min((r[0] for r in roles), key=_months), max((r[1] for r in roles), key=lambda v: _months(v, True))
 
 
-def _role_line(indent: str, role: dict, sep: str, old: factsdoc.Role | None = None) -> str:
+def _role_line(indent: str, role: dict[str, Any], sep: str, old: factsdoc.Role | None = None) -> str:
     start = old.start if old and _value(old.start) == role["start"][0] else role["start"][1]
     end = old.end if old and _value(old.end) == role["end"][0] else role["end"][1]
     note = f" {old.note}" if old and old.note else ""
@@ -485,7 +485,7 @@ def _role_line(indent: str, role: dict, sep: str, old: factsdoc.Role | None = No
     return f"{indent}- {head}, {start}{sep}{end}{note}"
 
 
-def _span_text(roles: list[dict]) -> tuple[str, str]:
+def _span_text(roles: list[dict[str, Any]]) -> tuple[str, str]:
     first = min(roles, key=lambda r: _months(r["start"][0]))
     last = max(roles, key=lambda r: _months(r["end"][0], True))
     return first["start"][1], last["end"][1]
@@ -498,7 +498,7 @@ def _section_end(doc: factsdoc.Doc, section: factsdoc.Section) -> int:
     return at
 
 
-def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _history(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
     titles = profile.known_titles(cfg)
@@ -517,7 +517,7 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
     known = {e.line: e for e in employers}
     kept: set[int] = set()
     # For the master resume: each employer as it was and as it will be.
-    moves: list[dict] = []
+    moves: list[dict[str, Any]] = []
     last_employer_end = max((items[e.line].end for e in employers), default=None)
     labeled_end = max((items[entry.line].end for entry in labeled), default=None)
     end_of_section = _section_end(doc, section) if section else len(doc.lines)
@@ -719,7 +719,7 @@ def _history(texts: dict, cfg: dict, edits: dict) -> Draft:
     })
 
 
-def _role_changes(was: factsdoc.Role, role: dict) -> tuple:
+def _role_changes(was: factsdoc.Role, role: dict[str, Any]) -> tuple[str | None, str | None, str | None, str | None]:
     """set_role's arguments: only what differs from the line as it is."""
     return (role["title"] if role["title"] != was.title else None,
             role["place"] if role["place"] != was.place else None,
@@ -727,11 +727,11 @@ def _role_changes(was: factsdoc.Role, role: dict) -> tuple:
             role["end"][1] if role["end"][0] != _value(was.end) else None)
 
 
-def _role_changed(was: factsdoc.Role, role: dict) -> bool:
+def _role_changed(was: factsdoc.Role, role: dict[str, Any]) -> bool:
     return any(change is not None for change in _role_changes(was, role))
 
 
-def _read_back(parsed: list[dict], after: list[factsdoc.Employer]) -> None:
+def _read_back(parsed: list[dict[str, Any]], after: list[factsdoc.Employer]) -> None:
     """Refuse a change that facts.md wouldn't read back as it was typed, such as a title with a comma in it."""
     got = {(e.name, r.title, r.place, _value(r.start), _value(r.end)) for e in after for r in e.roles}
     for entry in parsed:
@@ -757,7 +757,7 @@ def _gaps(employers: list[factsdoc.Employer]) -> list[str]:
 
 # ---------- the master resume's headings ----------
 
-def _heads(doc: factsdoc.Doc) -> list[dict]:
+def _heads(doc: factsdoc.Doc) -> list[dict[str, Any]]:
     """The resume's ### employer and #### role headings, read as name or title, place and date values."""
     found = []
     for index in range(len(doc.lines)):
@@ -784,7 +784,7 @@ def _block_end(doc: factsdoc.Doc, start: int, stop) -> int:
     return end
 
 
-def _dates_part(head: dict, start: str | None, end: str | None) -> str:
+def _dates_part(head: dict[str, Any], start: str | None, end: str | None) -> str:
     part, dates = head["parts"][-1], head["dates"]
     for (a, b), new in sorted(((dates.span("start"), start), (dates.span("end"), end)), reverse=True):
         if new is not None:
@@ -792,7 +792,7 @@ def _dates_part(head: dict, start: str | None, end: str | None) -> str:
     return part
 
 
-def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer]) -> tuple[str, list[str]]:
+def _sync_headings(text: str, moves: list[dict[str, Any]], removed: list[factsdoc.Employer]) -> tuple[str, list[str]]:
     """profile/resume.md with its headings changed to match the Timeline: renamed, re-dated, added and removed."""
     doc = factsdoc.Doc(text)
     heads = _heads(doc)
@@ -803,16 +803,16 @@ def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer
     top = lambda row: row.startswith(("### ", "## ", "# "))
     any_heading = lambda row: row.startswith("#")
 
-    def employer_head(name: str) -> dict | None:
+    def employer_head(name: str) -> dict[str, Any] | None:
         return next((h for h in heads if h["level"] == 3 and h["parts"][0] == name), None)
 
-    def role_heads(employer: dict | None) -> list[dict]:
+    def role_heads(employer: dict[str, Any] | None) -> list[dict[str, Any]]:
         if employer is None:
             return [h for h in heads if h["level"] == 4]
         end = _block_end(doc, employer["line"], top)
         return [h for h in heads if h["level"] == 4 and employer["line"] < h["line"] < end]
 
-    def find_role(employer: dict | None, role: factsdoc.Role) -> dict | None:
+    def find_role(employer: dict[str, Any] | None, role: factsdoc.Role) -> dict[str, Any] | None:
         under = role_heads(employer)
         exact = [h for h in under if h["parts"][0] == role.title and h["start"] == _value(role.start)
                  and h["end"] == _value(role.end)]
@@ -821,7 +821,7 @@ def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer
         named = [h for h in under if h["parts"][0] == role.title]
         return named[0] if len(named) == 1 else None
 
-    def new_role_head(role: dict) -> str:
+    def new_role_head(role: dict[str, Any]) -> str:
         return "#### " + " | ".join(p for p in (role["title"], role["place"], f"{role['start'][1]}{sep}{role['end'][1]}") if p)
 
     for employer in removed:
@@ -896,17 +896,17 @@ def _sync_headings(text: str, moves: list[dict], removed: list[factsdoc.Employer
             if found is None:
                 notes.append(f"{path} has no #### heading for {was.title} at {old.name}, so it wasn't changed there.")
                 continue
-            title, place, start, end = _role_changes(was, role)
+            new_title, new_place, new_start, new_end = _role_changes(was, role)
             parts = list(found["parts"])
-            if title is not None:
-                parts[0] = title
-            if place is not None:
+            if new_title is not None:
+                parts[0] = new_title
+            if new_place is not None:
                 if len(parts) >= 3:
-                    parts[1:2] = [place] if place else []
-                elif place:
-                    parts.insert(1, place)
-            if found["dates"] and (start is not None or end is not None):
-                parts[-1] = _dates_part(found, start, end)
+                    parts[1:2] = [new_place] if new_place else []
+                elif new_place:
+                    parts.insert(1, new_place)
+            if found["dates"] and (new_start is not None or new_end is not None):
+                parts[-1] = _dates_part(found, new_start, new_end)
             plan.set(found["line"], found["prefix"] + " | ".join(parts))
     plan.apply(doc)
     return doc.render(), notes
@@ -933,7 +933,7 @@ def _pattern(raw) -> str:
     return pattern
 
 
-def _offlimits(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _offlimits(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
     guard = cfg.get("guard", {})
@@ -1016,7 +1016,7 @@ def _offlimits(texts: dict, cfg: dict, edits: dict) -> Draft:
 
 # ---------- Skills and terms ----------
 
-def _skills(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _skills(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     text = texts["terms"]
     lines = text.splitlines(keepends=True)
@@ -1113,7 +1113,7 @@ def _add_wording(text: str, rules: list[str]) -> str:
     return doc.render()
 
 
-def compose(builder: dict) -> dict:
+def compose(builder: dict[str, Any]) -> dict[str, Any]:
     """An achievement builder's answers as one fact line, with what's worth a second look before adding it."""
     did = _one_line(builder.get("did"), "What you did").rstrip(".")
     before = _one_line(builder.get("before"), "Before")
@@ -1148,7 +1148,7 @@ def _fact_text(raw) -> str:
     return re.sub(r"^[-*]\s+", "", text).strip()
 
 
-def _fact_notes(texts: dict, cfg: dict, facts: list[str]) -> list[str]:
+def _fact_notes(texts: dict[str, Any], cfg: dict[str, Any], facts: list[str]) -> list[str]:
     """New facts that name something on Never mention or Haven't done, judged against the fact bank as it was read,
     so it's pointed out before they're added."""
     notes = []
@@ -1163,7 +1163,7 @@ def _fact_notes(texts: dict, cfg: dict, facts: list[str]) -> list[str]:
     return notes
 
 
-def _achievements(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _achievements(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
     count = 0
@@ -1280,7 +1280,7 @@ def _lines(raw, what: str) -> list[str]:
     return rows
 
 
-def _assay(texts: dict, cfg: dict, key: str, kind: str) -> dict:
+def _assay(texts: dict[str, Any], cfg: dict[str, Any], key: str, kind: str) -> dict[str, Any]:
     """What the fact check says about a master as drafted: what would stop a draft made from it, and what only the
     master says, which drafts may use because the master is itself an approved source."""
     guard = {"forbidden": [], "unsupported": [], "disclaimers": [], "approved_sources": [], **cfg.get("guard", {})}
@@ -1302,7 +1302,7 @@ def _assay(texts: dict, cfg: dict, key: str, kind: str) -> dict:
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}
 
 
-def _masters(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _masters(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     count = 0
     resume = edits.get("resume")
@@ -1370,7 +1370,7 @@ def _masters(texts: dict, cfg: dict, edits: dict) -> Draft:
 
 # ---------- Gaps to answer ----------
 
-def _gap_answers(texts: dict, cfg: dict, edits: dict) -> Draft:
+def _gap_answers(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     """Answers to the gaps that keep coming up, as lines in facts.md: a yes as a fact under the section you chose, and
     a no as a line under Unsupported. Leaving a question for later, or saying it doesn't apply, changes no file."""
     found = gaps.view()

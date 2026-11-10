@@ -19,6 +19,7 @@ import threading
 import time
 import tomllib
 from pathlib import Path
+from typing import Any
 
 from . import factsdoc, notify, store
 
@@ -32,14 +33,14 @@ FILE_ONLY = (("dashboard", "allowed_hosts"),)
 
 _lock = threading.Lock()
 _salt = secrets.token_bytes(16)
-_pending: dict | None = None
+_pending: dict[str, Any] | None = None
 _asked: list[float] = []
 
 
 class CodeNeeded(Exception):  # Not an error: the page answers it with a code.
     """The change loosens a check. A code has been sent, and `payload` tells the page what to ask for."""
 
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict[str, Any]):
         super().__init__("This change needs a code from this computer.")
         self.payload = payload
 
@@ -62,14 +63,14 @@ def _excluded(text: str) -> dict[str, set[str]]:
             for section in doc.sections() if section.kind == "excluded"}
 
 
-def _toml(text: str) -> dict:
+def _toml(text: str) -> dict[str, Any]:
     try:
         return tomllib.loads(text) if text.strip() else {}
     except tomllib.TOMLDecodeError:
         return {}  # A file that won't read is refused when it's written. Here it just has nothing to compare.
 
 
-def _get(config: dict, path: tuple[str, ...]):
+def _get(config: dict[str, Any], path: tuple[str, ...]):
     for part in path:
         config = config.get(part, {}) if isinstance(config, dict) else {}
     return config if config != {} else None
@@ -135,7 +136,7 @@ def _hash(code: str) -> str:
     return hashlib.sha256(_salt + code.encode()).hexdigest()
 
 
-def _fingerprint(changes: dict[str, str], based_on: dict) -> str:
+def _fingerprint(changes: dict[str, str], based_on: dict[str, Any]) -> str:
     """The exact change a code is for: each file's new text and the version it was based on."""
     shape = {key: [str(based_on.get(key, "")), hashlib.sha256(text.encode()).hexdigest()] for key, text in changes.items()}
     return hashlib.sha256(json.dumps(shape, sort_keys=True).encode()).hexdigest()
@@ -172,7 +173,7 @@ def _clear() -> None:
     _code_file().unlink(missing_ok=True)
 
 
-def _issue(summary: list[str], fingerprint: str) -> dict:
+def _issue(summary: list[str], fingerprint: str) -> dict[str, Any]:
     """A new code for this change. It replaces any code still waiting."""
     global _pending
     now = time.time()
@@ -193,7 +194,7 @@ def _issue(summary: list[str], fingerprint: str) -> dict:
             "expires_in": LIFETIME_SECONDS}
 
 
-def require(changes: dict[str, str], current: dict[str, str], based_on: dict, request_id=None, code=None) -> None:
+def require(changes: dict[str, str], current: dict[str, str], based_on: dict[str, Any], request_id=None, code=None) -> None:
     """Let a write go ahead, or stop it. A change that loosens no check passes. One that does raises CodeNeeded
     with a fresh code sent, or, when a code is given, passes only if it's the right code for exactly this change."""
     for key, text in changes.items():
@@ -228,7 +229,7 @@ def require(changes: dict[str, str], current: dict[str, str], based_on: dict, re
         _clear()
 
 
-def resend(request_id) -> dict:
+def resend(request_id) -> dict[str, Any]:
     """A new code for the change a waiting code was for. The old code stops working."""
     with _lock:
         pending = _pending
@@ -243,7 +244,7 @@ def cancel(request_id) -> None:
             _clear()
 
 
-def waiting() -> dict | None:
+def waiting() -> dict[str, Any] | None:
     """The code waiting to be typed, for `pyrite code`, or None."""
     path = _code_file()
     try:

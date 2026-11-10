@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from .store import ROOT, now
 
@@ -101,7 +102,7 @@ def _since(text) -> date | None:
         return None
 
 
-def _skill(entry: dict, pattern: str, learned: bool = False) -> Skill | None:
+def _skill(entry: dict[str, Any], pattern: str, learned: bool = False) -> Skill | None:
     """A skill from the table, or one research dated. Research read web pages, so a learned skill's name is cut to the
     plain characters a name needs, and its basis is kept out of what Claude is told: only the name and date go there."""
     since = _since(entry.get("since"))
@@ -125,7 +126,7 @@ def learned_path() -> Path:
     return ROOT / "data" / "skill-ages.json"
 
 
-def _load_learned() -> dict:
+def _load_learned() -> dict[str, Any]:
     try:
         data = json.loads(learned_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -274,14 +275,14 @@ def _stamp() -> int:
         return 0
 
 
-def signals(text: str, today: date) -> dict:
+def signals(text: str, today: date) -> dict[str, Any]:
     """What the dashboard and Claude are told: skill_asks, each young skill's ask, and impossible_asks among them.
     Cached, since the dashboard reads every posting on each refresh and descriptions rarely change."""
     return _signals(text or "", today, _stamp())
 
 
 @lru_cache(maxsize=20000)
-def _signals(text: str, today: date, stamp: int) -> dict:
+def _signals(text: str, today: date, stamp: int) -> dict[str, Any]:
     found = [ask for ask in asks(text, today) if ask.existed < YOUNG_YEARS]
     return {
         "skill_asks": [{"skill": ask.skill.name, "years": ask.years, "existed": round(ask.existed, 1),
@@ -302,7 +303,7 @@ def _only_restates(blocker: str, today: date, stamp: int) -> bool:
     return bool(found) and all(ask.impossible for ask in found)
 
 
-def prompt_section(job_signals: dict) -> str:
+def prompt_section(job_signals: dict[str, Any]) -> str:
     """The lines a triage or tailoring run gets about the skills' ages. Pyrite writes them, so they go outside the fence."""
     found = job_signals.get("skill_asks") or []
     if not found:
@@ -344,7 +345,7 @@ def research_prompt(phrases: list[str], today: date) -> str:
     ])
 
 
-def vet(answer: str, phrases: list[str], seen, today: date) -> dict[str, dict]:
+def vet(answer: str, phrases: list[str], seen, today: date) -> dict[str, dict[str, Any]]:
     """The answers worth keeping, by phrase. A dated one needs a sane date and a source the run came across."""
     from .claude_code import ClaudeFailed
     from .outlook import _text, cited
@@ -357,7 +358,7 @@ def vet(answer: str, phrases: list[str], seen, today: date) -> dict[str, dict]:
     if not isinstance(data, dict):
         raise ClaudeFailed("Claude's answer about the skills' ages wasn't readable.")
     wanted = set(phrases)
-    kept: dict[str, dict] = {}
+    kept: dict[str, dict[str, Any]] = {}
     for raw in data.get("skills") or []:
         if not isinstance(raw, dict) or raw.get("phrase") not in wanted:
             continue
@@ -377,7 +378,7 @@ def vet(answer: str, phrases: list[str], seen, today: date) -> dict[str, dict]:
     return kept
 
 
-def research(conn, cfg: dict, phrases: list[str], claude: str | None = None, today: date | None = None) -> dict:
+def research(conn, cfg: dict[str, Any], phrases: list[str], claude: str | None = None, today: date | None = None) -> dict[str, Any]:
     """Date these phrases from the web and keep the answers. Returns how many came back dated, general and unknown."""
     from .claude_code import ClaudeFailed, find_claude
     from .outlook import DEFAULT_MODEL, ask_web
@@ -405,5 +406,5 @@ def research(conn, cfg: dict, phrases: list[str], claude: str | None = None, tod
     return counts
 
 
-def enabled(cfg: dict) -> bool:
+def enabled(cfg: dict[str, Any]) -> bool:
     return bool((cfg.get("skills") or {}).get("research"))

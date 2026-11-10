@@ -14,13 +14,16 @@ import getpass
 import imaplib
 import os
 import re
+import sqlite3
 import ssl
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from email.headerregistry import Address
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from .sources import strip_invisible
@@ -195,7 +198,7 @@ def parse_headers(raw: bytes) -> Message | None:
     """Turn raw header bytes into a Message, or None if the sender or date can't be trusted to parse."""
     try:
         parsed = email.message_from_bytes(raw, policy=email.policy.default)
-        addresses: Sequence = parsed["from"].addresses if parsed["from"] else ()
+        addresses: Sequence[Address] = parsed["from"].addresses if parsed["from"] else ()
         if len(addresses) != 1:
             return None
         local, domain = addresses[0].username.lower(), addresses[0].domain.lower()
@@ -238,7 +241,7 @@ def _names_company(text: str, core: str) -> bool:
     return re.search(rf"(?<![^\W_]){words}(?![^\W_])", text, re.I) is not None
 
 
-def employer_domains(job, cfg: dict) -> set[str]:
+def employer_domains(job, cfg: dict[str, Any]) -> set[str]:
     """Domains known to belong to this employer: from search.toml, and the posting's own link."""
     listed = cfg.get("inbox", {}).get("domains", {}).get(job["company"], [])
     domains = {registrable(domain) for domain in listed}
@@ -275,7 +278,7 @@ def _cutoff(job) -> datetime:
     return max(_as_utc(stamp) for stamp in (job["applied_at"], job["status_changed_at"]) if stamp)
 
 
-def tracked_jobs(conn) -> list:
+def tracked_jobs(conn) -> list[sqlite3.Row]:
     marks = ", ".join("?" * len(ACTIVE))
     return conn.execute(
         f"SELECT * FROM jobs WHERE applied_at IS NOT NULL AND status IN ({marks})", ACTIVE,
@@ -323,7 +326,7 @@ def read_messages(client, since: datetime, own_address: str) -> list[Message]:
     return messages
 
 
-def _read_mailbox(creds: Credentials, jobs: list, cfg: dict, client_factory) -> tuple[list[Message], str]:
+def _read_mailbox(creds: Credentials, jobs: list[sqlite3.Row], cfg: dict[str, Any], client_factory) -> tuple[list[Message], str]:
     client = client_factory(creds)
     try:
         typ, _ = client.login(creds.user, creds.password)
@@ -372,7 +375,7 @@ def _names_title(subject: str, title: str) -> bool:
     return words.strip() != "" and words in _words(subject)
 
 
-def record_matches(conn, jobs: list, messages: Sequence[Message], cfg: dict) -> list[dict]:
+def record_matches(conn, jobs: list[sqlite3.Row], messages: Sequence[Message], cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Add each new match to its job's timeline. This never touches a job's status.
 
     Receipts are left out. When a message matches several applications at one company and its subject names some of
@@ -417,7 +420,7 @@ def _describe(err: Exception, creds: Credentials) -> str:
     return text[:300]
 
 
-def run(conn, cfg: dict, path: Path | None = None, client_factory=open_client) -> dict:
+def run(conn, cfg: dict[str, Any], path: Path | None = None, client_factory=open_client) -> dict[str, Any]:
     """One scan. Returns {"state": "not_configured" | "error" | "ok", ...} and never raises for mail trouble."""
     try:
         creds = load_credentials(path or CREDENTIALS_PATH)

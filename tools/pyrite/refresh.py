@@ -8,6 +8,7 @@ goes back. State lives in the job's events, so no schema change was needed.
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from . import checks, claude_code
 from .claude_code import ClaudeFailed, NoDocument, find_claude, sign_in_help, spawn_worker
@@ -36,7 +37,7 @@ class RefreshFailed(ClaudeFailed):
 MOVED_ON = "You moved this job on during the refresh, so the resume stays as it was."
 
 
-def states(conn) -> dict[int, dict]:
+def states(conn) -> dict[int, dict[str, Any]]:
     """Each job's latest refresh, by job id."""
     died = f"The run stopped without finishing. Check the resume: the draft from before it started is in {PREVIOUS}."
     return claude_code.latest(conn, STATE_NAMES, STALE_MINUTES, died)
@@ -87,7 +88,7 @@ def start(conn, job_id: int) -> None:
         raise ValueError(f"Couldn't start the refresh: {err}") from err
 
 
-def command(claude: str, cfg: dict | None = None) -> list[str]:
+def command(claude: str, cfg: dict[str, Any] | None = None) -> list[str]:
     """No tools: everything Claude needs is in the prompt, and the rewrite comes back in its closing message."""
     return claude_code.command(claude, [], cfg)
 
@@ -123,7 +124,7 @@ def _ask(conn, cfg, job_id: int, folder: str, claude: str, text: str, deadline: 
     return summary
 
 
-def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict, deadline: float) -> None:
+def _polish(conn, cfg, job_id: int, folder: str, claude: str, report: dict[str, Any], deadline: float) -> None:
     """One more pass over a rewrite that passed with warnings it can clear. The letter isn't this run's to change,
     so its warnings are left alone. If the pass fails the assay, the rewrite that passed goes back."""
     asks = checks.polish_requests(report, letter=False)
