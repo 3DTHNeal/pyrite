@@ -438,18 +438,57 @@ def mail_check(cfg: dict[str, Any] | None) -> dict[str, Any]:
     return {"ok": None, "what": "Reply detection isn't set up", "fix": 'Optional. See docs/mail.md.'}
 
 
-def tool_checks(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """The programs Pyrite uses, each as {"ok": True | False | None, "what", "fix"}. None means optional and missing."""
-    found = []
+# What each thing `tool_checks` looks for is for, and what still works without it, for the Profile tab's Tools check.
+# `required` ones stop drafts from being built. Claude Code and mail are set up on the Settings tab, which `settings` opens.
+TOOLS_ABOUT: dict[str, dict[str, Any]] = {
+    "docx": {"name": "python-docx", "required": True,
+             "for": "Builds each resume and cover letter as a Word document from its Markdown.",
+             "without": "No draft can be built, so none is ever ready to send. Finding and scoring jobs still work."},
+    "pdf": {"name": "LibreOffice or Word", "required": True,
+            "for": "Turns each Word document into the PDF you send.",
+            "without": "No draft can be built, so none is ever ready to send. Finding and scoring jobs still work."},
+    "pdftotext": {"name": "pdftotext", "required": False,
+                  "for": "Reads each PDF back as an applicant tracking system would, to catch text that comes out garbled.",
+                  "without": "That one check is skipped. Everything else works."},
+    "claude": {"name": "Claude Code", "required": False, "settings": "settings/claude",
+               "for": "Writes the drafts in the daily run, and runs Refresh resume, Interview prep and reading Gmail.",
+               "without": "Everything else: finding and scoring jobs, the fact check, building drafts you write, and "
+                          "tracking applications."},
+    "mail": {"name": "Reply detection", "required": False, "settings": "settings/mail",
+             "for": "Notices replies, interviews and rejections in your mail, and moves each job on.",
+             "without": "You mark replies yourself with each job's buttons."},
+}
+
+
+def program_checks() -> list[dict[str, Any]]:
+    """The programs that build the documents, each as {"id", "ok": True | False | None, "what", "fix"} with what
+    TOOLS_ABOUT says of it. None means optional and missing. Each is a quick look, so the Profile tab can ask often."""
+    found: list[dict[str, Any]] = []
     has_docx = importlib.util.find_spec("docx") is not None
-    found.append({"ok": has_docx, "what": "python-docx, which builds the documents", "fix": "" if has_docx else install_fix()})
+    found.append({"id": "docx", "ok": has_docx, "what": "python-docx, which builds the documents", "fix": "" if has_docx else install_fix()})
     if shutil.which("soffice"):
-        found.append({"ok": True, "what": "LibreOffice, which makes the PDFs", "fix": ""})
+        found.append({"id": "pdf", "ok": True, "what": "LibreOffice, which makes the PDFs", "fix": ""})
     elif _word_installed():
-        found.append({"ok": True, "what": "Word, which makes the PDFs", "fix": "LibreOffice is used instead when `soffice` is on PATH."})
+        found.append({"id": "pdf", "ok": True, "what": "Word, which makes the PDFs", "fix": "LibreOffice is used instead when `soffice` is on PATH."})
     else:
-        found.append({"ok": False, "what": "Something to make PDFs: LibreOffice or Word",
+        found.append({"id": "pdf", "ok": False, "what": "Something to make PDFs: LibreOffice or Word",
                       "fix": "Install LibreOffice and put `soffice` on PATH. Until then `pyrite finish` can't build a draft."})
-    found.append({"ok": True if shutil.which("pdftotext") else None, "what": "poppler's pdftotext, which reads each PDF back as a parser would",
+    found.append({"id": "pdftotext", "ok": True if shutil.which("pdftotext") else None,
+                  "what": "poppler's pdftotext, which reads each PDF back as a parser would",
                   "fix": "" if shutil.which("pdftotext") else "Optional. Git for Windows includes it. Without it that step is skipped."})
-    return [*found, claude_check(), mail_check(cfg)]
+    return [{**check, **TOOLS_ABOUT[check["id"]]} for check in found]
+
+
+def program_todos() -> list[dict[str, Any]]:
+    """The programs every draft needs that are missing, as to-dos that name the Profile tab's Tools check section."""
+    return [{"severity": "bad", "what": f"{check['name']} isn't on this computer, so no draft can be built.",
+             "fix": check["fix"], "step": "tools"}
+            for check in program_checks() if check["required"] and check["ok"] is False]
+
+
+def tool_checks(cfg: dict[str, Any] | None, claude: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The programs Pyrite uses, each as {"id", "ok": True | False | None, "what", "fix"} with what TOOLS_ABOUT says
+    of it. None means optional and missing. `claude` is Claude Code's answer if it's been asked already, since asking
+    takes a second or two."""
+    return [*program_checks(), {"id": "claude", **(claude or claude_check()), **TOOLS_ABOUT["claude"]},
+            {"id": "mail", **mail_check(cfg), **TOOLS_ABOUT["mail"]}]

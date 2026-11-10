@@ -24,6 +24,12 @@ The sections under **About you** that have editors so far:
 
 Lists in `search.toml` are changed an item at a time, so the other items, their lines and any comments among them stay as they were.
 
+Three sections show what they find and save nothing:
+
+- **Tools check** lists what Pyrite uses on this computer, the same programs `pyrite doctor` checks: python-docx and LibreOffice or Word, which every draft needs, `pdftotext`, Claude Code and reply detection. Each says what it's for, what still works without it, and how to get it. Claude Code and reply detection are set up on the Settings tab, so theirs have a button there. **Check again** asks Claude Code again rather than using its answer from the last minute. A missing program every draft needs goes on **Needs you**.
+- **Workspace and backup** names the folder in use and whether `PYRITE_HOME` or `.pyrite-home` chose it. `data/pyrite.db` is the one file there that can't be made again, so **Back up now** copies it into `data/backups/`, whole even while a run is writing to it, and keeps the newest 10. The section also says whether the folder is a git repository that keeps the database, when it was last committed, and how to put a copy back. A copy on the same computer is lost with it, so copy `data/backups/` somewhere else from time to time. The section shows as set while the newest copy is under two weeks old.
+- **What comes first** and **Schedule and mail** are set on the Settings tab, under **Cities and industries** and **Daily run**, and their cards open it there.
+
 ## Gaps to answer
 
 You may have done something you never thought to put in `facts.md`, and then every draft for a job that asks for it says you haven't. Each tailored draft's `notes.md` lists its gaps, numbered, under **Gaps to prepare for**. **Gaps to answer** on the Profile tab reads those lists in every application's folder, groups the ones that name the same requirement, and asks about the ones that keep coming up, most often raised first. No AI is involved: gaps are grouped by their words, so each question shows what every application's notes said and you can see a group is one question before you answer it.

@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import (
+    backup,
     checks,
     claude_code,
     confirm,
@@ -821,6 +822,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(facts.view())
             if path == "/api/profile":
                 return self._json(_profile_page())
+            if path == "/api/profile/tools":
+                fresh = parse_qs(urlparse(self.path).query).get("fresh") == ["1"]
+                return self._json({"tools": doctor.tool_checks(load_config(), options.claude_status(fresh))})
+            if path == "/api/profile/workspace":
+                return self._json(backup.about(store.ROOT))
             if path == "/api/profile/kept":
                 query = parse_qs(urlparse(self.path).query)
                 try:
@@ -1073,6 +1079,12 @@ def _draft_profile(body: dict[str, Any]) -> dict[str, Any]:
     return steps.draft(str(body.get("step") or ""), body.get("edits"), body.get("based_on"))
 
 
+def _back_up(body: dict[str, Any]) -> dict[str, Any]:
+    """Copy data/pyrite.db into data/backups. It adds a file and changes none, so it needs no code."""
+    made = backup.make(store.ROOT)
+    return {**backup.about(store.ROOT), "made": made}
+
+
 def _profile_code(body: dict[str, Any]) -> dict[str, Any]:
     """Send a waiting change's code again, or give up on it."""
     if body.get("action") == "resend":
@@ -1093,6 +1105,7 @@ PROFILE_WRITES = {
     "/api/profile": _save_profile,
     "/api/profile/put-back": _put_back,
     "/api/profile/code": _profile_code,
+    "/api/profile/backup": _back_up,
     "/api/gaps": _gap_question,
 }
 

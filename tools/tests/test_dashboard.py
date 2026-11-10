@@ -430,6 +430,19 @@ class Security(unittest.TestCase):
                 status, answer, _ = self.post("/api/profile/draft", body)
                 self.assertEqual(status, 400, answer)
 
+    def test_the_profile_tab_reads_the_tools_and_the_workspace(self):
+        signed_in = {"ok": True, "what": "Claude Code, signed in", "fix": ""}
+        with mock.patch.object(server.options, "claude_status", return_value=signed_in) as asked:
+            status, said, _ = self.call("/api/profile/tools?fresh=1")
+        self.assertEqual(status, 200, said)
+        asked.assert_called_once_with(True)
+        tools = {tool["id"]: tool for tool in json.loads(said)["tools"]}
+        self.assertEqual(tools["claude"]["what"], "Claude Code, signed in")
+        self.assertEqual(set(tools), {"docx", "pdf", "pdftotext", "claude", "mail"})
+        status, said, _ = self.call("/api/profile/workspace")
+        self.assertEqual(status, 200, said)
+        self.assertEqual(json.loads(said)["folder"], str(store.ROOT))
+
     def test_an_out_of_range_port_says_so(self):
         for port in (70000, -1):
             with self.subTest(port), self.assertRaises(SystemExit) as caught:
