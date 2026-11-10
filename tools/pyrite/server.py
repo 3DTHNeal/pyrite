@@ -194,7 +194,7 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
         """INSERT INTO jobs (source_key, source_id, company, title, location, location_kind, url, description, comp,
                first_seen, last_seen, score, score_reasons, track, flags, status, status_changed_at, priority)
            VALUES ('manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, 1)""",
-        (source_id, company, title, location, verdict.location_kind, url, description, find_comp(description), ts, ts,
+        (source_id, company, title, location, verdict.location_kind, url, description, find_comp(description, title), ts, ts,
          verdict.score, json.dumps(verdict.reasons), verdict.track or scoring.ADDED_TRACK,
          json.dumps(verdict.flags), ts),
     )
