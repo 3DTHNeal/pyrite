@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import doctor, factsdoc, gaps, score, settings, store
+from . import backup, doctor, factsdoc, gaps, score, settings, store
 
 # What may be written, by key. The paths are fixed here and never come from a request.
 FILES = {
@@ -37,7 +37,8 @@ DIFF_LINES = 400
 # The Profile tab's sections, in the order it shows them. Setup walks the same ones. `files` are the keys a section
 # writes, and `required` ones must be set before Pyrite can do its job. Until a section's own editor is built,
 # `meanwhile` says where to change it instead, and `fallback` names the tab that edits it, if one does, with the
-# section of that tab after a slash.
+# section of that tab after a slash. A section with `settings` is set on the Settings tab for good, in the section of
+# that name, so it says so and opens it rather than calling itself unbuilt.
 STEPS: tuple[dict[str, Any], ...] = (
     {"id": "basics", "group": "About you", "label": "Name and contact", "required": True, "fallback": "facts",
      "files": ("config", "facts", "resume", "letter"),
@@ -93,27 +94,28 @@ STEPS: tuple[dict[str, Any], ...] = (
      "why": "Pyrite reads these companies' job boards every morning.",
      "writes": ("search.toml › [watch.*], [[manual_check]] and [workday] queries",)},
     {"id": "priorities", "group": "Your search", "label": "What comes first", "required": False, "fallback": "settings/ranking",
-     "files": ("config",),
-     "meanwhile": "Until it's built: Cities and industries on the Settings tab, which works as before.",
+     "settings": "Cities and industries", "files": ("config",),
+     "meanwhile": "Set on the Settings tab, under Cities and industries, beside the points each one adds to a job's score.",
      "why": "Cities and industries you want to see first. These change the order of what you see, not what's kept.",
      "writes": ("search.toml › [promote]",)},
     {"id": "tools", "group": "Automation", "label": "Tools check", "required": False, "fallback": None,
      "files": (),
-     "meanwhile": "Until it's built: run `pyrite doctor` in a terminal.",
+     "meanwhile": "`pyrite doctor` in a terminal checks the same things.",
      "why": "What Pyrite needs on this computer, and what each thing is for. Everything else works without the "
             "missing ones.",
      "writes": ()},
     {"id": "schedule", "group": "Automation", "label": "Schedule and mail", "required": False, "fallback": "settings/run",
-     "files": ("config",),
-     "meanwhile": "Until it's built: Daily run and Mail on the Settings tab. The daily runs are set up as described in docs/schedule.md.",
+     "settings": "Daily run", "files": ("config",),
+     "meanwhile": "Set on the Settings tab: Daily run for how much Pyrite does each morning, and Mail for where it reads "
+                  "replies. Your computer's scheduler starts the daily runs themselves, as docs/schedule.md describes.",
      "why": "How much Pyrite does each morning, and where it reads replies from.",
      "writes": ("search.toml › [run] and [inbox]",)},
     {"id": "workspace", "group": "Workspace", "label": "Workspace and backup", "required": False, "fallback": None,
      "files": (),
-     "meanwhile": "Until it's built: `pyrite where` in a terminal names the folder in use.",
+     "meanwhile": "`pyrite where` in a terminal names the folder in use.",
      "why": "Your resumes, fact bank and tracking data live in a private folder on this computer. Pyrite's own code "
             "folder never holds them.",
-     "writes": ()},
+     "writes": ("data/backups › a copy of data/pyrite.db, when you make one",)},
 )
 STEP_IDS = {step["id"] for step in STEPS}
 
@@ -262,11 +264,32 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
         "where": (bool(places or location.get("accept_remote")), ", ".join(where).capitalize()),
         "companies": (bool(watched or by_hand), f"{watched} watched, {by_hand} by hand"),
         "priorities": (bool(cities or industries), f"{_plural(cities, 'city', 'cities')}, {_plural(industries, 'industry', 'industries')}"),
-        "tools": (False, "Checked by `pyrite doctor`"),
+        "tools": _tools_summary(),
         "schedule": (True, f"Up to {_plural(int(run.get('tailor_per_day', 0) or 0), 'draft')} a day, replies from "
                            f"{'Gmail' if mail == 'gmail' else 'mail (IMAP)'}"),
-        "workspace": (True, str(store.ROOT)),
+        "workspace": _workspace_summary(),
     }
+
+
+def _tools_summary() -> tuple[bool, str]:
+    """Whether this computer has what every draft needs, and which of the programs that build documents it found.
+    Claude Code takes a second or two to ask, so the section asks it when it's opened."""
+    found = doctor.program_checks()
+    missing = [check["name"] for check in found if check["required"] and check["ok"] is False]
+    if missing:
+        return False, f"Missing {' and '.join(missing)}"
+    named = [check["what"].split(",")[0] if check["id"] == "pdf" else check["name"] for check in found if check["ok"]]
+    return True, f"{', '.join(named[:-1])} and {named[-1]} found" if len(named) > 1 else f"{named[0]} found"
+
+
+def _workspace_summary() -> tuple[bool, str]:
+    """Whether data/pyrite.db has a recent copy in data/backups, and when the newest was made."""
+    if store.IS_EXAMPLE:
+        return True, "The demo's fictional example"
+    made = backup.latest(store.ROOT)
+    if made is None:
+        return False, "No backup here yet"
+    return backup.is_fresh(store.ROOT), f"Last backup {made:%d %b %Y}"
 
 
 def needs(cfg: dict[str, Any] | None, unread: list[int], asked: int = 0) -> list[dict[str, Any]]:
@@ -274,7 +297,7 @@ def needs(cfg: dict[str, Any] | None, unread: list[int], asked: int = 0) -> list
     couldn't read. Each names the section that fixes it, when one does."""
     found: list[dict[str, Any]] = []
     if not store.IS_EXAMPLE:  # The demo is the example on purpose, so it has nothing left to set up.
-        for todo in doctor.workspace_todos(store.ROOT, cfg):
+        for todo in [*doctor.workspace_todos(store.ROOT, cfg), *doctor.program_todos()]:
             step = todo.get("step") if todo.get("step") in STEP_IDS else None
             found.append({"severity": todo.get("severity", "warn"), "title": todo["what"], "detail": todo["fix"], "step": step})
     if unread:
@@ -301,7 +324,7 @@ def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: 
     for step in STEPS:
         is_set, summary = summaries[step["id"]]
         attention = any(item["step"] == step["id"] for item in waiting)
-        status = "attention" if attention else "set" if is_set else "unknown" if step["id"] == "tools" else "not_set"
+        status = "attention" if attention else "set" if is_set else "not_set"
         steps.append({**step, "status": status, "summary": summary, "changed": changed.get(step["id"])})
     return {"steps": steps, "needs": waiting}
 
