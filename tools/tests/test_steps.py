@@ -6,12 +6,14 @@ import tempfile
 import tomllib
 import unittest
 import unittest.mock as mock
+import urllib.error
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 import support  # Points Pyrite at a throwaway workspace before it loads.
 
-from pyrite import checks, factsdoc, profile, server, steps, store, tomledit
+from pyrite import checks, discover, factsdoc, profile, server, sources, steps, store, tomledit
 
 EXAMPLE_PROFILE = store.EXAMPLE_ROOT / "profile"
 
@@ -136,6 +138,8 @@ class Steps(unittest.TestCase):
             ("masters", {"resume": {"headline": self.view["master_blocks"]["resume"]["headline"],
                                     "blocks": self.view["master_blocks"]["resume"]["blocks"]},
                          "letter": {"body": self.view["master_blocks"]["letter"]["body"]}}),
+            ("where", {key: self.view["where"][key] for key in
+                       ("places", "local", "local_exact", "accept_remote", "accept_relocation", "market")}),
             ("roles", self.roles_form()),
         ):
             result = self.draft(step, edits)
@@ -481,6 +485,129 @@ class Steps(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.draft("masters", {"resume": {"headline": "x"}})
 
+    # ---- Where you'll work ----
+
+    def where(self, **changes):
+        form = {key: self.view["where"][key] for key in
+                ("places", "local", "local_exact", "accept_remote", "accept_relocation", "market")}
+        return self.draft("where", {**form, **changes})
+
+    def test_where_shows_the_patterns_and_the_area(self):
+        where = self.view["where"]
+        self.assertEqual(where["places"], [])
+        self.assertIn("sun prairie", where["local"])
+        self.assertIn(", WI\\b", where["local_exact"])
+        self.assertEqual((where["accept_remote"], where["accept_relocation"]), (True, False))
+        self.assertEqual(where["market"], {"state": "Wisconsin", "metro": "Madison, WI", "country": ""})
+        self.assertIsNone(where["remote_home"])
+
+    def test_an_unchanged_where_leaves_search_toml_byte_for_byte(self):
+        before = (self.root / "profile" / "search.toml").read_bytes()
+        result = self.where(test="Remote - US")
+        self.assertEqual((result["changes"], result["count"]), ({}, 0))
+        # The hand-written patterns, given back in another order, are no change either.
+        self.assertEqual(self.where(local=self.view["where"]["local"][::-1])["changes"], {})
+        self.assertEqual((self.root / "profile" / "search.toml").read_bytes(), before)
+
+    def test_adding_places_keeps_the_patterns_and_comments(self):
+        result = self.where(places=["Springfield, IL", "Oak Park", "oak park", " "])
+        config = lf(result, "config")
+        self.assertIn('accept_relocation = false # onsite roles elsewhere are dropped\nplaces = ["Springfield, IL", "Oak Park"]\n', config)
+        self.assertIn("# Either or both will do. Madison is tied to Wisconsin here", config)
+        self.assertEqual(tomllib.loads(config)["location"]["local"], self.view["where"]["local"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["code"], [])  # Where you'll work never lets a draft say more.
+        self.save(result)
+        self.assertEqual(self.view["where"]["places"], ["Springfield, IL", "Oak Park"])
+        config = lf(self.where(places=["Oak Park"]), "config")
+        self.assertIn('places = ["Oak Park"]\n', config)
+
+    def test_a_place_written_without_brackets_becomes_a_list(self):
+        path = self.root / "profile" / "search.toml"
+        path.write_bytes(path.read_bytes().replace(b"accept_remote = true", b'places = "Oak Park"\naccept_remote = true'))
+        self.view = {**profile.view(), **steps.view()}
+        self.assertEqual(self.view["where"]["places"], ["Oak Park"])
+        self.assertEqual(tomllib.loads(lf(self.where(places=["Oak Park", "Evanston"]), "config"))["location"]["places"],
+                         ["Oak Park", "Evanston"])
+
+    def test_patterns_and_toggles_change_a_key_at_a_time(self):
+        local = [p for p in self.view["where"]["local"] if p != "verona"] + ["\\bfitchburg\\b"]
+        result = self.where(local=local, accept_remote=False, accept_relocation=True)
+        config = lf(result, "config")
+        self.assertIn("accept_remote = false      # US remote roles count\n", config)
+        self.assertIn("accept_relocation = true # onsite roles elsewhere are dropped\n", config)
+        self.assertIn("  '\\bfitchburg\\b',\n]", config)
+        self.assertNotIn("'verona'", config)
+        self.assertEqual(result["count"], 4)
+
+    def test_the_area_for_the_industries_tab(self):
+        result = self.where(market={"state": "Illinois", "metro": "", "country": "United States"})
+        config = lf(result, "config")
+        self.assertIn('[market]\nstate = "Illinois"\ncountry = "United States"\n', config)
+        self.assertNotIn("metro =", config)
+        self.assertIn('# model = "claude-sonnet-5-5"', config)  # Settings' key, left alone.
+        notes = self.where(market={"state": "Ontario", "metro": "", "country": "Canada"})["notes"]
+        self.assertTrue(any("United States only" in note for note in notes), notes)
+
+    def test_a_bad_area_is_named_from_the_bls_list_when_pyrite_has_it(self):
+        titles = {"17000": "Illinois -- Statewide", "C4418": "Springfield, IL MSA"}
+        with mock.patch.object(steps.market, "_fresh", return_value=True), \
+                mock.patch.object(steps.market, "area_titles", return_value=titles):
+            self.assertEqual(self.where(market={"state": "Illinois", "metro": "Springfield, IL"})["notes"], [])
+            notes = self.where(market={"state": "Illinoise", "metro": "Springfield"})["notes"]
+        self.assertTrue(any("no state is called 'Illinoise'" in note for note in notes), notes)
+
+    def test_a_location_is_judged_with_the_settings_as_drafted(self):
+        for text, kind, why in (("Remote - US", "remote", "remote role open to you"),
+                                ("Madison, Wisconsin", "local", "madison"),
+                                ("Springfield, Illinois", "out", "won't relocate"),
+                                ("Remote - Germany", "out", "open only somewhere else")):
+            tested = self.where(test=text)["preview"]["test"]
+            self.assertEqual((tested["now"], tested["after"]), (kind, kind), text)
+            self.assertIn(why, tested["why"], text)
+        tested = self.where(places=["Springfield, IL"], test="Springfield, Illinois")["preview"]["test"]
+        self.assertEqual((tested["now"], tested["after"]), ("out", "local"))
+        self.assertIn("“Springfield, IL”", tested["why"])
+        tested = self.where(accept_remote=False, test="Remote - US")["preview"]["test"]
+        self.assertEqual((tested["now"], tested["after"]), ("remote", "out"))
+
+    def test_the_prospects_are_counted_before_and_after(self):
+        path = self.root / "data" / "pyrite.db"
+        with closing(store.connect(path)) as conn:
+            for index, (location, status, source) in enumerate((
+                    ("Madison, WI", "new", "greenhouse:a"), ("Remote - US", "new", "greenhouse:a"),
+                    ("Springfield, IL", "new", "lever:b"), ("Springfield, IL", "applied", "lever:b"),
+                    ("Springfield, IL", "new", "manual"))):
+                conn.execute("INSERT INTO jobs (source_key, source_id, company, title, location, status, first_seen, last_seen) "
+                             "VALUES (?, ?, 'Acme', 'Staff Engineer', ?, ?, '', '')", (source, str(index), location, status))
+            conn.commit()
+        with mock.patch.object(store, "DB_PATH", path):
+            found = self.where(places=["Springfield, IL"], accept_remote=False)["preview"]["prospects"]
+            self.assertEqual(found["total"], 3)  # Only prospects from the boards: not sent, and not added by hand.
+            self.assertEqual((found["now"]["local"], found["now"]["remote"], found["now"]["out"]), (1, 1, 1))
+            self.assertEqual((found["after"]["local"], found["after"]["remote"], found["after"]["out"]), (2, 0, 1))
+            self.assertEqual([(m["location"], m["now"], m["after"]) for m in found["moves"]],
+                             [("Remote - US", "remote", "out"), ("Springfield, IL", "out", "local")])
+            notes = self.where(places=["Springfield, IL"])["notes"]
+            self.assertTrue(any("pyrite rescore" in note for note in notes), notes)
+        with mock.patch.object(store, "DB_PATH", self.root / "data" / "none.db"):
+            self.assertIsNone(self.where()["preview"]["prospects"])
+        self.assertFalse((self.root / "data" / "none.db").exists())
+
+    def test_bad_where_input_is_refused(self):
+        for changes in ({"places": "Oak Park"}, {"places": ["Oak\nPark"]}, {"places": ["--"]}, {"places": ["x" * 200]},
+                        {"local": ["(unclosed"]}, {"local": [".*"]}, {"local_exact": [3]}, {"accept_remote": "yes"},
+                        {"market": "Illinois"}, {"market": {"state": "Illi\nnois"}}):
+            with self.assertRaises(ValueError, msg=changes):
+                self.where(**changes)
+        # A hand-written pattern already in the file is kept as it is, even one the form wouldn't take today.
+        self.assertEqual(self.where(local=self.view["where"]["local"])["changes"], {})
+
+    def test_where_says_what_it_holds_on_the_hub(self):
+        step = next(s for s in profile.view()["steps"] if s["id"] == "where")
+        self.assertEqual(step["summary"], "11 local places, remote")
+        self.assertNotIn("Until it's built", step["meanwhile"])
+
     # ---- Roles you want ----
 
     def track(self, form: dict[str, Any], name: str) -> dict[str, Any]:
@@ -740,6 +867,256 @@ class Steps(unittest.TestCase):
             {"step": "skills", "edits": {"add": ["Rust"]}, "based_on": page["versions"]})
         self.assertEqual(result["count"], 1)
         self.assertFalse((self.root / "data" / "history").exists())  # A draft writes nothing.
+
+
+class Companies(unittest.TestCase):
+    """Companies to watch: [watch.*], [[manual_check]] and [workday] queries, a key at a time, and the boards a
+    pasted address names. Nothing here reaches the network: Test's reads are stood in for."""
+    setUp = Steps.setUp
+    draft = Steps.draft
+    save = Steps.save
+
+    def config(self) -> str:
+        return profile.read("config")
+
+    def form(self, **change) -> dict[str, Any]:
+        """The section's form as the page first sends it, with `change` in place of any part."""
+        companies = self.view["companies"]
+        return {
+            "boards": [{part: board[part] for part in ("was", "kind", "key", "name", "wd", "site")} for board in companies["boards"]],
+            "manual": [dict(entry) for entry in companies["manual"]],
+            "queries": list(companies["queries"]),
+            "paste": "",
+            **change,
+        }
+
+    def rewrite(self, text: str) -> None:
+        (self.root / "profile" / "search.toml").write_bytes(text.encode())
+        self.view = {**profile.view(), **steps.view()}
+
+    def test_an_unchanged_form_leaves_search_toml_byte_for_byte(self):
+        result = self.draft("companies", self.form())
+        self.assertEqual((result["changes"], result["count"]), ({}, 0))
+        companies = self.view["companies"]
+        self.assertEqual([(b["kind"], b["key"], b["name"]) for b in companies["boards"]], [("greenhouse", "anthropic", "Anthropic")])
+        self.assertEqual([m["name"] for m in companies["manual"]], ["LinkedIn"])
+        self.assertTrue(companies["queries"])
+        # A Workday entry written the wrong way is shown as it is, and left alone while it isn't touched.
+        self.rewrite(self.config().replace("[watch.workday]", '[watch.workday]\nglobex = "Globex"', 1))
+        board = next(b for b in self.view["companies"]["boards"] if b["key"] == "globex")
+        self.assertIn("needs a name, wd and site", board["problem"])
+        self.assertEqual(self.draft("companies", self.form())["changes"], {})
+
+    def test_each_kind_of_board_is_added_and_taken_off_and_the_file_comes_back_as_it_was(self):
+        before = self.config()
+        new = [
+            {"was": None, "kind": "greenhouse", "key": "initech", "name": "Initech"},
+            {"was": None, "kind": "lever", "key": "globex-robotics", "name": "Globex Robotics"},
+            {"was": None, "kind": "ashby", "key": "Hooli", "name": "Hooli"},
+            {"was": None, "kind": "workday", "key": "umbrella", "wd": "wd5", "site": "Careers", "name": "Umbrella"},
+        ]
+        result = self.draft("companies", self.form(boards=self.form()["boards"] + new))
+        self.assertEqual(result["count"], 4)
+        watch = tomllib.loads(result["changes"]["config"])["watch"]
+        self.assertEqual(watch["greenhouse"], {"anthropic": "Anthropic", "initech": "Initech"})
+        self.assertEqual(watch["lever"], {"globex-robotics": "Globex Robotics"})
+        self.assertEqual(watch["ashby"], {"Hooli": "Hooli"})
+        self.assertEqual(watch["workday"], {"umbrella": {"name": "Umbrella", "wd": "wd5", "site": "Careers"}})
+        # Only lines were added: every comment, and the commented-out example under [watch.workday], is still there.
+        after = lf(result, "config").splitlines()
+        self.assertTrue(all(line in after for line in before.replace("\r\n", "\n").splitlines()))
+        self.assertIn('# acme = { name = "Acme", wd = "wd1", site = "External" }', after)
+        self.assertEqual([d["path"] for d in result["diffs"]], ["profile/search.toml"])
+        self.save(result)
+
+        result = self.draft("companies", self.form(boards=[b for b in self.form()["boards"] if b["key"] == "anthropic"]))
+        self.assertEqual(result["count"], 4)
+        self.assertIn("stops reading Initech, Globex Robotics, Hooli and Umbrella's boards", result["notes"][0])
+        self.assertEqual(result["changes"]["config"], before)
+
+    def test_a_name_or_key_changes_in_its_own_line(self):
+        boards = self.form()["boards"]
+        boards[0]["name"] = "Anthropic PBC"
+        result = self.draft("companies", self.form(boards=boards))
+        self.assertIn('anthropic = "Anthropic PBC"\n', lf(result, "config"))
+        self.assertEqual(result["count"], 1)
+        boards[0]["key"] = "anthropic-labs"
+        result = self.draft("companies", self.form(boards=boards))
+        self.assertEqual(tomllib.loads(result["changes"]["config"])["watch"]["greenhouse"], {"anthropic-labs": "Anthropic PBC"})
+
+    def test_a_workday_site_keeps_what_else_its_table_holds(self):
+        self.rewrite(self.config().replace(
+            "[watch.workday]", '[watch.workday]\nglobex = { name = "Globex", wd = "wd1", site = "Ext", note = "kept" }', 1))
+        boards = self.form()["boards"]
+        next(b for b in boards if b["key"] == "globex")["site"] = "External"
+        result = self.draft("companies", self.form(boards=boards))
+        self.assertEqual(tomllib.loads(result["changes"]["config"])["watch"]["workday"]["globex"],
+                         {"name": "Globex", "wd": "wd1", "site": "External", "note": "kept"})
+
+    def test_a_company_written_as_a_table_of_its_own_is_refused_rather_than_half_changed(self):
+        self.rewrite(self.config() + '\n[watch.workday.globex]\nname = "Globex"\nwd = "wd1"\nsite = "Ext"\n')
+        with self.assertRaisesRegex(ValueError, "a table of its own"):
+            self.draft("companies", self.form(boards=[b for b in self.form()["boards"] if b["key"] != "globex"]))
+
+    def test_companies_checked_by_hand_are_added_changed_and_taken_off(self):
+        before = self.config()
+        manual = self.form()["manual"] + [{"at": None, "name": "Initech", "url": "careers.initech.example/jobs", "why": "Its own site"}]
+        result = self.draft("companies", self.form(manual=manual))
+        config = tomllib.loads(result["changes"]["config"])
+        self.assertEqual(config["manual_check"][1], {"name": "Initech", "url": "https://careers.initech.example/jobs", "why": "Its own site"})
+        self.assertEqual(config["manual_check"][0]["name"], "LinkedIn")
+        # The comments above and below the list stay where they were.
+        self.assertIn("# Employers worth watching with no public feed.", lf(result, "config"))
+        self.assertIn("# Company watchlist, checked with `pyrite sources`.", lf(result, "config"))
+        self.assertEqual(config["watch"], tomllib.loads(before)["watch"])
+
+        manual = self.form()["manual"]
+        manual[0]["why"] = ""
+        result = self.draft("companies", self.form(manual=manual))
+        self.assertEqual(tomllib.loads(result["changes"]["config"])["manual_check"],
+                         [{"name": "LinkedIn", "url": "https://www.linkedin.com/jobs/"}])
+
+        result = self.draft("companies", self.form(manual=[]))
+        self.assertNotIn("manual_check", tomllib.loads(result["changes"]["config"]))
+        self.assertIn("# [[manual_check]]\n", lf(result, "config"))
+        self.save(result)
+        result = self.draft("companies", self.form(manual=[{"at": None, "name": "Globex", "url": "", "why": ""}]))
+        self.assertEqual(tomllib.loads(result["changes"]["config"])["manual_check"], [{"name": "Globex"}])
+
+    def test_workday_searches_are_added_and_taken_off_an_item_at_a_time(self):
+        queries = self.form()["queries"]
+        result = self.draft("companies", self.form(queries=queries[1:] + ["robotics", "robotics", " "]))
+        self.assertEqual(tomllib.loads(result["changes"]["config"])["workday"]["queries"], queries[1:] + ["robotics"])
+        self.assertEqual(result["count"], 2)
+        self.assertIn("'robotics'", result["changes"]["config"])
+        boards = self.form()["boards"] + [{"was": None, "kind": "workday", "key": "umbrella", "wd": "wd1", "site": "Ext", "name": "Umbrella"}]
+        result = self.draft("companies", self.form(boards=boards, queries=[]))
+        self.assertTrue(any("finds nothing on them" in note for note in result["notes"]), result["notes"])
+
+    def test_what_cant_be_written_is_refused(self):
+        boards = self.form()["boards"]
+        for board, said in (
+            ({"kind": "greenhouse", "key": "acme/../evil", "name": "Acme"}, "isn't a Greenhouse board"),
+            ({"kind": "lever", "key": "evil.test#", "name": "Acme"}, "isn't a Lever board"),
+            ({"kind": "ashby", "key": "", "name": "Acme"}, "isn't an Ashby board"),
+            ({"kind": "workday", "key": "evil.test", "wd": "wd1", "site": "Ext", "name": "Acme"}, "isn't a Workday tenant"),
+            ({"kind": "workday", "key": "acme", "wd": "wd1.evil.test", "site": "Ext", "name": "Acme"}, "isn't a Workday server"),
+            ({"kind": "workday", "key": "acme", "wd": "wd1", "site": "Ext?x=1", "name": "Acme"}, "isn't a Workday site"),
+            ({"kind": "greenhouse", "key": "acme", "name": ""}, "Name the company"),
+            ({"kind": "indeed", "key": "acme", "name": "Acme"}, "Greenhouse, Lever, Ashby or Workday"),
+            ({"kind": "greenhouse", "key": "anthropic", "name": "Again"}, "listed twice"),
+            ({"kind": "greenhouse", "key": "acme", "name": "Acme\nInc"}, "line break"),
+            ({"was": "greenhouse:gone", "kind": "greenhouse", "key": "gone", "name": "Gone"}, "since the page read it"),
+        ):
+            with self.subTest(board):
+                with self.assertRaisesRegex(ValueError, said):
+                    self.draft("companies", self.form(boards=boards + [{"was": None, **board}]))
+        for manual, said in (
+            ([{"at": None, "name": "Evil", "url": "javascript:alert(1)", "why": ""}], "isn't a web address"),
+            ([{"at": None, "name": "", "url": "https://example.com", "why": ""}], "needs a name"),
+            ([{"at": 5, "name": "LinkedIn", "url": "", "why": ""}], "since the page read"),
+            ([{"at": True, "name": "LinkedIn", "url": "", "why": ""}], "since the page read"),
+        ):
+            with self.subTest(manual):
+                with self.assertRaisesRegex(ValueError, said):
+                    self.draft("companies", self.form(manual=manual))
+        for edits in ({"boards": "nope"}, {"boards": [1]}, {"queries": [1]}, {"queries": "x"}, {"manual": [["x"]]}):
+            with self.subTest(edits):
+                with self.assertRaises(ValueError):
+                    self.draft("companies", edits)
+        self.assertFalse((self.root / "data" / "history").exists())
+
+    def test_a_pasted_address_is_read_as_the_board_it_names(self):
+        for address, board in (
+            ("boards.greenhouse.io/initech", {"kind": "greenhouse", "key": "initech", "name": "Initech"}),
+            ("https://job-boards.greenhouse.io/initech/jobs/4012345", {"kind": "greenhouse", "key": "initech", "name": "Initech"}),
+            ("https://boards.greenhouse.io/embed/job_board?for=globex-robotics",
+             {"kind": "greenhouse", "key": "globex-robotics", "name": "Globex Robotics"}),
+            ("https://boards-api.greenhouse.io/v1/boards/initech/jobs", {"kind": "greenhouse", "key": "initech", "name": "Initech"}),
+            ("https://jobs.lever.co/hooli/5f7e-41ab/apply", {"kind": "lever", "key": "hooli", "name": "Hooli"}),
+            ("http://jobs.ashbyhq.com/Umbrella", {"kind": "ashby", "key": "Umbrella", "name": "Umbrella"}),
+            ("https://umbrella.wd5.myworkdayjobs.com/en-US/Careers/job/Madison-WI/Engineer_R-1234",
+             {"kind": "workday", "key": "umbrella", "wd": "wd5", "site": "Careers", "name": "Umbrella"}),
+            ("UMBRELLA.WD1.myworkdayjobs.com/External", {"kind": "workday", "key": "umbrella", "wd": "wd1", "site": "External", "name": "Umbrella"}),
+            ("https://umbrella.wd1.myworkdayjobs.com/wday/cxs/umbrella/External/jobs",
+             {"kind": "workday", "key": "umbrella", "wd": "wd1", "site": "External", "name": "Umbrella"}),
+        ):
+            with self.subTest(address):
+                self.assertEqual(discover.board_from_url(address), board)
+        for address, said in (
+            ("https://careers.initech.example/jobs", "isn't one of them"),
+            ("https://boards.greenhouse.io@evil.test/initech", "evil.test isn't one of them"),
+            ("https://boards.greenhouse.io.evil.test/initech", "isn't one of them"),
+            ("https://boards.greenhouse.io/", "no board after the slash"),
+            ("https://umbrella.wd1.myworkdayjobs.com/en-US", "no Workday site"),
+            ("https://boards.greenhouse.io/a%2F..%2Fevil", "isn't a Greenhouse board"),
+            ("ftp://boards.greenhouse.io/initech", "isn't a web address"),
+            ("", "Paste"),
+        ):
+            with self.subTest(address):
+                with self.assertRaisesRegex(ValueError, said):
+                    discover.board_from_url(address)
+        # The section's draft reads one too, and changes nothing for it.
+        result = self.draft("companies", self.form(paste="  https://jobs.lever.co/hooli  "))
+        self.assertEqual((result["count"], result["preview"]["pasted"]), (0, {"ok": True, "kind": "lever", "key": "hooli", "name": "Hooli"}))
+        result = self.draft("companies", self.form(paste="careers.initech.example"))
+        self.assertFalse(result["preview"]["pasted"]["ok"])
+
+    def test_the_view_shows_how_each_board_answered_at_the_last_run(self):
+        with mock.patch.object(store, "DB_PATH", self.root / "data" / "pyrite.db"):
+            with closing(store.connect()) as conn:
+                conn.execute("INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count) "
+                             "VALUES ('greenhouse:anthropic', 'Anthropic', '2026-11-08T06:00', '2026-11-08T06:00', '', 42)")
+                conn.commit()
+            board = steps.view()["companies"]["boards"][0]
+        self.assertEqual((board["status"]["count"], board["status"]["error"], board["problem"]), (42, "", ""))
+
+    # ---- Test this board ----
+
+    def test_testing_a_board_reads_only_that_boards_own_feed(self):
+        asked = []
+
+        def answer(url, payload=None, retries=3):
+            asked.append(url)
+            return {"total": 7} if "myworkdayjobs" in url else {"jobs": [{"id": 1, "title": "Engineer"}, {"id": 2, "title": "Lead"}]}
+
+        with mock.patch.object(sources, "_request", side_effect=answer):
+            found = server._test_board({"kind": "greenhouse", "key": "initech", "name": "Initech"})
+            self.assertEqual((found["ok"], found["count"]), (True, 2))
+            found = server._test_board({"url": "https://umbrella.wd5.myworkdayjobs.com/en-US/Careers"})
+            self.assertEqual((found["ok"], found["count"], found["board"]["site"]), (True, 7, "Careers"))
+        self.assertEqual(asked, ["https://boards-api.greenhouse.io/v1/boards/initech/jobs",
+                                 "https://umbrella.wd5.myworkdayjobs.com/wday/cxs/umbrella/Careers/jobs"])
+
+    def test_testing_refuses_anything_but_a_board_on_the_four_hosts(self):
+        with mock.patch.object(sources, "_request") as fetch:
+            for body in (
+                {"url": "https://evil.test/initech"},
+                {"url": "https://boards.greenhouse.io@evil.test/initech"},
+                {"url": "http://127.0.0.1:8787/api/state"},
+                {"url": ["https://boards.greenhouse.io/initech"]},
+                {"kind": "greenhouse", "key": "evil.test/x"},
+                {"kind": "greenhouse", "key": "@evil.test"},
+                {"kind": "lever", "key": "../../evil"},
+                {"kind": "workday", "key": "evil.test#", "wd": "wd1", "site": "Ext"},
+                {"kind": "workday", "key": "umbrella", "wd": "wd1.evil.test/", "site": "Ext"},
+                {"kind": "workday", "key": "umbrella", "wd": "wd1", "site": "../../evil"},
+                {"kind": "https://evil.test", "key": "initech"},
+                {"kind": "greenhouse", "key": 5},
+                {},
+            ):
+                with self.subTest(body):
+                    with self.assertRaises(ValueError):
+                        server._test_board(body)
+            fetch.assert_not_called()
+
+    def test_a_board_that_doesnt_answer_says_so(self):
+        missing = urllib.error.HTTPError("https://boards-api.greenhouse.io/v1/boards/nobody/jobs", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        self.addCleanup(missing.close)
+        with mock.patch.object(sources, "_request", side_effect=missing):
+            found = server._test_board({"kind": "greenhouse", "key": "nobody"})
+        self.assertFalse(found["ok"])
+        self.assertIn("No Greenhouse board answers", found["hint"])
 
 
 if __name__ == "__main__":

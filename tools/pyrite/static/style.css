@@ -568,6 +568,35 @@ textarea { width: 100%; resize: vertical; }
 .profile-commands { background: var(--surface-2); padding: 8px 10px; border-radius: 4px; margin: 0; white-space: pre-wrap; }
 .profile-copies { margin: 0; padding-left: 18px; font-size: 13px; }
 .profile-copies .muted { overflow-wrap: anywhere; }
+/* Companies to watch: a row per board, with its kind, name, key and Test. */
+.profile-board { display: grid; grid-template-columns: 84px minmax(120px, 1fr) minmax(0, 1.4fr) auto; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.profile-board:first-child { border-top: 0; }
+.profile-board.new { background: color-mix(in srgb, var(--good) 8%, transparent); }
+.profile-board-found { display: grid; gap: 6px; border: 1px dashed var(--line-strong); border-radius: 6px; padding: 8px 10px; background: color-mix(in srgb, var(--good) 6%, transparent); }
+.profile-board.going input { text-decoration: line-through; color: var(--ink-3); }
+.profile-board-kind { font: 600 11px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.profile-board-key { display: flex; gap: 6px; min-width: 0; }
+.profile-board-key input { flex: 1 1 0; min-width: 0; }
+.profile-board-key input.short { flex: 0 0 64px; }
+/* A Workday site's tenant, server and site take a line of their own under its name. */
+.profile-board.workday > input { grid-column: 2 / 4; }
+.profile-board.workday > .profile-board-key { grid-column: 2 / 4; grid-row: 2; }
+.profile-board-note { grid-column: 1 / -1; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.profile-board-note:empty { display: none; }
+.profile-board .pill { margin-right: 4px; }
+.profile-manual { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 1.4fr) minmax(0, 1.4fr) auto; gap: 6px; align-items: center; }
+.profile-hosts { margin: 0; padding-left: 18px; font: 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .profile-board { grid-template-columns: minmax(0, 1fr) auto; }
+  .profile-board > .profile-board-kind { grid-column: 1 / -1; }
+  .profile-board > input { grid-column: 1; }
+  .profile-board > .profile-board-key { grid-column: 1; }
+  .profile-board > .row-actions { grid-column: 2; grid-row: 2 / span 2; }
+  .profile-board.workday > input, .profile-board.workday > .profile-board-key { grid-column: 1; grid-row: auto; }
+  .profile-manual { grid-template-columns: minmax(0, 1fr) auto; }
+  .profile-manual > :nth-child(2), .profile-manual > :nth-child(3) { grid-column: 1; }
+  .profile-manual > button { grid-column: 2; grid-row: 1; }
+}
 @media (max-width: 560px) { .profile-facts { grid-template-columns: 1fr; } .profile-facts dd { margin-bottom: 6px; } }
 .profile-add { display: flex; gap: 6px; }
 .profile-add input { flex: 1; min-width: 0; }

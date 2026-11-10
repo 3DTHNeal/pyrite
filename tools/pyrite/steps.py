@@ -17,7 +17,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, discover, factsdoc, gaps, profile, score, store, tomledit, workspace
+from . import checks, confirm, discover, factsdoc, gaps, market, profile, score, store, tomledit, workspace
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -261,6 +261,8 @@ def view() -> dict[str, Any]:
                           "letter": master_blocks(texts["letter"], "letter")},
         "wording": _wording(texts["run_notes"]),
         "gaps": _gaps_view(),
+        "companies": _companies_view(cfg),
+        "where": _where_view(cfg),
         "roles": _roles_view(cfg, texts),
     }
 
@@ -1407,6 +1409,439 @@ def _gap_answers(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, An
     return Draft({**texts, "facts": facts}, count, notes, {})
 
 
+# ---------- Companies to watch ----------
+
+MANUAL_FIELDS = ("name", "url", "why")
+# What's left in search.toml when the last company to check by hand is taken off: the form of one, so adding one by
+# hand later is easy.
+MANUAL_EXAMPLE = ('# [[manual_check]]\n# name = "LinkedIn"\n# url = "https://www.linkedin.com/jobs/"\n'
+                  '# why = "Its terms forbid automated collection, so this stays manual"\n')
+
+
+def _watching(cfg: dict[str, Any]) -> dict[tuple[str, str], Any]:
+    """Every watched board under [watch.*], by (kind, key), with its entry as search.toml has it."""
+    watch = cfg.get("watch", {})
+    found: dict[tuple[str, str], Any] = {}
+    for kind in discover.BOARD_KINDS:
+        table = watch.get(kind, {}) if isinstance(watch, dict) else {}
+        if isinstance(table, dict):
+            found.update({(kind, str(key)): spec for key, spec in table.items()})
+    return found
+
+
+def _board_form(kind: str, key: str, spec) -> dict[str, str]:
+    """A watched board as the section's form shows it: a Workday site is a table of name, wd and site, and every other
+    board is its company's name."""
+    if kind == "workday":
+        table = spec if isinstance(spec, dict) else {"name": spec}
+        name, wd, site = (table.get(part) for part in ("name", "wd", "site"))
+    else:
+        name, wd, site = spec, "", ""
+    text = lambda value: value if isinstance(value, str) else ""
+    return {"kind": kind, "key": key, "name": text(name), "wd": text(wd), "site": text(site)}
+
+
+def _manual(cfg: dict[str, Any]) -> list[Any]:
+    found = cfg.get("manual_check", [])
+    return found if isinstance(found, list) else []
+
+
+def _manual_form(entry) -> dict[str, str]:
+    table = entry if isinstance(entry, dict) else {}
+    return {part: table[part] if isinstance(table.get(part), str) else "" for part in MANUAL_FIELDS}
+
+
+def _queries(cfg: dict[str, Any]) -> list[Any]:
+    workday = cfg.get("workday", {})
+    found = workday.get("queries", []) if isinstance(workday, dict) else []
+    return found if isinstance(found, list) else []
+
+
+def _source_status() -> dict[str, dict[str, Any]]:
+    """How each board answered at the last run, from the Sources tab's record, by source key."""
+    try:
+        with closing(store.connect()) as conn:
+            rows = conn.execute("SELECT source_key, last_count, last_error, last_ok, last_run FROM source_status").fetchall()
+    except sqlite3.Error:
+        return {}
+    return {row["source_key"]: {"count": row["last_count"], "error": row["last_error"] or "", "ok_at": row["last_ok"],
+                                "run_at": row["last_run"]} for row in rows}
+
+
+def _companies_view(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The watched boards, the companies checked by hand and the Workday searches, as the section's form reads them."""
+    status = _source_status()
+    boards = [{**_board_form(kind, key, spec), "was": f"{kind}:{key}", "problem": discover.watch_problem(kind, key, spec),
+               "status": status.get(f"{kind}:{key}")} for (kind, key), spec in _watching(cfg).items()]
+    return {
+        "boards": boards,
+        "manual": [{**_manual_form(entry), "at": at} for at, entry in enumerate(_manual(cfg))],
+        "queries": [query for query in _queries(cfg) if isinstance(query, str)],
+        "kinds": discover.BOARD_KINDS,
+    }
+
+
+def _boards(config: str, cfg: dict[str, Any], raws) -> tuple[str, int, list[str], dict[tuple[str, str], Any]]:
+    """[watch.*] as the form has it: each board added, changed, renamed or taken off a key at a time. Returns the new
+    text, how many boards changed, what to know, and every board as search.toml will read afterwards."""
+    current = _watching(cfg)
+    kept: set[tuple[str, str]] = set()
+    # Each board wanted, by (kind, key): its entry, the board it was, and whether it changed.
+    wanted: dict[tuple[str, str], tuple[Any, tuple[str, str] | None, bool]] = {}
+    for raw in _list(raws, "Companies"):
+        if not isinstance(raw, dict):
+            raise ValueError("A company should be a board and a name.")
+        was = raw.get("was")
+        old_id: tuple[str, str] | None = None
+        if was is not None:
+            parts = was.split(":", 1) if isinstance(was, str) else []
+            old_id = (parts[0], parts[1]) if len(parts) == 2 else None
+            if old_id not in current:
+                raise ValueError("A company has changed in search.toml since the page read it. Reload and try again.")
+            if old_id in kept:
+                raise ValueError(f"{old_id[1]} is listed twice.")
+            kept.add(old_id)
+        kind = raw.get("kind")
+        if not isinstance(kind, str) or kind not in discover.BOARD_KINDS:
+            raise ValueError("A board is Greenhouse, Lever, Ashby or Workday.")
+        form = {"kind": kind, "key": _one_line(raw.get("key"), "A board"), "name": _one_line(raw.get("name"), "A company's name"),
+                "wd": _one_line(raw.get("wd"), "A Workday server") if kind == "workday" else "",
+                "site": _one_line(raw.get("site"), "A Workday site") if kind == "workday" else ""}
+        if old_id is None and not any(form[part] for part in ("key", "name", "wd", "site")):
+            continue  # A row just added and not yet typed in.
+        ident = (kind, form["key"])
+        if ident in wanted:
+            raise ValueError(f"{form['key']} is listed twice under {discover.BOARD_KINDS[kind]}.")
+        if old_id == ident and _board_form(kind, ident[1], current[ident]) == form:
+            wanted[ident] = (current[ident], old_id, False)
+            continue
+        problem = discover.board_problem(kind, form["key"], form["wd"], form["site"])
+        if problem:
+            raise ValueError(problem)
+        if not form["name"]:
+            raise ValueError(f"Name the company whose {discover.BOARD_KINDS[kind]} board is {form['key']}.")
+        old = current.get(old_id) if old_id else None
+        spec: Any = form["name"]
+        if kind == "workday":
+            # Anything else its table holds stays as it was.
+            spec = {**(old if isinstance(old, dict) else {}), "name": form["name"], "wd": form["wd"], "site": form["site"]}
+        wanted[ident] = (spec, old_id, True)
+
+    gone = [ident for ident in current if ident not in kept]
+    moved = [old_id for ident, (_, old_id, _) in wanted.items() if old_id is not None and old_id != ident]
+    for kind, key in gone + moved:
+        config = tomledit.delete_value(config, ("watch", kind), key)
+    count = len(gone)
+    for (kind, key), (spec, _, changed) in wanted.items():
+        if changed:
+            config = tomledit.set_value(config, ("watch", kind), key, spec)
+            count += 1
+    expected = {ident: spec for ident, (spec, _, _) in wanted.items()}
+    notes = []
+    if gone:
+        names = [_board_form(kind, key, current[(kind, key)])["name"] or key for kind, key in gone]
+        notes.append(f"Pyrite stops reading {_and(names)}'s board{'s' if len(gone) > 1 else ''} from the next run. "
+                     "Jobs it already found there stay where they are.")
+    return config, count, notes, expected
+
+
+def _and(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
+    """[[manual_check]] as the form has it. It's a list of tables, so a change writes the whole list again: comments
+    between its entries go, and the ones above and below it stay."""
+    old = _manual(cfg)
+    new: list[Any] = []
+    seen: set[int] = set()
+    for raw in _list(raws, "Companies to check by hand"):
+        if not isinstance(raw, dict):
+            raise ValueError("A company to check by hand should be a name, a link and why.")
+        fields = {part: _one_line(raw.get(part), f"A company's {part}") for part in MANUAL_FIELDS}
+        at = raw.get("at")
+        if at is None and not any(fields.values()):
+            continue
+        if at is not None:
+            if not isinstance(at, int) or isinstance(at, bool) or not 0 <= at < len(old) or at in seen:
+                raise ValueError("The companies to check by hand have changed in search.toml since the page read them. "
+                                 "Reload and try again.")
+            seen.add(at)
+            if _manual_form(old[at]) == fields:
+                new.append(old[at])
+                continue
+        if not fields["name"]:
+            raise ValueError("Every company to check by hand needs a name.")
+        url = fields["url"]
+        if url and not re.match(r"https?://", url, re.I):
+            # Another scheme, such as mailto: or javascript:, but not a host and its port.
+            if re.match(r"[a-z][a-z0-9+.-]*:(?!\d)", url, re.I):
+                raise ValueError(f"“{url}” isn't a web address. It should start with https://.")
+            fields["url"] = "https://" + url
+        entry = dict(old[at]) if at is not None and isinstance(old[at], dict) else {}
+        for part, value in fields.items():
+            if value:
+                entry[part] = value
+            else:
+                entry.pop(part, None)
+        new.append(entry)
+    if new == old:
+        return config, 0
+    if new:
+        block = "\n".join("[[manual_check]]\n" + "".join(f"{tomledit.key_text(part)} = {tomledit.dump(value)}\n"
+                                                         for part, value in entry.items()) for entry in new)
+        config = tomledit.replace_table(config, "manual_check", block, expected=new)
+    else:
+        config = tomledit.replace_table(config, "manual_check", MANUAL_EXAMPLE)
+    changed = sum(entry not in old for entry in new) + sum(entry not in new for entry in old)
+    return config, max(changed, 1)
+
+
+def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
+    """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for.
+    A pasted careers page address is read as the board it names, for the page to offer to add."""
+    out = dict(texts)
+    config = texts["config"]
+    notes: list[str] = []
+    count = 0
+    watched = _watching(cfg)
+    if "boards" in edits:
+        config, changed, said, watched = _boards(config, cfg, edits["boards"])
+        count += changed
+        notes += said
+    if "manual" in edits:
+        config, changed = _manual_checks(config, cfg, edits["manual"])
+        count += changed
+    queries = [query for query in _queries(cfg) if isinstance(query, str)]
+    if "queries" in edits:
+        old = _queries(cfg)
+        if not all(isinstance(query, str) for query in old):
+            raise ValueError("[workday] queries in search.toml isn't a list of text, so change it in the file itself.")
+        queries = list(dict.fromkeys(query for query in (_one_line(raw, "A Workday search")
+                                                         for raw in _list(edits["queries"], "Workday searches", str)) if query))
+        remove, add = [query for query in old if query not in queries], [query for query in queries if query not in old]
+        if remove or add:
+            config = tomledit.edit_list(config, "workday", "queries", remove=remove, add=add, literal=True)
+            count += len(remove) + len(add)
+    # tomledit changes a key it finds and passes over one it doesn't, such as a company written as a table of its own.
+    if _watching(_config(config)) != watched:
+        raise ValueError("search.toml writes [watch] in a way this section can't change a key at a time, such as a "
+                         "company as a table of its own, so nothing was changed. Change it in the file itself.")
+    if config != texts["config"] and any(kind == "workday" for kind, _ in watched) and not queries:
+        notes.append("Workday sites are searched for each of the Workday searches, so with none, Pyrite finds "
+                     "nothing on them.")
+    out["config"] = config
+    preview: dict[str, Any] = {"watched": len(watched)}
+    paste = edits.get("paste")
+    if isinstance(paste, str) and paste.strip():
+        text = _one_line(paste.strip(), "The address")
+        try:
+            preview["pasted"] = {"ok": True, **discover.board_from_url(text)}
+        except ValueError as err:
+            preview["pasted"] = {"ok": False, "error": str(err), "url": text}
+    return Draft(out, count, notes, preview)
+
+# ---------- Where you'll work ----------
+
+MAX_PLACE = 120
+# Prospects whose place would count differently are listed up to this many. The counts cover all of them.
+MOVES_SHOWN = 12
+MARKET_KEYS = ("state", "metro", "country")
+
+
+def _where_view(cfg: dict[str, Any]) -> dict[str, Any]:
+    """[location] and [market] as Where you'll work edits them. accept_remote and accept_relocation are as the filters
+    read them when they're left out: remote taken, relocation not."""
+    loc = cfg.get("location") or {}
+    chosen = cfg.get("market") or {}
+    patterns = lambda key: [str(p) for p in loc.get(key) or []]
+    return {
+        "places": score._plain(loc.get("places")),
+        "local": patterns("local"), "local_exact": patterns("local_exact"),
+        "accept_remote": bool(loc.get("accept_remote", True)), "accept_relocation": bool(loc.get("accept_relocation", False)),
+        "remote_home": patterns("remote_home") if loc.get("remote_home") is not None else None,
+        "remote_elsewhere": patterns("remote_elsewhere") if loc.get("remote_elsewhere") is not None else None,
+        "market": {key: str(chosen.get(key) or "") for key in MARKET_KEYS},
+    }
+
+
+def _place_kind(location: str, workplace: str, cfg: dict[str, Any], company: str = "", title: str = "") -> str:
+    """local, remote, unknown or out, as the filters judge a posting's place, or elsewhere for one kept outside your
+    area because it's in an industry kept anywhere."""
+    kind = score.classify_location(location, workplace, cfg)
+    if kind == "out" and company and score.kept_anywhere(company, title, location, cfg):
+        return score.ELSEWHERE
+    return kind
+
+
+def _why_place(location: str, cfg: dict[str, Any]) -> str:
+    """Why a place is judged as it is, in words."""
+    loc = cfg["location"]
+    for place in score._plain(loc.get("places")):
+        if re.search(score.plain_pattern(place, place=True), location, re.I):
+            return f"It matches “{place}”, one of your places."
+    for key, flags in (("local", re.I), ("local_exact", 0)):
+        for pattern in loc.get(key) or []:
+            try:
+                if re.search(pattern, location, flags):
+                    return f"It matches the pattern {pattern!r} under {key}."
+            except re.error:
+                continue
+    kind = score.classify_location(location, "", cfg)
+    remote = bool(score.REMOTE.search(location))
+    if kind == "remote":
+        return "It reads as a remote role open to you."
+    if kind == "unknown":
+        return "It names no place to judge, so it's kept." if not location.strip() or score.MULTI_LOCATION.match(location) \
+            else "It isn't one of your places, but you'll relocate, so it's kept."
+    if remote and loc.get("accept_remote", True):
+        return "It reads as a remote role open only somewhere else."
+    if remote:
+        return "It reads as remote, and you don't take remote roles."
+    return "It isn't one of your places, and you won't relocate."
+
+
+def _place_prospects(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any] | None:
+    """How the prospects found on the boards count now and would count with the draft, from the database read-only,
+    or None when there isn't one to read."""
+    if not store.DB_PATH.is_file():
+        return None
+    try:
+        with closing(sqlite3.connect(f"{store.DB_PATH.as_uri()}?mode=ro", uri=True)) as conn:
+            rows = conn.execute("SELECT company, title, location, workplace FROM jobs "
+                                "WHERE status = 'new' AND source_key NOT IN ('seed', 'manual')").fetchall()
+    except sqlite3.Error:
+        return None
+    kinds = ("local", "remote", "unknown", score.ELSEWHERE, "out")
+    now = dict.fromkeys(kinds, 0)
+    then = dict.fromkeys(kinds, 0)
+    moves = []
+    for company, title, location, workplace in rows:
+        args = (location or "", workplace or "")
+        was = _place_kind(*args, before, company or "", title or "")
+        will = _place_kind(*args, after, company or "", title or "")
+        now[was] += 1
+        then[will] += 1
+        if was != will:
+            moves.append({"company": company, "title": title, "location": location or "", "now": was, "after": will})
+    moves.sort(key=lambda move: (move["after"] != "out", move["company"] or "", move["title"] or ""))
+    return {"total": len(rows), "now": now, "after": then, "moved": len(moves), "moves": moves[:MOVES_SHOWN]}
+
+
+def _market_notes(chosen: dict[str, str]) -> list[str]:
+    """What the Industries tab would say is wrong with [market], judged against the BLS's list of areas when Pyrite
+    has a recent copy of it. Nothing is downloaded for a draft."""
+    if (chosen["country"] or "United States").strip().lower() not in market.US_NAMES:
+        return ["The official employment numbers cover the United States only, so the Industries tab shows what Pyrite "
+                "has seen and the researched outlook instead."] if chosen["state"] or chosen["metro"] else []
+    if not (chosen["state"] or chosen["metro"]) or not market._fresh(market.cache_dir() / "area_titles.csv", market.TITLES_DAYS):
+        return []
+    try:
+        titles = market.area_titles()
+    except market.Unavailable:
+        return []
+    notes = []
+    for key, finder in (("metro", market.find_metro), ("state", market.find_state)):
+        if chosen[key]:
+            try:
+                finder(titles, chosen[key])
+            except ValueError as err:
+                notes.append(str(err))
+    return notes
+
+
+def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
+    out = dict(texts)
+    config = texts["config"]
+    shown = _where_view(cfg)
+    loc = cfg.get("location") or {}
+    notes: list[str] = []
+    count = 0
+
+    if "places" in edits:
+        places: list[str] = []
+        for raw in _list(edits["places"], "Places"):
+            place = _one_line(raw, "A place")
+            if not place:
+                continue
+            if len(place) > MAX_PLACE:
+                raise ValueError(f"A place can be at most {MAX_PLACE} characters.")
+            if score.plain_pattern(place, place=True) == r"(?!)":
+                raise ValueError(f"“{place}” has no words in it to match a posting's location.")
+            if place.casefold() not in {p.casefold() for p in places}:
+                places.append(place)
+        before = shown["places"]
+        if set(places) != set(before):
+            if isinstance(loc.get("places"), str):  # One place written without the brackets becomes a list.
+                config = tomledit.set_value(config, "location", "places", places)
+            else:
+                config = tomledit.edit_list(config, "location", "places", remove=[p for p in before if p not in places],
+                                            add=[p for p in places if p not in before])
+            count += len(set(places) ^ set(before))
+
+    for key in ("local", "local_exact"):
+        if key not in edits:
+            continue
+        before = shown[key]
+        wanted = [_pattern(raw) if raw not in before else raw for raw in _list(edits[key], f"The patterns under {key}", str)]
+        wanted = list(dict.fromkeys(wanted))
+        if set(wanted) != set(before):
+            config = tomledit.edit_list(config, "location", key, remove=[p for p in before if p not in wanted],
+                                        add=[p for p in wanted if p not in before], literal=True)
+            count += len(set(wanted) ^ set(before))
+
+    for key in ("accept_remote", "accept_relocation"):
+        if key not in edits:
+            continue
+        value = edits[key]
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} is on or off.")
+        if value != shown[key]:
+            config = tomledit.set_value(config, "location", key, value)
+            count += 1
+
+    chosen = dict(shown["market"])
+    if "market" in edits:
+        wanted_market = edits["market"]
+        if not isinstance(wanted_market, dict):
+            raise ValueError("The area for the Industries tab should be a state, a metro area and a country.")
+        for key in MARKET_KEYS:
+            if key not in wanted_market:
+                continue
+            value = _one_line(wanted_market[key], f"The {key}")
+            if len(value) > MAX_PLACE:
+                raise ValueError(f"The {key} can be at most {MAX_PLACE} characters.")
+            if value == shown["market"][key]:
+                continue
+            config = tomledit.set_value(config, "market", key, value) if value else tomledit.delete_value(config, "market", key)
+            chosen[key] = value
+            count += 1
+    out["config"] = config
+
+    new_cfg = _config(config)
+    new_cfg["location"] = new_cfg.get("location") or {}
+    old_cfg = {**cfg, "location": loc}
+    after = _where_view(new_cfg)
+    if not after["places"] and not after["local"] and not after["local_exact"] and not after["accept_remote"] \
+            and not after["accept_relocation"]:
+        notes.append("With no places, no remote roles and no relocation, every posting that names a place is dropped.")
+    filters_changed = any(after[key] != shown[key] for key in ("places", "local", "local_exact", "accept_remote", "accept_relocation"))
+    prospects = _place_prospects(old_cfg, new_cfg)
+    if filters_changed and prospects and prospects["moved"]:
+        notes.append("Prospects already found keep their place and score until `pyrite rescore`, which drops the ones "
+                     "that no longer pass, unless you've acted on them. `pyrite discover --fresh` gives postings dropped "
+                     "before another look.")
+    if chosen != shown["market"]:
+        notes += _market_notes(chosen)
+
+    test = _one_line(edits.get("test"), "The location to test")
+    tested = None
+    if test:
+        tested = {"location": test, "now": _place_kind(test, "", old_cfg), "after": _place_kind(test, "", new_cfg),
+                  "why": _why_place(test, new_cfg)}
+    return Draft(out, count, notes, {"test": tested, "prospects": prospects, "where": after})
+
+
 # ---------- Roles you want ----------
 
 # The "**Emphasis by track:**" bullet in run-notes.md, and one track's line under it: "  - *AI systems:* the agents lead."
@@ -1876,4 +2311,5 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
 
 
 DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
-            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "roles": _roles}
+            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "companies": _companies,
+            "where": _where, "roles": _roles}

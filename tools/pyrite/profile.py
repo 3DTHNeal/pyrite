@@ -85,12 +85,11 @@ STEPS: tuple[dict[str, Any], ...] = (
      "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Emphasis by track")},
     {"id": "where", "group": "Your search", "label": "Where you'll work", "required": True, "fallback": None,
      "files": ("config",),
-     "meanwhile": "Until it's built: [location] in profile/search.toml.",
+     "meanwhile": "[location] and [market] in profile/search.toml hold the same settings.",
      "why": "Which locations count. Onsite roles elsewhere are dropped unless you'll relocate.",
      "writes": ("search.toml › [location] and [market]",)},
     {"id": "companies", "group": "Your search", "label": "Companies to watch", "required": True, "fallback": None,
      "files": ("config",),
-     "meanwhile": "Until it's built: [watch.*] and [[manual_check]] in profile/search.toml. The Sources tab shows how each board is answering.",
      "why": "Pyrite reads these companies' job boards every morning.",
      "writes": ("search.toml › [watch.*], [[manual_check]] and [workday] queries",)},
     {"id": "priorities", "group": "Your search", "label": "What comes first", "required": False, "fallback": "settings/ranking",
@@ -244,7 +243,7 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
     location = cfg.get("location", {})
     places = len(score.local_patterns(location)) + len(location.get("local_exact", []))
     where = [_plural(places, "local place")] if places else []
-    where += ["remote" if location.get("accept_remote") else "no remote"]
+    where += ["remote" if location.get("accept_remote", True) else "no remote"]  # Taken unless it's turned off.
     where += ["will relocate"] if location.get("accept_relocation") else []
     watched, by_hand = _watched(cfg), len(cfg.get("manual_check", []))
     promote = cfg.get("promote", {})
@@ -261,7 +260,7 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
         "masters": (has_master, master if has_master else "No master resume yet"),
         "roles": (bool(tracks), f"{_plural(len(tracks), 'role type')}: {', '.join(tracks[:3])}{'…' if len(tracks) > 3 else ''}"
                   if tracks else "No role types yet"),
-        "where": (bool(places or location.get("accept_remote")), ", ".join(where).capitalize()),
+        "where": (bool(places or location.get("accept_remote", True)), ", ".join(where).capitalize()),
         "companies": (bool(watched or by_hand), f"{watched} watched, {by_hand} by hand"),
         "priorities": (bool(cities or industries), f"{_plural(cities, 'city', 'cities')}, {_plural(industries, 'industry', 'industries')}"),
         "tools": _tools_summary(),
