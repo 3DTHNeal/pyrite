@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import backup, doctor, factsdoc, gaps, score, settings, store
+from . import backup, doctor, factsdoc, gaps, score, settings, store, workspace
 
 # What may be written, by key. The paths are fixed here and never come from a request.
 FILES = {
@@ -80,9 +80,9 @@ STEPS: tuple[dict[str, Any], ...] = (
      "writes": ("resume.md", "cover-letter.md")},
     {"id": "roles", "group": "Your search", "label": "Roles you want", "required": True, "fallback": None,
      "files": ("config", "run_notes"),
-     "meanwhile": "Until it's built: [[track]] and [scoring] in profile/search.toml.",
+     "meanwhile": "[[track]] and [scoring] in profile/search.toml hold the same settings.",
      "why": "The kinds of role Pyrite keeps from the boards. Everything else is dropped before you see it.",
-     "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › roles")},
+     "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Emphasis by track")},
     {"id": "where", "group": "Your search", "label": "Where you'll work", "required": True, "fallback": None,
      "files": ("config",),
      "meanwhile": "[location] and [market] in profile/search.toml hold the same settings.",
@@ -326,7 +326,15 @@ def hub(texts: dict[str, str], cfg: dict[str, Any] | None, employers, sections: 
         attention = any(item["step"] == step["id"] for item in waiting)
         status = "attention" if attention else "set" if is_set else "not_set"
         steps.append({**step, "status": status, "summary": summary, "changed": changed.get(step["id"])})
-    return {"steps": steps, "needs": waiting}
+    setting_up = workspace.setting_up()
+    if setting_up and all(step["status"] == "set" for step in steps if step["required"]):
+        workspace.finish_setup()  # For good: from here on, loosening a check needs a code.
+        setting_up = False
+    if setting_up:
+        waiting.append({"severity": "info", "title": "Your workspace is new, so changes need no code from this computer yet.",
+                        "detail": "Once every required section is set, a change that lets drafts say more, such as "
+                                  "approving a term, asks for a code sent to this computer's notifications.", "step": None})
+    return {"steps": steps, "needs": waiting, "setting_up": setting_up}
 
 
 def _clean(key: str, text) -> str:

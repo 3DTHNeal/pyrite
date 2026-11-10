@@ -25,6 +25,10 @@ TIMEOUT = 60  # Per socket read, so slow but steady downloads still finish.
 COMP = re.compile(
     r"(?:US)?\$\s?\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?\s*(?:-|–|—|to)\s*(?:US)?\$?\s?\d{2,3}(?:,\d{3})?(?:\.\d+)?\s?[kK]?(?:\s*(?:USD|per year|annually))?"
 )
+# The words a pay band's label and a title share when they mean the same level.
+LEVEL_WORDS = {"intern", "junior", "associate", "mid", "senior", "staff", "principal", "lead", "distinguished", "fellow",
+               "manager", "director", "head", "vp", "ii", "iii", "iv"}
+LEVEL_ALIASES = {"sr": "senior", "jr": "junior", "snr": "senior"}
 BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "table", "section"}
 VOID_TAGS = {"br", "img", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 # Inline styles that hide text from a reader but not from a model. Whitespace and CSS comments are removed first, so
@@ -164,9 +168,27 @@ def html_to_text(markup: str, escaped: bool = False) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def find_comp(text: str) -> str:
-    match = COMP.search(text or "")
-    return re.sub(r"\s+", " ", match.group(0)).strip() if match else ""
+def _level_words(text: str) -> set[str]:
+    words = {LEVEL_ALIASES.get(word, word) for word in re.findall(r"[a-z]+", text.lower())}
+    return words & LEVEL_WORDS
+
+
+def find_comp(text: str, title: str = "") -> str:
+    """The pay range in a posting's text. Where it lists a band per level ("Senior: $141,380 - $194,390", then
+    "Staff: $163,270 - $224,500"), the band whose label names the title's level, else the first range."""
+    matches = list(COMP.finditer(text or ""))
+    if not matches:
+        return ""
+    wanted = _level_words(title)
+    fits = []
+    for i, match in enumerate(matches):
+        # A band's label is what comes before it on its line, back to the band before it.
+        start = max(text.rfind("\n", 0, match.start()) + 1, matches[i - 1].end() if i else 0)
+        label = _level_words(text[start:match.start()])
+        fits.append((len(label & wanted), -len(label - wanted)))
+    # max keeps the first of equals. With no label naming the title's level, the first range, as it always was.
+    best = max(range(len(matches)), key=fits.__getitem__)
+    return re.sub(r"\s+", " ", matches[best if fits[best][0] else 0].group(0)).strip()
 
 
 def _request(url: str, payload: dict[str, Any] | None = None, retries: int = 3) -> dict[str, Any] | list[Any]:
@@ -211,7 +233,7 @@ def greenhouse_detail(board: str, company: str, job_id: str) -> Posting:
     return Posting(
         f"greenhouse:{board}", str(job["id"]), company, job["title"].strip(),
         (job.get("location") or {}).get("name", ""), "", job.get("absolute_url", ""),
-        description, find_comp(description), job.get("first_published") or job.get("updated_at"),
+        description, find_comp(description, job["title"]), job.get("first_published") or job.get("updated_at"),
     )
 
 
@@ -241,7 +263,7 @@ def fetch_lever(board: str, company: str) -> list[Posting]:
         postings.append(Posting(
             key, job["id"], company, job["text"].strip(), " | ".join(filter(None, places)),
             job.get("workplaceType", "") or "", job.get("hostedUrl", ""), description,
-            comp or find_comp(description), posted,
+            comp or find_comp(description, job["text"]), posted,
         ))
     return postings
 
@@ -263,7 +285,7 @@ def fetch_ashby(board: str, company: str) -> list[Posting]:
         # isRemote is also true on hybrid roles, so workplaceType decides when it's present.
         workplace = job.get("workplaceType") or ("remote" if job.get("isRemote") else "")
         description = html_to_text(job.get("descriptionHtml", "")) or plain_text(job.get("descriptionPlain", ""))
-        comp = (job.get("compensation") or {}).get("compensationTierSummary") or find_comp(description)
+        comp = (job.get("compensation") or {}).get("compensationTierSummary") or find_comp(description, job["title"])
         postings.append(Posting(
             key, job.get("id") or job["jobUrl"], company, job["title"].strip(), location, workplace.lower(),
             job.get("jobUrl", ""), description, comp, job.get("publishedAt"),
@@ -287,7 +309,7 @@ def workday_detail(spec: dict[str, Any], company: str, path: str) -> Posting:
     return Posting(
         f"workday:{spec['tenant']}", path, company, info.get("title", "").strip(),
         " | ".join(filter(None, places)), (info.get("remoteType") or "").lower(),
-        info.get("externalUrl") or f"{site}{path}", description, find_comp(description),
+        info.get("externalUrl") or f"{site}{path}", description, find_comp(description, info.get("title", "")),
         info.get("startDate"),
     )
 

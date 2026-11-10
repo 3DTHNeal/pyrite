@@ -36,6 +36,7 @@
      buttons, open from it. -->
 <header class="topbar">
   <p id="demo-tag" class="demo-tag" hidden>Demo: a fictional candidate and made-up companies</p>
+  <button id="setup-open" class="btn primary" type="button" hidden>Make your workspace</button>
   <div class="status-wrap">
     <button id="status" class="status" type="button" aria-expanded="false" aria-controls="status-pop">
       <img id="status-icon" class="stage-icon" src="/static/icons/pan-24.png" alt="" width="24" height="24"><span id="status-text" aria-live="polite">Loading…</span>
@@ -182,6 +183,30 @@
     <button id="update-go" class="btn primary" type="button">Update and restart</button>
   </div>
 </dialog>
+
+<!-- Opens by itself while nothing names a workspace. Behind it is the demo, to look around in first. -->
+<dialog id="setup-dialog" class="dialog">
+  <form id="setup-form">
+  <h2>Make your workspace</h2>
+  <p>Your resumes, fact bank and the jobs Pyrite tracks live in a private folder of their own on this computer. Pyrite's code folder never holds them, so nothing personal can be published from it.</p>
+  <label>Your name <input id="setup-name" required maxlength="200" autocomplete="name"></label>
+  <small class="muted">As it goes at the top of your resume. Every draft is checked for it.</small>
+  <label>Folder <input id="setup-folder" required maxlength="1000" spellcheck="false"></label>
+  <small id="setup-folder-help" class="muted"></small>
+  <fieldset class="setup-start">
+    <legend>Start from</legend>
+    <label class="choice"><input type="radio" name="setup-start" value="blank" checked> <span><b>Blank files</b>, with notes on what goes where. Best for your own search.</span></label>
+    <label class="choice"><input type="radio" name="setup-start" value="example"> <span><b>A copy of the example</b>, the demo's fictional candidate, to change into yours.</span></label>
+  </fieldset>
+  <label class="choice"><input id="setup-git" type="checkbox"> <span>Also make it a private git repository, so every change is kept. Nothing is ever pushed anywhere.</span></label>
+  <p id="setup-note" class="muted" role="status" aria-live="polite"></p>
+  <p id="setup-error" class="error" role="alert"></p>
+  <div class="row end">
+    <button id="setup-later" class="btn" type="button">Look around the demo first</button>
+    <button id="setup-go" class="btn primary" type="submit">Make my workspace</button>
+  </div>
+  </form>
+</dialog>
 <!-- The Profile tab, then one file per section, then app.js, which starts the page. -->
 <script src="/static/profile.js"></script>
 <script src="/static/profile/basics.js"></script>
@@ -192,6 +217,7 @@
 <script src="/static/profile/where.js"></script>
 <script src="/static/profile/gaps.js"></script>
 <script src="/static/profile/masters.js"></script>
+<script src="/static/profile/roles.js"></script>
 <script src="/static/profile/tools.js"></script>
 <script src="/static/profile/workspace.js"></script>
 <script src="/static/app.js"></script>

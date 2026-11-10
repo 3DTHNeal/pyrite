@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import statistics
@@ -50,6 +51,7 @@ from . import (
     tasks,
     update,
     workday,
+    workspace,
 )
 from . import score as scoring
 from .cli import finish_job
@@ -80,6 +82,8 @@ from .store import (
 STATIC = Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 SERVABLE_ROOTS = ("applications", "archive")
+# Where setup suggests making your workspace: beside the code folder, as docs/setup.md does.
+SETUP_FOLDER = "my-job-search"
 MIME = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -193,7 +197,7 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
         """INSERT INTO jobs (source_key, source_id, company, title, location, location_kind, url, description, comp,
                first_seen, last_seen, score, score_reasons, track, flags, status, status_changed_at, priority)
            VALUES ('manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, 1)""",
-        (source_id, company, title, location, verdict.location_kind, url, description, find_comp(description), ts, ts,
+        (source_id, company, title, location, verdict.location_kind, url, description, find_comp(description, title), ts, ts,
          verdict.score, json.dumps(verdict.reasons), verdict.track or scoring.ADDED_TRACK,
          json.dumps(verdict.flags), ts),
     )
@@ -567,6 +571,7 @@ def build_state(conn, cfg) -> dict[str, Any]:
         # Runs this workspace can't start at all yet, with why, so their buttons say so instead of being pressed.
         "not_ready": {kind: why for kind in tasks.LABELS if (why := tasks.not_ready(kind))},
         "demo": IS_EXAMPLE,
+        "setup": setup_info(),
     }
 
 
@@ -886,6 +891,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "bad request"}, 400)
 
         path = urlparse(self.path).path
+        if path == "/api/setup":
+            try:
+                folder, told = make_workspace(body)
+            except ValueError as err:
+                return self._json({"error": str(err)}, 400)
+            restart = getattr(self.server, "restart_soon", None)
+            self._json({"told": told, "folder": str(folder), "restarting": restart is not None, "server": SERVER_ID})
+            if restart:
+                restart(folder)
+            return None
         if path in PROFILE_WRITES:
             try:
                 return self._json(PROFILE_WRITES[path](body))
@@ -964,6 +979,37 @@ class Handler(BaseHTTPRequestHandler):
         self._json({**done, "restarting": restart is not None, "server": SERVER_ID})
         if restart:
             restart()
+
+
+def setup_info() -> dict[str, Any] | None:
+    """What the page's Make your workspace form starts from, or None once a workspace is named."""
+    if not store.NEEDS_SETUP:
+        return None
+    return {"suggested": str(store.CODE_ROOT.parent / SETUP_FOLDER), "code_folder": str(store.CODE_ROOT),
+            "git": shutil.which("git") is not None}
+
+
+def make_workspace(body: dict[str, Any]) -> tuple[Path, list[str]]:
+    """Setup's Make your workspace: the folder made, and what `pyrite init` would have said, a line at a time. Only while
+    nothing names a workspace, so a page can never make a second one or move Pyrite off the one in use. A relative
+    folder is read from the code folder, as docs/setup.md writes them, such as ../my-job-search."""
+    if not store.NEEDS_SETUP:
+        raise ValueError("Pyrite already has a workspace, so setup can't make another. `pyrite init` in a terminal can.")
+    folder_text, name = body.get("folder"), body.get("name")
+    if not isinstance(folder_text, str) or not folder_text.strip():
+        raise ValueError("Say which folder to make your workspace in.")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Give your name as it goes on your documents. Nothing was made.")
+    if body.get("start") not in ("blank", "example") or not isinstance(body.get("git", False), bool):
+        raise ValueError("Say whether to start from blank files or from the example.")
+    if any(ord(char) < 32 for char in folder_text + name):
+        raise ValueError("The folder and name can't hold line breaks or control characters. Nothing was made.")
+    folder = (store.CODE_ROOT / Path(folder_text.strip()).expanduser()).resolve()
+    try:
+        told = workspace.create(str(folder), name, blank=body["start"] == "blank", git=bool(body.get("git")))
+    except workspace.Refused as err:
+        raise ValueError(str(err)) from None
+    return folder, [line.strip() for line in told if line.strip()]
 
 
 def updates_on(cfg: dict[str, Any]) -> bool:
@@ -1119,12 +1165,17 @@ class DashboardServer(ThreadingHTTPServer):
     SO_REUSEADDR only lets a restart reuse the port of one that just closed.
     """
     allow_reuse_address = sys.platform != "win32"
-    # Set once an update has moved the code, so serve() starts a new dashboard on it after this one stops.
+    # Set once an update has moved the code, or setup has made a workspace, so serve() starts a new dashboard after
+    # this one stops.
     restarting = False
+    # The workspace setup just made, which the new dashboard opens. None to open the one this one has.
+    restart_home: Path | None = None
 
-    def restart_soon(self) -> None:
-        """Stop serving, from another thread, since the one serving can't wait for itself, and come back on the new code."""
+    def restart_soon(self, home: Path | None = None) -> None:
+        """Stop serving, from another thread, since the one serving can't wait for itself, and come back on the new
+        code, or on the workspace `home` that setup just made."""
         self.restarting = True
+        self.restart_home = home
         threading.Thread(target=self.shutdown, daemon=True).start()
 
     def server_bind(self) -> None:
@@ -1155,10 +1206,12 @@ def serve(port: int = 8787) -> None:
         print("Stopped.", flush=True)
     finally:
         server.server_close()
-    # Only the update sets it, and only to True. Anything else standing in for a server must never start a dashboard.
+    # Only an update or setup sets it, and only to True. Anything else standing in for a server must never start a dashboard.
     if server.restarting is True:
-        print("Pyrite was updated, so the dashboard is starting again on the new code.", flush=True)
-        if launch.restart(port):
+        home = server.restart_home if isinstance(server.restart_home, Path) else None
+        print(f"Your workspace is made at {home}, so the dashboard is starting again on it." if home else
+              "Pyrite was updated, so the dashboard is starting again on the new code.", flush=True)
+        if launch.restart(port, home):
             print(f"It's running in the background at {launch.url(port)}, and keeps going after this window closes.", flush=True)
         else:
             print(f"It didn't come back on port {port}. Run `pyrite open` to start it, or `pyrite serve` to see why not.",

@@ -117,6 +117,13 @@ class Pay(unittest.TestCase):
         self.assertIsNone(pay.parse("Up to 15% bonus"))
         self.assertIsNone(pay.parse(""))
 
+    def test_a_typo_is_read_or_refused_not_misread(self):
+        # A posting wrote "$194.390", a point where the comma goes, and it was read as $194.39.
+        found = pay.parse("$141,380 -$194.390")
+        self.assertEqual((found.low, found.high), (141380, 194390))
+        self.assertEqual(pay.parse("$1.250M").high, 1250000)  # A scaled figure keeps its point.
+        self.assertIsNone(pay.parse("$150,000 - $15,000,000"))  # One end has to be wrong, and nothing says which.
+
     def labels(self, comp: str, known: dict[str, tuple[float, int]], track: str = "AI systems", level: str = "top") -> list[str]:
         return [s["label"] for s in pay.judge(comp, track, level, {}, known)["pay_signs"]]
 

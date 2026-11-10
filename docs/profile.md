@@ -28,6 +28,16 @@ Under **Your search**:
 
 Lists in `search.toml` are changed an item at a time, so the other items, their lines and any comments among them stay as they were.
 
+**Roles you want**, under **Your search**, edits the kinds of role Pyrite keeps: each `[[track]]` in `search.toml`, and the `[scoring]` lists that go with them.
+
+- A role type has a name, **Job titles** written plainly under `titles`, and **Needs a senior title** (`needs_level`). A plain title matches as whole words in any case, so "data engineer" takes "Senior Data Engineer, Platform" but not "Data Engineering Manager". Patterns written by hand under `title` are shown and kept, and can be taken off; **Add a pattern** adds one. `industries` is shown, and set in the file.
+- A title goes to the first role type that takes it, so the arrows change the order. **What drafts lead with** is the role type's line under **Emphasis by track** in `run-notes.md`, which follows a rename and goes when the role type does.
+- **Senior titles** edits `level_top` and `level_mid`, and **Never these titles** edits `exclude_titles`. **Advanced** edits the skill points in `keywords` and the `flags`, written a row to a line once one changes.
+- Each role type is changed a key at a time, so comments and keys the section doesn't edit stay as they were.
+- **Try a title** says which role type would take a job title, or why none does.
+- **Your prospects with these changes** scores every prospect that a board found and you haven't moved on, with the scorer `pyrite rescore` uses, and lists the ones that would be dropped and the scores that would change. One you've acted on is marked as kept, since a rescore leaves it. Saving changes `search.toml` only: `pyrite rescore` then scores your prospects again, and `pyrite discover --fresh` looks again at postings dropped before.
+- **Before you save** points out a new title that **Never these titles** would drop, or that an earlier role type takes first. A role type with no name or no titles, two with the same name, taking off every role type, and a pattern that can't be read or would match any title are refused.
+
 Three sections show what they find and save nothing:
 
 - **Tools check** lists what Pyrite uses on this computer, the same programs `pyrite doctor` checks: python-docx and LibreOffice or Word, which every draft needs, `pdftotext`, Claude Code and reply detection. Each says what it's for, what still works without it, and how to get it. Claude Code and reply detection are set up on the Settings tab, so theirs have a button there. **Check again** asks Claude Code again rather than using its answer from the last minute. A missing program every draft needs goes on **Needs you**.
@@ -71,5 +81,6 @@ The notification can't accept or refuse anything itself: its **Close** button on
 
 - A code works once, for the change it names, for 2 minutes. Five wrong tries end it and nothing is saved. **Send a new code** replaces it.
 - No notification, or Focus Assist hid it? `pyrite code` in a terminal on this computer prints the code waiting and what it's for.
+- A new workspace, made by the dashboard's setup or `pyrite init`, needs no codes while it's being set up, since nothing in it is yours yet to loosen. **Needs you** says so. Once every required section on the Profile tab is set, codes start, for good: emptying a section afterwards doesn't stop them. A workspace made before this needs codes as it always did. `data/setting-up.json` marks a workspace that's still being set up.
 - The server decides what needs a code, by comparing the files before and after, so the page can't skip it. It's not a password: anyone who can see this screen can read the code. It stops a change made from another device, or by something driving the browser, without the person at this computer seeing it named.
 - Notifications come from each system's built-in route, with nothing to install: Windows PowerShell's toast, AppleScript on macOS, and `notify-send` on Linux.
