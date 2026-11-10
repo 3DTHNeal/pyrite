@@ -303,6 +303,33 @@ def _in_any_industry(names: list, job: dict, cfg: dict) -> bool:
     return any(_in_industry(i, job, needed) for i in rules.get("industry", []) if i["name"] in names)
 
 
+ELSEWHERE_FLAG = "Outside your area"
+
+
+def _abroad(location: str, loc_cfg: dict) -> bool:
+    """Whether every place a posting names is in another country, by the lists that decide it for a remote role."""
+    home, elsewhere = loc_cfg.get("remote_home"), loc_cfg.get("remote_elsewhere")
+    if home is not None or elsewhere is not None:
+        return not _any(home or [], location) and _any(elsewhere or [], location)
+    places = [place for place in re.split(r"[|;]", location) if place.strip()]
+    return bool(places) and all(_foreign(place) for place in places)
+
+
+def kept_anywhere(company: str, title: str, location: str, cfg: dict) -> list[str]:
+    """The industries marked `anywhere = true` that a posting is plainly in, which keep it wherever in your country
+    the job is. A job abroad stays dropped.
+
+    Plainly means its employer is listed or a term is in the employer's name or the title. Mentions in the description
+    don't count here: moving is a lot to ask of a passing mention, and a board's listing has no description to read
+    until the posting is already worth fetching.
+    """
+    if _abroad(location or "", cfg["location"]):
+        return []
+    job = {"company": company, "title": title, "description": ""}
+    return [i["name"] for i in (cfg.get("promote") or {}).get("industry", [])
+            if i.get("anywhere") is True and _in_industry(i, job, 1)]
+
+
 def level(title: str, cfg: dict) -> str:
     """How senior a title reads: "top" for a level_top word, "mid" for a level_mid one, or "" for neither."""
     scoring = cfg["scoring"]
@@ -394,7 +421,8 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
     track, level_points = matched
 
     kind = classify_location(location, workplace, cfg)
-    if kind == "out":
+    anywhere = kept_anywhere(company, title, location, cfg) if kind == "out" else []
+    if kind == "out" and not anywhere:
         return Verdict(False, "location", track=track)
 
     reasons = [f"{track} title +25"]
@@ -403,9 +431,14 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
         score += level_points
         reasons.append(f"seniority +{level_points}")
 
-    location_points = {"local": 15, "remote": 10, "unknown": 3}[kind]
-    score += location_points
-    reasons.append(f"{kind} +{location_points}")
+    if anywhere:
+        # Kept for its industry, with nothing for the place, so a local or remote role of the same kind still ranks above it.
+        kind = "elsewhere"
+        reasons.append(f"outside your area, kept for {', '.join(anywhere)} +0")
+    else:
+        location_points = {"local": 15, "remote": 10, "unknown": 3}[kind]
+        score += location_points
+        reasons.append(f"{kind} +{location_points}")
 
     body = f"{title}\n{description}"
     keyword_points = 0
@@ -420,7 +453,7 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
     if hits:
         reasons.append(f"skills +{keyword_points}: " + ", ".join(hits[:8]))
 
-    flags = []
+    flags = [ELSEWHERE_FLAG] if anywhere else []
     for label, pattern, penalty in cfg["scoring"]["flags"]:
         if re.search(pattern, body, re.I):
             flags.append(label)

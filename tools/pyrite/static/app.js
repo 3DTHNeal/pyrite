@@ -995,7 +995,9 @@ function industryCard(industry, index, cards) {
   const wants = h("textarea", { rows: "4" });
   wants.value = (industry.wants || []).map((w) => (w.match ? `${w.name}: ${w.match}` : w.name)).join("\n");
   const naics = h("input", { value: (industry.naics || []).join(", "), placeholder: "For example: 3332, 334413" });
+  const anywhere = h("input", { type: "checkbox", checked: industry.anywhere === true });
   const collect = () => ({
+    anywhere: anywhere.checked,
     name: name.value,
     points: settingsNumber(points),
     terms: settingsLines(terms.value),
@@ -1017,6 +1019,7 @@ function industryCard(industry, index, cards) {
       h("span", { class: "industry-name" }, saved ? saved.name : "New industry"),
       h("span", { class: "muted" }, saved ? [
         plural((saved.terms || []).length, "word"), plural((saved.companies || []).length, "employer"),
+        saved.anywhere ? "kept anywhere" : null,
         plural(onRadar(saved.name), "prospect"),
         facts && facts.have.length + facts.gaps.length ? `${facts.have.length} of ${facts.have.length + facts.gaps.length} skills` : null,
       ].filter(Boolean).join(" · ") : "Not saved yet"));
@@ -1049,6 +1052,8 @@ function industryCard(industry, index, cards) {
       settingsField("Words in a posting", terms, "One per line. Patterns work: \\b marks a word's edge."),
       settingsField("Employers", companies, "One per line. These always count."),
       settingsField("Skills it wants", wants, "One per line, to compare with your fact bank.")),
+    h("label", { class: "check" }, anywhere, h("span", {}, "Keep jobs outside your area",
+      h("span", { class: "muted hint" }, "When the employer is listed above, or one of the words is in the employer's name or the title. They're marked Outside your area, and the next pan finds them."))),
     skills,
     h("div", { class: "part-actions" }, part.save, part.status, remove), part.error);
   cards.add(card);

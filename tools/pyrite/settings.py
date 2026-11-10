@@ -183,6 +183,10 @@ def validate(raw) -> dict:
             industry["wants"] = wants
         if naics:
             industry["naics"] = naics
+        if entry.get("anywhere") not in (None, True, False):
+            raise ValueError(f"{label}: kept anywhere is either on or off.")
+        if entry.get("anywhere"):
+            industry["anywhere"] = True
         promote["industry"].append(industry)
     _unique([i["name"] for i in promote["industry"]], "Industries")
     return promote
@@ -230,6 +234,8 @@ def render(promote: dict) -> str:
             "# `wants` are skills the industry looks for. The Settings tab checks them against facts.md,",
             "# and they don't change the ranking. Add `points` to any industry to override industry_points.",
             "# `naics` are the industry's codes, for the official numbers on the Industries tab.",
+            "# `anywhere = true` keeps a job elsewhere in your country, marked as such, when its employer is listed",
+            "# or a term is in the employer's name or the title.",
         ]
     for index, industry in enumerate(promote["industry"]):
         if index:
@@ -245,6 +251,8 @@ def render(promote: dict) -> str:
             lines += ["wants = [", *_inline_list(industry["wants"]), "]"]
         if "naics" in industry:
             lines.append("naics = [" + ", ".join(_text(c) for c in industry["naics"]) + "]")
+        if industry.get("anywhere"):
+            lines.append("anywhere = true")
     return "\n".join(lines) + "\n"
 
 
@@ -252,7 +260,7 @@ def render(promote: dict) -> str:
 KEPT = {
     "promote": {"city_points", "industry_points", "mentions_needed", "cities", "industry"},
     "city": {"name", "points", "match"},
-    "industry": {"name", "points", "terms", "companies", "wants", "naics"},
+    "industry": {"name", "points", "terms", "companies", "wants", "naics", "anywhere"},
     "want": {"name", "match"},
 }
 
