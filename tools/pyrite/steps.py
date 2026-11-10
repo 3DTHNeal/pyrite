@@ -21,7 +21,7 @@ from assay import factbank
 from assay.names import term_pattern
 from assay.text import matchable
 
-from . import checks, confirm, discover, doctor, factsdoc, gaps, market, profile, score, store, tomledit, workspace
+from . import checks, confirm, discover, doctor, factsdoc, forms, gaps, market, profile, score, store, tomledit, workspace
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
@@ -74,14 +74,7 @@ def drafter(step: str) -> Callable[[Drafter], Drafter]:
     return register
 
 
-def _one_line(value, what: str) -> str:
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        raise ValueError(f"{what} should be text.")
-    if "\n" in value or "\r" in value or any(ord(c) < 32 and c != "\t" for c in value):
-        raise ValueError(f"{what} can't hold a line break or control characters.")
-    return value.strip()
+_one_line = forms.one_line
 
 
 def _list(value, what: str, of: type | None = None) -> list[Any]:

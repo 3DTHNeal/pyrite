@@ -396,34 +396,42 @@ def _tables(value) -> list[dict[str, Any]]:
     return [item for item in value or [] if isinstance(item, dict)]
 
 
-def _setting_patterns(cfg: dict[str, Any]) -> list[tuple[str, str]]:
-    """Every pattern search.toml gives the filters and the ranking, as (where it's set, the pattern as it's used)."""
+def _setting_patterns(cfg: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Every pattern search.toml gives the filters and the ranking, as (its table, where it's set, the pattern as it's
+    used)."""
     loc, scoring, promote = cfg.get("location") or {}, cfg.get("scoring") or {}, cfg.get("promote") or {}
-    found = [(f"{key} under [location]", p) for key in ("local", "local_exact", "remote_home", "remote_elsewhere")
+    found = [("location", f"{key} under [location]", p) for key in ("local", "local_exact", "remote_home", "remote_elsewhere")
              for p in loc.get(key) or []]
     for track in _tables(cfg.get("track")):
-        found += [(f"title under the [[track]] named {track.get('name', '?')}", p) for p in track.get("title") or []]
-    found += [(f"{key} under [scoring]", rf"\b(?:{p})\b") for key in ("exclude_titles", "level_top", "level_mid")
+        found += [("track", f"title under the [[track]] named {track.get('name', '?')}", p) for p in track.get("title") or []]
+    found += [("scoring", f"{key} under [scoring]", rf"\b(?:{p})\b") for key in ("exclude_titles", "level_top", "level_mid")
               for p in scoring.get(key) or []]
-    found += [("keywords under [scoring]", entry[0]) for entry in scoring.get("keywords") or [] if entry]
-    found += [("flags under [scoring]", entry[1]) for entry in scoring.get("flags") or [] if len(entry) > 1]
-    found += [("cities under [promote]", city["match"]) for city in _tables(promote.get("cities")) if city.get("match")]
+    found += [("scoring", "keywords under [scoring]", entry[0]) for entry in scoring.get("keywords") or [] if entry]
+    found += [("scoring", "flags under [scoring]", entry[1]) for entry in scoring.get("flags") or [] if len(entry) > 1]
+    found += [("promote", "cities under [promote]", city["match"]) for city in _tables(promote.get("cities")) if city.get("match")]
     for industry in _tables(promote.get("industry")):
-        found += [(f"terms of the [[promote.industry]] named {industry.get('name', '?')}", p) for p in industry.get("terms") or []]
+        found += [("promote", f"terms of the [[promote.industry]] named {industry.get('name', '?')}", p)
+                  for p in industry.get("terms") or []]
     return found
+
+
+def bad_patterns(cfg: dict[str, Any]) -> list[tuple[str, str]]:
+    """Each pattern in search.toml that isn't a valid regular expression, as (its table, such as "location", and a
+    sentence naming its setting)."""
+    problems = []
+    for table, where, pattern in _setting_patterns(cfg):
+        try:
+            re.compile(str(pattern))
+        except re.error as err:
+            shown = re.sub(r"^\\b\(\?:(.*)\)\\b$", r"\1", str(pattern))
+            problems.append((table, f"{where} in profile/search.toml has '{shown}', which isn't a valid pattern ({err})."))
+    return problems
 
 
 def pattern_problems(cfg: dict[str, Any]) -> list[str]:
     """Each pattern in search.toml that isn't a valid regular expression, naming its setting. One bad pattern would
     otherwise stop every posting from being judged, and look like every job board failing."""
-    problems = []
-    for where, pattern in _setting_patterns(cfg):
-        try:
-            re.compile(str(pattern))
-        except re.error as err:
-            shown = re.sub(r"^\\b\(\?:(.*)\)\\b$", r"\1", str(pattern))
-            problems.append(f"{where} in profile/search.toml has '{shown}', which isn't a valid pattern ({err}).")
-    return problems
+    return [problem for _table, problem in bad_patterns(cfg)]
 
 
 def _matched_words(found: re.Match[str]) -> str:

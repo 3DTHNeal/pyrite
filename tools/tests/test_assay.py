@@ -813,6 +813,33 @@ class PassRecord(unittest.TestCase):
             self.assertFalse(report["ok"])
             self.assertIn("isn't saved as UTF-8", report["errors"][0])
 
+    def test_a_pass_hashes_the_bytes_it_checked_not_a_later_read(self):
+        # A draft or a fact bank saved while the check runs must show as changed since the pass, never as what passed.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            folder = Path(tmp)
+            shutil.copy(MODEL / "resume.md", folder / "resume.md")
+            (folder / "notes.md").write_text("notes\n", encoding="utf-8")
+            facts = store.ROOT / "profile" / "facts.md"
+            kept = facts.read_bytes()
+            self.addCleanup(facts.write_bytes, kept)
+            real = checks.check_text
+
+            def saved_meanwhile(*args, **kw):
+                (folder / "resume.md").write_text(RESUME + "\n- Cut costs by 90%.\n", encoding="utf-8")
+                facts.write_bytes(kept + b"\n- Led a team of 400.\n")
+                return real(*args, **kw)
+
+            with mock.patch.object(checks, "check_text", side_effect=saved_meanwhile):
+                report = checks.check_application(folder, CFG, "Acme Robotics", "Principal Robotics Software Engineer")
+            self.assertTrue(report["ok"], report["errors"])
+            self.assertEqual(checks.changed_since(folder, report["checked"]), ["resume.md"])
+            self.assertEqual(checks.sources_changed(CFG, report["checked_sources"]), ["profile/facts.md"])
+            self.assertIn("changed after the assay passed", checks.not_covered(folder, CFG, report))
+
+    def test_text_read_for_a_check_matches_read_text(self):
+        self.assertEqual(checks._decode("a\r\nb\rc\n é".encode()), "a\nb\nc\n é")
+        self.assertEqual(checks._read_sources(CFG), SOURCES)
+
     def test_a_change_to_the_facts_or_rules_shows_after_a_pass(self):
         recorded = checks.source_fingerprints(CFG)
         self.assertEqual(checks.sources_changed(CFG, recorded), [])

@@ -390,13 +390,23 @@ def read_config(path: Path) -> dict[str, Any]:
     valid TOML raises ConfigError naming the line, such as "profile/search.toml line 28: Expected '=' after a key"."""
     try:
         text = path.read_text(encoding="utf-8-sig")
-        return tomllib.loads(text)
     except UnicodeDecodeError as err:
         raise ConfigError(f"{_relative(path)} isn't saved as UTF-8 ({err.reason}). Save it as UTF-8 and try again.") from None
+    return parse_config(text, _relative(path))
+
+
+def parse_config(text: str, name: str) -> dict[str, Any]:
+    """search.toml's text, read as read_config reads it. `name` is the file as an error names it."""
+    try:
+        return tomllib.loads(text.removeprefix("﻿"))  # A byte order mark, as Notepad can save one.
     except tomllib.TOMLDecodeError as err:
         found = re.fullmatch(r"(.*) \(at line (\d+), column \d+\)", str(err), re.S)
-        where, why = (f"{_relative(path)} line {found[2]}", found[1]) if found else (_relative(path), str(err))
-        raise ConfigError(f"{where}: {why}. Fix that line and try again.") from None
+        if found:
+            raise ConfigError(f"{name} line {found[2]}: {found[1]}. Fix that line and try again.") from None
+        # Something left open, such as a list with no closing bracket, is only found at the end, with no line to name.
+        why = re.sub(r" \(at end of document\)$", "", str(err))
+        raise ConfigError(f"{name}: {why} at the end of the file, so something above it, such as a list or a quote, "
+                          "isn't closed. Fix that and try again.") from None
 
 
 def load_config() -> dict[str, Any]:

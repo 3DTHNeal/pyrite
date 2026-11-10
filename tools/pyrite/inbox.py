@@ -134,8 +134,8 @@ def _privacy_fix(path: Path, info: os.stat_result) -> str:
     fix = f'icacls "{path}" /inheritance:r /grant:r "{getpass.getuser()}:F"'
     try:
         listing = subprocess.run(["icacls", str(path)], capture_output=True, text=True, errors="replace", check=True,
-                                 creationflags=NO_WINDOW).stdout
-    except (OSError, subprocess.CalledProcessError):
+                                 timeout=30, creationflags=NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
         return fix
     allowed = {"nt authority\\system", "builtin\\administrators", "owner rights", getpass.getuser().lower()}
     principals = re.findall(r"^\s*(.+?):\(", listing.replace(str(path), "", 1), re.M)

@@ -398,11 +398,7 @@ def finish_job(conn, cfg: dict[str, Any], job_id: int, say_building: bool = Fals
             # Page counts only exist once the PDFs do.
             report = checks.check_application(folder, cfg, job["company"], job["title"], job["description"],
                                               job["source_key"], job["source_id"])
-    if report["ok"]:
-        # What exactly passed, so a later change to any of it shows on the dashboard.
-        report["checked"] = checks.fingerprints(folder)
-        report["checked_sources"] = checks.source_fingerprints(cfg)
-
+    # A pass carries the hashes of what it read, under "checked" and "checked_sources", so a later change shows.
     conn.execute(
         "UPDATE jobs SET check_result = ?, files = ? WHERE id = ?",
         (json.dumps(report), json.dumps(_collect_files(folder)), job_id),
@@ -487,11 +483,7 @@ def cmd_skills(args, conn):
     cfg = load_config()
     phrases = [" ".join(phrase.lower().split()) for phrase in args.phrases]
     if args.research and not phrases:
-        waiting = queue(conn, cfg, limit=1000)["to_triage"]
-        ids = [job["id"] for job in waiting]
-        marks = ",".join("?" * len(ids))
-        texts = [row[0] or "" for row in conn.execute(f"SELECT description FROM jobs WHERE id IN ({marks})", ids)] if ids else []
-        phrases = skillage.to_research(texts)
+        phrases = skillage.waiting_to_research(conn, queue(conn, cfg, limit=1000)["to_triage"])
         if not phrases:
             print("Every skill the waiting postings ask years of is already known or was looked up before.")
             return

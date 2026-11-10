@@ -130,11 +130,13 @@ Clicking a job anywhere opens its panel at the side. The header has its stage ic
 |---|---|---|
 | **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks, skill ages and employer research | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]`, `[skills]` and `[culture]` |
 | **Mail** | Whether replies are read over IMAP or through the Gmail connector, and how many days back | `[inbox]` `source` and `lookback_days` |
-| **Daily run** | How many postings are judged and resumes written each morning, how many tries a draft gets, and whether a cover letter is written | `[run]` `triage_per_day`, `tailor_per_day`, `fix_attempts` and `cover_letters` |
+| **Daily run** | When the pan and the daily run start, on Windows. How many postings are judged and resumes written each morning, how many tries a draft gets, and whether a cover letter is written | Task Scheduler, for when. `[run]` `triage_per_day`, `tailor_per_day`, `fix_attempts` and `cover_letters` |
 | **Dashboard** | When the to-do list reminds you to follow up, calls an application ghosted or a deadline close, whether it reminds you to reach out, and whether it asks GitHub for updates | `[run]` `follow_up_days`, `quiet_days` and `decide_days`; `[dashboard]` `reach_out` and `check_updates` |
 | **Cities and industries** | The places and industries to see first. [Preferred cities and industries](prospects.md#preferred-cities-and-industries) covers it | `[promote]` |
 
 Claude and Mail open with a **Connection** panel: whether Claude Code is on this computer and signed in, and where replies are read from, whether the last read worked and when. **Check again** asks Claude Code afresh, which takes a second or two.
+
+Daily run opens with **When it runs**, which sets the pan and the daily run up in Windows Task Scheduler, moves them to another time or removes them, each after you confirm. [Setting them up](schedule.md#setting-them-up) says what it makes and what it leaves alone.
 
 Each panel has its own **Save**, which writes only the settings you changed in that panel. A setting is one key in `search.toml`: the save sets that key where it is, or adds it to its table, and every other line and comment stays as it was. Emptying a box takes the key out, so Pyrite's default applies again, and the box names that default. The file from before each save is kept in the Profile tab's History, where **Put back** restores it.
 

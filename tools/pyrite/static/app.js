@@ -852,6 +852,83 @@ async function loadSettingsStatus(fresh = false) {
   }
 }
 
+// ---- When the daily runs start ----
+// Asked of Task Scheduler when Daily run is drawn, since asking takes a second or two. Each change is confirmed here
+// first: it adds or takes away a task on this computer, though it changes no file and lets no draft say more.
+
+function scheduleRun(run, redraw) {
+  const time = h("input", { type: "time", value: run.time || run.default, "aria-label": `Time for ${run.label.toLowerCase()}` });
+  const error = h("p", { class: "error", role: "alert" });
+  const send = async (action, button) => {
+    const at = time.value;
+    const asked = action === "remove"
+      ? `Remove “${run.name}” from Windows Task Scheduler? ${run.label} stops starting by itself until you set it up again.`
+      : run.set ? `Move “${run.name}” in Windows Task Scheduler to ${at} every day?`
+        : `Set up “${run.name}” in Windows Task Scheduler, to start every day at ${at}?`;
+    if (!window.confirm(asked)) return;
+    error.textContent = "";
+    button.disabled = true;
+    try {
+      redraw(await api("/api/settings/schedule", { run: run.id, action, time: at }));
+    } catch (err) {
+      error.textContent = err.message;
+      button.disabled = false;
+    }
+  };
+  const setUp = h("button", { class: `btn small${run.set ? "" : " primary"}`, type: "button" }, run.set ? "Change time" : "Set up");
+  setUp.addEventListener("click", () => {
+    if (!/^\d\d:\d\d$/.test(time.value)) {
+      error.textContent = "Pick a time of day first.";
+      return;
+    }
+    send("set", setUp);
+  });
+  // Change time waits for a new time, unless the task runs another copy of Pyrite, which it would bring here.
+  const sync = () => { setUp.disabled = run.set && !run.other_copy && time.value === run.time; };
+  time.addEventListener("input", sync);
+  sync();
+  const remove = run.set ? h("button", { class: "btn small", type: "button" }, "Remove") : null;
+  if (remove) remove.addEventListener("click", () => send("remove", remove));
+  const state = run.set ? (run.disabled ? pill("bad", "Turned off") : pill("good", "Set up")) : pill("", "Not set up");
+  const said = run.set
+    ? (run.disabled ? "Turned off in Task Scheduler, so it doesn't start." : `Starts every day at ${run.time || "the time Task Scheduler has"}.`)
+    : "Doesn't start by itself.";
+  return h("div", { class: "schedule-run" },
+    h("p", { class: "what" }, state, h("span", {}, run.label), h("span", { class: "muted" }, said)),
+    h("p", { class: "muted hint" }, run.does),
+    run.other_copy ? h("p", { class: "muted hint" }, "It runs another copy of Pyrite. Change time sets it up for this one.") : null,
+    run.elsewhere.map((task) => h("p", { class: "fix muted" },
+      `Task Scheduler also has “${task.name}”${task.time ? ` at ${task.time}` : ""}, which does the same and wasn't set up `
+      + `here, so Pyrite leaves it alone. ${run.set ? "With both, it runs twice" : "If you set it up here too, it runs "
+      + "twice"}: keep one, and delete the other in Task Scheduler itself.`)),
+    h("div", { class: "part-actions" }, time, setUp, remove),
+    error);
+}
+
+function schedulePanel() {
+  const box = h("div", { class: "schedule", "aria-live": "polite" });
+  const again = () => h("button", { class: "btn small", type: "button", onclick: () => load() }, "Check again");
+  const draw = (found) => {
+    fill(box,
+      found.why_not ? h("p", { class: found.error ? "error" : "fix muted" }, found.why_not) : null,
+      found.available ? found.runs.map((run) => scheduleRun(run, draw)) : null,
+      found.available ? h("p", { class: "muted hint" }, "Each runs as you, while you're signed in to Windows, with no "
+        + "window. A run missed while the computer was off or asleep starts once it's back. Pyrite changes only these "
+        + "two tasks. On another system, docs/schedule.md says how to schedule them.") : null,
+      again());
+  };
+  const load = async () => {
+    fill(box, h("p", { class: "muted" }, "Asking Task Scheduler…"));
+    try {
+      draw(await api("/api/settings/schedule"));
+    } catch (err) {
+      fill(box, h("p", { class: "error" }, err.message), again());
+    }
+  };
+  load();
+  return h("div", { class: "panel" }, h("h2", {}, "When it runs"), box);
+}
+
 function optionsSection(section) {
   let connection = null;
   if (section.status) {
@@ -861,6 +938,7 @@ function optionsSection(section) {
   return [
     h("p", { class: "muted settings-lead" }, section.intro),
     connection,
+    section.id === "run" ? schedulePanel() : null,
     section.panels.map(optionsPanel),
     (section.notes || []).map((note) => h("p", { class: "muted hint settings-note" }, note)),
   ];

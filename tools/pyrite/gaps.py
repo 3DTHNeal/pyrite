@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import factsdoc, settings, store
+from . import factsdoc, forms, settings, store
 
 NOTES = "notes.md"
 # The numbered list under this heading is what's read. The fit table's Gap rows repeat it, so they aren't.
@@ -334,13 +334,8 @@ def find(found: dict[str, Any], gap_id: str) -> dict[str, Any]:
 # ---------- answering ----------
 
 def _one_line(value, what: str) -> str:
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        raise ValueError(f"{what} should be text.")
-    if "\n" in value or "\r" in value or any(ord(c) < 32 and c != "\t" for c in value):
-        raise ValueError(f"{what} can't hold a line break or control characters.")
-    text = re.sub(r"^[-*]\s+", "", value.strip()).strip()
+    """An answer as one line for a bullet of its own: the check every Profile editor makes, and a cap on its length."""
+    text = forms.one_line(value, what, bullet=True)
     if len(text) > MAX_TEXT:
         raise ValueError(f"{what} is over {MAX_TEXT} characters. Keep it to one fact.")
     return text

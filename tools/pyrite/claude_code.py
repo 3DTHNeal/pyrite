@@ -14,11 +14,12 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .store import CODE_ROOT, now
+from .store import CODE_ROOT, get_job, log_event, now
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -327,6 +328,47 @@ def spawn_worker(subcommand: str, job_id: int, cwd: Path) -> None:
         cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=NO_WINDOW | NEW_GROUP,
     )
+
+
+# Why a run on one job can't start now, or None when it can. Given the connection and the job's row.
+Refusal = Callable[[Any, Any], str | None]
+
+
+def claim(conn, job_id: int, refusal: Refusal, started: str) -> None:
+    """Claim a job for one run, so a double click can't start two runs writing one file. Raises ValueError, holding
+    the refusal, when the job can't be claimed now."""
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    problem = refusal(conn, get_job(conn, job_id))
+    if problem:
+        conn.rollback()
+        raise ValueError(problem)
+    log_event(conn, job_id, started)
+    conn.commit()
+
+
+def start_run(conn, job_id: int, worker: str, *, refusal: Refusal, begin: Callable[[Any, int], None], failed: str,
+              find: Callable[[], str | None], cwd: Path, cannot: str, name: str) -> None:
+    """A dashboard button's run of Claude on one job: check it can work, claim the job with `begin`, then run
+    `pyrite <worker>` in the background so the page doesn't wait. Raises ValueError with what to tell the person.
+
+    `cannot` finishes "Claude Code wasn't found on this PC, so …", and `name` the run in "Couldn't start …". `find`
+    is the caller's own find_claude, so a test that replaces it there is heard."""
+    problem = refusal(conn, get_job(conn, job_id))
+    if problem:
+        raise ValueError(problem)
+    claude = find()
+    if not claude:
+        raise ValueError(f"Claude Code wasn't found on this PC, so {cannot}.")
+    if not signed_in(claude):
+        raise ValueError(sign_in_help(claude))
+    begin(conn, job_id)
+    try:
+        spawn_worker(worker, job_id, cwd)
+    except OSError as err:
+        log_event(conn, job_id, failed, f"Couldn't start: {err}")
+        conn.commit()
+        raise ValueError(f"Couldn't start {name}: {err}") from err
 
 
 STREAM_EVENTS = {"system", "assistant", "user"}

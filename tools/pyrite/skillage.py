@@ -252,6 +252,15 @@ def to_research(texts, limit: int = MAX_RESEARCH) -> list[str]:
     return [phrase for phrase, _ in sorted(counts.items(), key=lambda pair: -pair[1])][:limit]
 
 
+def waiting_to_research(conn, waiting: list[dict[str, Any]]) -> list[str]:
+    """to_research() over the postings of these jobs, as the queue lists them, read from the database."""
+    ids = [job["id"] for job in waiting]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    return to_research(row[0] or "" for row in conn.execute(f"SELECT description FROM jobs WHERE id IN ({marks})", ids))
+
+
 def _years(value: float) -> str:
     whole = round(value, 1)
     return f"{whole:g} year{'' if whole == 1 else 's'}"
