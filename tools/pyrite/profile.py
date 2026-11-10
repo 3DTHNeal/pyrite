@@ -84,7 +84,7 @@ STEPS: tuple[dict[str, Any], ...] = (
      "files": ("config", "run_notes"),
      "meanwhile": "By hand: [[track]] and [scoring] in profile/search.toml hold the same settings.",
      "why": "The kinds of role Pyrite keeps from the boards. Everything else is dropped before you see it.",
-     "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Emphasis by track")},
+     "writes": ("search.toml › [[track]] and [scoring]", "run-notes.md › Roles so far and Emphasis by track")},
     {"id": "where", "group": "Your search", "label": "Where you'll work", "required": True, "fallback": None,
      "files": ("config",),
      "meanwhile": "By hand: [location] and [market] in profile/search.toml hold the same settings.",

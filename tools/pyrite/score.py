@@ -313,6 +313,20 @@ def _in_any_industry(names: list[str], job: dict[str, Any], cfg: dict[str, Any])
     return any(_in_industry(i, job, needed) for i in rules.get("industry", []) if i["name"] in names)
 
 
+def unknown_industries(cfg: dict[str, Any]) -> list[tuple[str, str, str | None]]:
+    """Each industry a [[track]] names that no [[promote.industry]] is called, as (the track, the name, and the
+    industry it differs from only in case, if one does). Names are matched exactly, so a track takes no posting for
+    such a name, and one that names no other takes nothing at all."""
+    names = [str(i.get("name", "")) for i in _tables((cfg.get("promote") or {}).get("industry"))]
+    found = []
+    for track in _tables(cfg.get("track")):
+        wanted = track.get("industries")
+        for name in map(str, [wanted] if isinstance(wanted, str) else wanted if isinstance(wanted, list) else []):
+            if name not in names:
+                found.append((str(track.get("name", "?")), name, next((n for n in names if n.lower() == name.lower()), None)))
+    return found
+
+
 ELSEWHERE_FLAG = "Outside your area"
 
 
