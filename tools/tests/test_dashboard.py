@@ -323,6 +323,22 @@ class Security(unittest.TestCase):
         status, body, _ = self.post("/api/jobs", b"[1]")
         self.assertEqual((status, json.loads(body)["error"]), (400, "bad request"))
 
+    def test_reading_a_link_gives_the_form_its_posting_and_saves_nothing(self):
+        found = {"company": "Acme Robotics", "title": "Firmware Engineer", "location": "Madison, WI", "description": "Builds."}
+        with mock.patch.object(server.link, "read", return_value=found) as read, mock.patch.object(server, "add_manual_job") as added:
+            status, body, _ = self.post("/api/jobs/read", b'{"url": " https://jobs.example.com/1 "}')
+        self.assertEqual((status, json.loads(body)), (200, found))
+        read.assert_called_once_with("https://jobs.example.com/1")
+        added.assert_not_called()
+
+    def test_a_link_that_cannot_be_read_says_why(self):
+        for sent, why in ((b'{"url": "http://127.0.0.1:8787/api/state"}', "private network"), (b'{"url": 7}', "should be text"),
+                          (b"{}", "isn't a web address"), (json.dumps({"url": "https://x.test/" + "a" * 2000}).encode(), "at most 2,000")):
+            with self.subTest(sent[:40]):
+                status, body, _ = self.post("/api/jobs/read", sent)
+                self.assertEqual(status, 400)
+                self.assertIn(why, json.loads(body)["error"])
+
     def test_a_broken_search_file_is_reported_to_the_page(self):
         text = store.CONFIG_PATH.read_text(encoding="utf-8")
         try:

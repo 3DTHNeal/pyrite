@@ -784,7 +784,8 @@ def cmd_outreach(args, conn):
 @_with_db
 def cmd_add(args, conn):
     """Add a posting you found yourself, such as one from LinkedIn."""
-    from .server import add_manual_job
+    from . import link
+    from .server import add_manual_job, tracked_by_url
 
     description = ""
     if args.description_file:
@@ -792,6 +793,15 @@ def cmd_add(args, conn):
             description = Path(args.description_file).read_text(encoding="utf-8")
         except OSError as err:
             sys.exit(f"Can't read the posting from {args.description_file}: {err.strerror or err}. Nothing was added.")
+    elif args.url and not tracked_by_url(conn, args.url):
+        # No file, so the posting is read from its link. A link that can't be read still goes in, without its text.
+        try:
+            found = link.read(args.url)
+        except link.Unreadable as err:
+            print(f"Adding it without the posting's text. {err}", file=sys.stderr)
+        else:
+            description = found["description"]
+            args.location = args.location or found["location"]
     newest = conn.execute("SELECT COALESCE(MAX(id), 0) FROM jobs").fetchone()[0]
     try:
         job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description)
@@ -1225,12 +1235,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("add", help="add a posting by hand", formatter_class=argparse.RawDescriptionHelpFormatter,
                        epilog='for example:\n  pyrite add --company "Acme Robotics" --title "Firmware Engineer" '
-                              '--url https://example.com/jobs/1 --description-file posting.txt')
+                              '--url https://example.com/jobs/1\n\nWith --url and no --description-file, the posting\'s text, and its '
+                              'location if you gave none, are read from the link.')
     p.add_argument("--company", required=True, help="the employer, in quotes if it has a space")
     p.add_argument("--title", required=True, help="the job title, in quotes if it has a space")
     p.add_argument("--url", default="", help="the posting's web address")
     p.add_argument("--location", default="", help="where the job is, such as Remote")
-    p.add_argument("--description-file", help="a text file holding the posting, which the assay and tailoring read")
+    p.add_argument("--description-file", help="a text file holding the posting, which the assay and tailoring read, for a link that can't be read")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("brief", help="save the morning briefing")
