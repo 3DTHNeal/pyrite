@@ -46,6 +46,7 @@ from . import (
     prep,
     profile,
     refresh,
+    schedule,
     settings,
     signals,
     steps,
@@ -850,6 +851,8 @@ class Handler(BaseHTTPRequestHandler):
                     conn.close()
             if path == "/api/settings":
                 return self._json(_settings_page())
+            if path == "/api/settings/schedule":
+                return self._json(schedule.view())
             if path == "/api/settings/status":
                 fresh = parse_qs(urlparse(self.path).query).get("fresh") == ["1"]
                 return self._json(options.status(load_config(), fresh))
@@ -1090,6 +1093,12 @@ def _save_options(body: dict[str, Any]) -> dict[str, Any]:
     return _settings_page()
 
 
+def _change_schedule(body: dict[str, Any]) -> dict[str, Any]:
+    """Set up, move or remove one of the daily runs in Task Scheduler. It changes no file, and no run can say more
+    than it could, so it needs no code: the page asks you to confirm before it sends."""
+    return schedule.change(body)
+
+
 def _save_facts(body: dict[str, Any]) -> dict[str, Any]:
     """The Facts tab's save. Approving a term or unlisting a "Do not use" item needs a code, as on the Profile tab."""
     # The demo refuses every save, so it shouldn't send a code first.
@@ -1253,6 +1262,7 @@ PROFILE_WRITES = {
     "/api/profile/draft": _draft_profile,
     "/api/settings": _save_settings,
     "/api/settings/options": _save_options,
+    "/api/settings/schedule": _change_schedule,
     "/api/facts": _save_facts,
     "/api/profile": _save_profile,
     "/api/profile/put-back": _put_back,

@@ -67,7 +67,7 @@ Three sections show what they find and save nothing:
 
 - **Tools check** lists what Pyrite uses on this computer, the same programs `pyrite doctor` checks: python-docx and LibreOffice or Word, which every draft needs, `pdftotext`, Claude Code and reply detection. Each says what it's for, what still works without it, and how to get it. Claude Code and reply detection are set up on the Settings tab, so theirs have a button there. **Check again** asks Claude Code again rather than using its answer from the last minute. A missing program every draft needs goes on **Needs you**.
 - **Workspace and backup** names the folder in use and whether `PYRITE_HOME` or `.pyrite-home` chose it. `data/pyrite.db` is the one file there that can't be made again, so **Back up now** copies it into `data/backups/`, whole even while a run is writing to it, and keeps the newest 10. The section also says whether the folder is a git repository that keeps the database, when it was last committed, and how to put a copy back. A copy on the same computer is lost with it, so copy `data/backups/` somewhere else from time to time. The section shows as set while the newest copy is under two weeks old.
-- **What comes first** and **Schedule and mail** are set on the Settings tab, under **Cities and industries** and **Daily run**, and their cards open it there.
+- **What comes first** and **Schedule and mail** are set on the Settings tab, under **Cities and industries** and **Daily run**, and their cards open it there. On Windows, Daily run also sets up the pan and the daily run in Task Scheduler.
 
 ## Gaps to answer
 

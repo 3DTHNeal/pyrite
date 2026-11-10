@@ -365,6 +365,12 @@ textarea { width: 100%; resize: vertical; }
 .connection p { margin: 0; overflow-wrap: anywhere; }
 .connection .what { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-weight: 600; }
 .connection .fix { white-space: pre-wrap; font-size: 13px; }
+.schedule { display: grid; gap: 14px; justify-items: start; }
+.schedule p { margin: 0; overflow-wrap: anywhere; }
+.schedule .fix { font-size: 13px; max-width: 80ch; }
+.schedule-run { display: grid; gap: 4px; justify-items: start; }
+.schedule-run .what { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-weight: 600; }
+.schedule-run .part-actions { margin-top: 4px; }
 .settings .panel { margin-bottom: 12px; }
 .settings p { margin: 0 0 10px; }
 .settings label { display: grid; gap: 3px; align-content: start; font-weight: 600; font-size: 13px; }

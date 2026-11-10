@@ -108,9 +108,10 @@ STEPS: tuple[dict[str, Any], ...] = (
      "writes": ()},
     {"id": "schedule", "group": "Automation", "label": "Schedule and mail", "required": False, "fallback": "settings/run",
      "settings": "Daily run", "files": ("config",),
-     "meanwhile": "Set on the Settings tab: Daily run for how much Pyrite does each morning, and Mail for where it reads "
-                  "replies. Your computer's scheduler starts the daily runs themselves, as docs/schedule.md describes.",
-     "why": "How much Pyrite does each morning, and where it reads replies from.",
+     "meanwhile": "Set on the Settings tab: Daily run for when the runs start and how much each does, and Mail for "
+                  "where it reads replies. On Windows, Daily run sets them up in Task Scheduler. Elsewhere, "
+                  "docs/schedule.md says how.",
+     "why": "When Pyrite runs each morning, how much it does, and where it reads replies from.",
      "writes": ("search.toml › [run] and [inbox]",)},
     {"id": "workspace", "group": "Workspace", "label": "Workspace and backup", "required": False, "fallback": None,
      "files": (),

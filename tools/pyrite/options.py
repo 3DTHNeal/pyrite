@@ -79,7 +79,7 @@ SECTIONS: tuple[dict[str, Any], ...] = (
      "notes": ("Employers whose mail comes from another domain are listed under [inbox.domains] in profile/search.toml. "
                "docs/mail.md covers setting up either way of reading.",)},
     {"id": "run", "label": "Daily run", "status": None,
-     "intro": "What the morning Claude run does. When it runs is up to your computer's scheduler: docs/schedule.md says how.",
+     "intro": "When the pan and the morning Claude run start, and how much the run does.",
      "panels": (
          {"title": "Each morning", "hint": "",
           "fields": (
