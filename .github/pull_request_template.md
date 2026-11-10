@@ -13,4 +13,4 @@ Closes #
 - [ ] Shown on the example workspace (`python tools/pyrite.py demo`), with no real data anywhere in the pull request.
 - [ ] Ran what CI runs: the tests, `ruff check tools`, `mypy` and `tools/check_public.py`.
 - [ ] A fix to the assay comes with a test of the draft it now catches.
-- [ ] Noted under "Unreleased" in [CHANGELOG.md](../CHANGELOG.md), if someone running Pyrite would notice it.
+- [ ] A note in `changelog.d/<branch>.md`, if someone running Pyrite would notice it (see [changelog.d/README.md](../changelog.d/README.md)).

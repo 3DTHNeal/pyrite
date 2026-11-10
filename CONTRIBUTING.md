@@ -28,7 +28,7 @@ Pyrite is a personal project. I run it on my own job search and share it so othe
 
   On the dashboard, use the colour variables at the top of `tools/pyrite/static/style.css` rather than new colours. Each has a light and a dark value, every text colour clears 4.5:1 on every surface, and a colour means the same thing everywhere (see the colour table in [docs/dashboard.md](docs/dashboard.md)). Icons are drawn by `art/icons/build.py`, never edited by hand: change the script and run it again. Show a change to the page in both themes and at phone width.
 
-  The tests are split by area (`test_assay.py`, `test_discovery.py`, `test_dashboard.py` and so on), and `tools/tests/support.py` sets up the throwaway workspace they share. Note what changed under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
+  The tests are split by area (`test_assay.py`, `test_discovery.py`, `test_dashboard.py` and so on), and `tools/tests/support.py` sets up the throwaway workspace they share. Note what changed in a file of its own under `changelog.d/`, not in CHANGELOG.md itself, as [changelog.d/README.md](changelog.d/README.md) shows, so pull requests never conflict over the changelog.
 
 - **Security problems** go through [SECURITY.md](SECURITY.md), not an issue.
 - **Conduct:** the [code of conduct](CODE_OF_CONDUCT.md) covers how we treat each other here, and how to report someone who doesn't.
