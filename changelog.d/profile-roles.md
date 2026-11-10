@@ -1,0 +1,3 @@
+### Added
+
+- **Roles you want** on the Profile tab edits your role types (`[[track]]` in `search.toml`) with plain job titles, the order they're tried in, whether each needs a senior title, and what drafts lead with for each in `run-notes.md`. It also edits the senior words, the titles never kept, and the points for skills and flags under `[scoring]`. Patterns you wrote by hand are kept, and so are comments. Before you save, it scores your prospects with the changes, as `pyrite rescore` would, and lists the ones that would be dropped and the scores that would change. **Try a title** says which role type would take a job title.

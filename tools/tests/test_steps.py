@@ -9,7 +9,7 @@ import unittest.mock as mock
 from pathlib import Path
 from typing import Any
 
-import support  # noqa: F401  Points Pyrite at a throwaway workspace before it loads.
+import support  # Points Pyrite at a throwaway workspace before it loads.
 
 from pyrite import checks, factsdoc, profile, server, steps, store, tomledit
 
@@ -113,6 +113,14 @@ class Steps(unittest.TestCase):
         return [{"line": e["line"], "name": e["name"], "roles": [dict(r) for r in e["roles"]]}
                 for e in self.view["timeline"]["employers"]]
 
+    def roles_form(self) -> dict[str, Any]:
+        """Roles you want's form as the page first fills it in: everything as it is."""
+        roles = self.view["roles"]
+        return {"tracks": [{key: track[key] for key in ("index", "name", "titles", "patterns", "needs_level", "emphasis")}
+                           for track in roles["tracks"]],
+                **{key: list(roles[key]) for key in ("level_top", "level_mid", "exclude_titles")},
+                "keywords": [list(row) for row in roles["keywords"]], "flags": [list(row) for row in roles["flags"]]}
+
     def test_an_unchanged_form_writes_nothing(self):
         lists = self.view["off_limits_lists"]
         for step, edits in (
@@ -128,6 +136,7 @@ class Steps(unittest.TestCase):
             ("masters", {"resume": {"headline": self.view["master_blocks"]["resume"]["headline"],
                                     "blocks": self.view["master_blocks"]["resume"]["blocks"]},
                          "letter": {"body": self.view["master_blocks"]["letter"]["body"]}}),
+            ("roles", self.roles_form()),
         ):
             result = self.draft(step, edits)
             self.assertEqual((result["changes"], result["count"]), ({}, 0), step)
@@ -140,7 +149,7 @@ class Steps(unittest.TestCase):
 
     def test_a_section_without_an_editor_is_refused(self):
         with self.assertRaises(ValueError):
-            self.draft("roles", {})
+            self.draft("priorities", {})
 
     # ---- Name and contact ----
 
@@ -472,12 +481,261 @@ class Steps(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.draft("masters", {"resume": {"headline": "x"}})
 
+    # ---- Roles you want ----
+
+    def track(self, form: dict[str, Any], name: str) -> dict[str, Any]:
+        return next(t for t in form["tracks"] if t["name"] == name)
+
+    def test_role_types_are_read_with_their_patterns_and_emphasis(self):
+        roles = self.view["roles"]
+        self.assertEqual([t["name"] for t in roles["tracks"]], ["AI systems", "Embedded, controls and simulation",
+                                                                 "Engineering leadership", "Technical program and product"])
+        lead = roles["tracks"][2]
+        self.assertEqual((lead["titles"], len(lead["patterns"]), lead["needs_level"]), ([], 3, False))
+        self.assertEqual(lead["emphasis"], "team management, hiring and launches lead.")
+        self.assertIn("junior", roles["exclude_titles"])
+        self.assertNotIn("Until it's built", next(s for s in profile.STEPS if s["id"] == "roles")["meanwhile"])
+        self.assertIn('src="/static/profile/roles.js"', (server.STATIC / "index.html").read_text(encoding="utf-8"))
+
+    def test_an_unchanged_roles_form_leaves_every_file_byte_for_byte(self):
+        before = {key: (self.root / path).read_bytes() for key, path in profile.FILES.items() if (self.root / path).exists()}
+        result = self.draft("roles", {**self.roles_form(), "test": "Staff Firmware Engineer"})
+        self.assertEqual((result["changes"], result["count"], result["notes"]), ({}, 0, []))
+        self.assertEqual(result["preview"]["test"]["track"], "Embedded, controls and simulation")
+        self.assertEqual(before, {key: (self.root / path).read_bytes() for key, path in profile.FILES.items()
+                                  if (self.root / path).exists()})
+
+    def test_a_new_role_type_is_written_with_plain_titles_and_comments_stay(self):
+        form = self.roles_form()
+        form["tracks"].append({"index": None, "name": "Data platform", "titles": ["data engineer", "Analytics Engineer"],
+                               "patterns": [], "needs_level": True, "emphasis": "the pipeline rewrite leads"})
+        result = self.draft("roles", {**form, "test": "Staff Data Engineer"})
+        config = lf(result, "config")
+        self.assertIn('[[track]]\nname = "Data platform"\ntitles = ["data engineer", "Analytics Engineer"]\nneeds_level = true\n\n[scoring]', config)
+        before = profile.read("config").replace("\r\n", "\n")
+        # Every other line, the comments and the hand-written patterns among them, is as it was.
+        self.assertEqual(config.replace('\n[[track]]\nname = "Data platform"\ntitles = ["data engineer", "Analytics Engineer"]\nneeds_level = true\n', ""), before)
+        self.assertIn("  - *Data platform:* the pipeline rewrite leads\n- **Wording:**", lf(result, "run_notes"))
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["preview"]["test"]["track"], "Data platform")
+        self.assertEqual(result["code"], [])
+        self.save(result)
+        added = self.track(self.roles_form(), "Data platform")
+        self.assertEqual((added["titles"], added["patterns"], added["emphasis"]),
+                         (["data engineer", "Analytics Engineer"], [], "the pipeline rewrite leads"))
+        self.assertEqual(self.draft("roles", self.roles_form())["changes"], {})
+
+    def test_a_plain_title_goes_beside_the_patterns_which_stay(self):
+        form = self.roles_form()
+        lead = self.track(form, "Engineering leadership")
+        lead["titles"].append("chief technology officer")
+        result = self.draft("roles", form)
+        config = tomllib.loads(lf(result, "config"))
+        track = next(t for t in config["track"] if t["name"] == "Engineering leadership")
+        self.assertEqual(track["titles"], ["chief technology officer"])
+        self.assertEqual(track["title"], tomllib.loads(profile.read("config"))["track"][2]["title"])
+        self.assertEqual(set(result["changes"]), {"config"})
+        diff = [line for d in result["diffs"] for line in d["lines"] if line[:1] in "+-"]
+        self.assertEqual(diff, ['+titles = ["chief technology officer"]'])
+
+    def test_a_role_type_taken_off_takes_its_emphasis_and_others_stay(self):
+        form = self.roles_form()
+        form["tracks"] = [t for t in form["tracks"] if t["name"] != "Engineering leadership"]
+        result = self.draft("roles", form)
+        config = lf(result, "config")
+        self.assertNotIn("Engineering leadership", config)
+        before = profile.read("config").replace("\r\n", "\n")
+        for track in tomllib.loads(before)["track"]:
+            if track["name"] != "Engineering leadership":
+                self.assertIn(f'name = "{track["name"]}"', config)
+        self.assertIn("# Roles to pursue.", config)
+        self.assertNotIn("Engineering leadership", lf(result, "run_notes"))
+        self.assertIn("*Technical program and product:*", lf(result, "run_notes"))
+        self.assertEqual(result["count"], 2)
+
+    def test_renaming_and_reordering_follow_through_to_run_notes(self):
+        form = self.roles_form()
+        form["tracks"].reverse()
+        self.track(form, "AI systems")["name"] = "Applied AI"
+        result = self.draft("roles", form)
+        config = tomllib.loads(lf(result, "config"))
+        self.assertEqual([t["name"] for t in config["track"]], ["Technical program and product", "Engineering leadership",
+                                                                 "Embedded, controls and simulation", "Applied AI"])
+        self.assertIn("  - *Applied AI:* the coding-agent workflow", lf(result, "run_notes"))
+        self.assertEqual(result["count"], 3)  # the order, the rename, and its emphasis line
+
+    def test_comments_inside_a_role_type_survive_editing_it(self):
+        text = profile.read("config").replace("\r\n", "\n").replace('name = "AI systems"\n', 'name = "AI systems"  # the main one\n# Kept narrow on purpose.\n')
+        (self.root / "profile" / "search.toml").write_bytes(text.encode())
+        self.view = {**profile.view(), **steps.view()}
+        form = self.roles_form()
+        ai = self.track(form, "AI systems")
+        ai["needs_level"] = False
+        ai["patterns"] = ai["patterns"][:1]
+        result = self.draft("roles", form)
+        config = lf(result, "config")
+        self.assertIn('name = "AI systems"  # the main one\n# Kept narrow on purpose.\ntitle = [', config)
+        self.assertEqual(len(tomllib.loads(config)["track"][0]["title"]), 1)
+        self.assertFalse(tomllib.loads(config)["track"][0]["needs_level"])
+
+    def test_windows_line_endings_are_kept(self):
+        text = profile.read("config").replace("\r\n", "\n").replace("\n", "\r\n")
+        (self.root / "profile" / "search.toml").write_bytes(text.encode())
+        self.view = {**profile.view(), **steps.view()}
+        self.assertEqual(self.draft("roles", self.roles_form())["changes"], {})
+        form = self.roles_form()
+        form["tracks"].insert(0, {"index": None, "name": "Data platform", "titles": ["data engineer"], "patterns": [],
+                                  "needs_level": False, "emphasis": ""})
+        form["exclude_titles"].append("trainee")
+        config = self.draft("roles", form)["changes"]["config"]
+        self.assertEqual(config.count("\n"), config.count("\r\n"))
+        self.assertEqual(tomllib.loads(config)["track"][0]["name"], "Data platform")
+
+    def test_title_lists_change_a_word_at_a_time(self):
+        form = self.roles_form()
+        form["exclude_titles"].remove("payments?")
+        form["exclude_titles"].append("trainee")
+        form["level_mid"].append("experienced")
+        result = self.draft("roles", form)
+        diff = [line for d in result["diffs"] for line in d["lines"] if line[:1] in "+-"]
+        self.assertIn("+  'trainee',", diff)
+        self.assertIn("+level_mid = ['senior', 'sr', 'lead', 'experienced']", diff)
+        self.assertEqual(result["count"], 3)
+        self.assertNotIn("payments?", tomllib.loads(lf(result, "config"))["scoring"]["exclude_titles"])
+
+    def test_skill_points_and_flags_are_written_a_row_to_a_line(self):
+        form = self.roles_form()
+        form["keywords"][0][1] = "8"
+        form["flags"].append(["Travel", "travel (up to )?\\d+%", 5])
+        result = self.draft("roles", form)
+        scoring = tomllib.loads(lf(result, "config"))["scoring"]
+        self.assertEqual(scoring["keywords"][0], ["embedded", 8])
+        self.assertEqual(scoring["flags"][-1], ["Travel", "travel (up to )?\\d+%", 5])
+        self.assertIn("keywords = [\n  ['embedded', 8],\n  ['firmware', 6],\n", lf(result, "config"))
+        self.assertEqual(result["count"], 3)
+
+    def test_what_the_filters_would_never_take_is_pointed_out(self):
+        form = self.roles_form()
+        self.track(form, "Technical program and product")["titles"] += ["sales engineer", "software program manager"]
+        notes = self.draft("roles", form)["notes"]
+        self.assertTrue(any("“sales engineer” has 'sales' in it" in note for note in notes), notes)
+        self.assertTrue(any(note.startswith("Engineering leadership takes “software program manager” first") for note in notes), notes)
+        self.assertTrue(any("pyrite rescore" in note for note in notes))
+
+    def test_trying_a_title_says_why(self):
+        tried = steps.try_title("Data Engineer", tomllib.loads(profile.read("config")))
+        self.assertEqual((tried["track"], tried["tracks"]), (None, []))
+        form = self.roles_form()
+        form["tracks"].append({"index": None, "name": "Data platform", "titles": ["data engineer"], "patterns": [],
+                               "needs_level": True, "emphasis": ""})
+        tried = self.draft("roles", {**form, "test": "Data Engineer"})["preview"]["test"]
+        self.assertIsNone(tried["track"])
+        self.assertEqual(tried["tracks"], [{"name": "Data platform", "plain": "data engineer", "pattern": None,
+                                            "why": "it has no senior word, which this role type needs"}])
+        tried = self.draft("roles", {**form, "test": "Senior Sales Engineer"})["preview"]["test"]
+        self.assertEqual((tried["track"], tried["excluded"], tried["level"]), (None, "sales", "mid"))
+
+    def test_bad_roles_are_refused(self):
+        def tracks(**change):
+            form = self.roles_form()
+            form["tracks"][0].update(change)
+            return form
+        new = {"index": None, "name": "Data platform", "titles": ["data engineer"], "patterns": [], "needs_level": False}
+        for form, message in (
+            (tracks(name=" "), "needs a name"),
+            (tracks(name="Engineering Leadership"), "two role types"),
+            (tracks(titles=[], patterns=[]), "at least one job title"),
+            (tracks(patterns=["(unclosed"]), "isn't a pattern"),
+            (tracks(patterns=[".*"]), "any title at all"),
+            (tracks(titles=["--"]), "no words"),
+            (tracks(name="AI *systems*"), "formatting"),
+            (tracks(index=9), "Reload"),
+            ({**self.roles_form(), "tracks": []}, "at least one role type"),
+            ({**self.roles_form(), "tracks": [new, {**new, "name": "Other"}, {**self.roles_form()["tracks"][0], "index": 0},
+                                              {**self.roles_form()["tracks"][0], "index": 0, "name": "Again"}]}, "Reload"),
+            ({**self.roles_form(), "exclude_titles": ["\\w*"]}, "any title at all"),
+            ({**self.roles_form(), "keywords": [["rust", 500]]}, "from 0 to 100"),
+            ({**self.roles_form(), "keywords": [["rust", "lots"]]}, "whole number"),
+            ({**self.roles_form(), "flags": [["", "travel", 5]]}, "needs a label"),
+            ({**self.roles_form(), "tracks": "AI"}, "should be a list"),
+        ):
+            with self.assertRaises(ValueError, msg=message) as caught:
+                self.draft("roles", form)
+            self.assertIn(message, str(caught.exception))
+        # A new row added and left blank is no change, not a refusal.
+        form = self.roles_form()
+        form["tracks"].append({"index": None, "name": "", "titles": [], "patterns": [], "needs_level": False})
+        form["keywords"].append(["", ""])
+        self.assertEqual(self.draft("roles", form)["changes"], {})
+
+    def prospects(self) -> Path:
+        """A database of prospects at the workspace's own path, for the preview to read."""
+        path = self.root / "data" / "pyrite.db"
+        patcher = mock.patch.object(store, "DB_PATH", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        conn = store.connect(path)
+        ts = store.now()
+        jobs = [("greenhouse:a", "1", "Initech", "Firmware Engineering Manager", "Middleton, WI", "", 70),
+                ("greenhouse:a", "2", "Initech", "Director of Software Engineering", "Madison, WI", "", 60),
+                ("greenhouse:b", "3", "Hooli", "Principal Embedded Software Engineer", "Remote - US", "", 77),
+                ("greenhouse:b", "4", "Hooli", "Senior Engineering Manager, Platform", "Madison, WI", "Call back", 66),
+                ("manual", "5", "Globex", "Director of Engineering", "Madison, WI", "", 50)]
+        for key, source_id, company, title, place, notes, score in jobs:
+            conn.execute("INSERT INTO jobs (source_key, source_id, company, title, location, description, first_seen, "
+                         "last_seen, status, status_changed_at, score, track, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)",
+                         (key, source_id, company, title, place, "Firmware and controls for robots, in C++.", ts, ts, ts,
+                          score, "Engineering leadership", notes))
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_the_preview_scores_the_prospects_as_a_rescore_would(self):
+        path = self.prospects()
+        self.assertEqual(self.draft("roles", self.roles_form())["preview"]["prospects"]["total"], 4)
+        form = self.roles_form()
+        form["tracks"] = [t for t in form["tracks"] if t["name"] != "Engineering leadership"]
+        before = path.read_bytes()
+        prospects = self.draft("roles", form)["preview"]["prospects"]
+        self.assertEqual((prospects["total"], prospects["kept"], prospects["held"]), (4, 2, 1))
+        self.assertEqual({(j["title"], j["held"]) for j in prospects["dropped"]},
+                         {("Director of Software Engineering", False), ("Senior Engineering Manager, Platform", True)})
+        self.assertTrue(all(j["why"] == "no role type takes its title" for j in prospects["dropped"]))
+        self.assertFalse(any(j["already"] for j in prospects["dropped"]))
+        # The stored scores aren't what these settings give, but the change is judged against the settings as they are,
+        # so it moves no score of its own.
+        self.assertEqual(prospects["moved"], [])
+        changed = self.roles_form()
+        changed["keywords"][1][1] = 0  # firmware
+        moved = self.draft("roles", changed)["preview"]["prospects"]["moved"]
+        self.assertEqual(len(moved), 4)
+        self.assertTrue(all(j["after"] == j["before"] - 6 for j in moved), moved)
+        self.assertEqual(path.read_bytes(), before)  # Read only: a draft changes nothing.
+        # The same as `pyrite rescore` makes of them.
+        with mock.patch.object(store, "ROOT", self.root):
+            conn = store.connect(path)
+            try:
+                cfg = tomllib.loads(lf(self.draft("roles", form), "config"))
+                done = steps.discover.rescore(conn, {**support.CFG, "track": cfg["track"]})
+            finally:
+                conn.close()
+        self.assertEqual((done["kept"], done["dropped"], done["held"]), (3, 1, 1))  # kept counts the one you added
+
+    def test_a_preview_without_prospects_says_so(self):
+        with mock.patch.object(store, "DB_PATH", self.root / "data" / "none.db"):
+            form = self.roles_form()
+            form["exclude_titles"].append("trainee")
+            prospects = self.draft("roles", form)["preview"]["prospects"]
+        self.assertEqual((prospects["total"], prospects["changed"]), (0, True))
+        self.assertFalse((self.root / "data" / "none.db").exists())
+
     # ---- the server ----
 
     def test_the_profile_page_and_the_draft_endpoint(self):
         page = server._profile_page()
         self.assertIn("term_groups", page)
         self.assertIn("history", page)
+        self.assertEqual(len(page["roles"]["tracks"]), 4)
         result = server.PROFILE_WRITES["/api/profile/draft"](
             {"step": "skills", "edits": {"add": ["Rust"]}, "based_on": page["versions"]})
         self.assertEqual(result["count"], 1)
