@@ -128,7 +128,8 @@ def _found() -> list[dict[str, Any]]:
 def _task_workspace() -> Path | None:
     """The workspace a task started by Task Scheduler would open: PYRITE_HOME as saved in Windows for this user or
     the whole computer, else what .pyrite-home names. A PYRITE_HOME set only in a terminal reaches no task."""
-    if WINDOWS:
+    # sys.platform rather than WINDOWS, so type checkers on other systems know winreg is never reached there.
+    if sys.platform == "win32":
         import winreg
 
         places = ((winreg.HKEY_CURRENT_USER, "Environment"),
