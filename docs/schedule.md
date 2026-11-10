@@ -10,8 +10,21 @@
 any    You               read each draft, apply on the company's site, log what comes back
 ```
 
-- **The pan** is `pyrite sweep`, which is `pyrite discover` followed by `pyrite inbox`. On Windows, use Task Scheduler. On Linux, `tools/pyrite/systemd/` has unit files.
-- **The daily run** is `pyrite run`. Schedule it the same way, for after the pan. It needs Claude Code installed and signed in.
+- **The pan** is `pyrite sweep`, which is `pyrite discover` followed by `pyrite inbox`.
+- **The daily run** is `pyrite run`, for after the pan. It needs Claude Code installed and signed in.
+
+### Setting them up
+
+**On Windows**, open **Settings › Daily run** on the dashboard. **When it runs** shows each one, whether it's set up and at what time. **Set up** adds it to Task Scheduler at the time you pick, **Change time** moves it, and **Remove** takes it away. Each asks you to confirm first. No code is needed, since a task changes no file and lets no draft say more.
+
+- The tasks are called **Pyrite pan** and **Pyrite daily run**, in Task Scheduler's top folder. Pyrite only ever changes these two.
+- Each starts this copy of Pyrite's own Python, with no window, as you, while you're signed in to Windows. A run missed while the computer was off or asleep starts once it's back.
+- A task made by hand that already runs the same command, such as one that runs `pyrite discover` and `pyrite inbox`, is named under its run and left alone. Keep only one of the two, or the run happens twice.
+- A task has no terminal to read `PYRITE_HOME` from, so it finds the workspace from `.pyrite-home` in the code folder, or from a `PYRITE_HOME` saved in your Windows environment variables. If that isn't the workspace the dashboard has open, the section says so and sets nothing up.
+
+To do it by hand instead, make a daily task in Task Scheduler that starts `.venv\Scripts\pythonw.exe` with the arguments `tools\pyrite.py sweep` (or `run`), starting in the Pyrite folder.
+
+**On Linux**, `tools/pyrite/systemd/` has unit files for the pan. Make a second timer for `pyrite run` the same way. **On a Mac**, use `launchd` or `cron` to start the same two commands. The dashboard can't set these up yet.
 
 How much the run does, and which model does it, are set under **Settings** on the dashboard, in **Daily run** and **Claude**, or in `search.toml`: `triage_per_day` and `tailor_per_day` under `[run]`, and `model` and `effort` under `[claude]`. Without a `[claude]` line, Claude Code uses its own default for it.
 
