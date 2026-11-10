@@ -13,7 +13,7 @@ from typing import Any
 
 import support  # Points Pyrite at a throwaway workspace before it loads.
 
-from pyrite import checks, discover, factsdoc, profile, server, sources, steps, store, tomledit, workspace
+from pyrite import checks, discover, doctor, factsdoc, profile, server, sources, steps, store, tomledit, workspace
 
 EXAMPLE_PROFILE = store.EXAMPLE_ROOT / "profile"
 
@@ -154,6 +154,16 @@ class Steps(unittest.TestCase):
     def test_a_section_without_an_editor_is_refused(self):
         with self.assertRaises(ValueError):
             self.draft("priorities", {})
+
+    def test_each_drafter_registers_itself_once_for_a_real_section(self):
+        self.assertLessEqual(set(steps.DRAFTERS), profile.STEP_IDS)
+        # Two merged branches each registering one section must stop Pyrite loading, not quietly keep the second.
+        with self.assertRaises(RuntimeError) as caught:
+            steps.drafter("roles")(lambda texts, cfg, edits: steps.Draft(texts, 0))
+        self.assertIn("Two drafters for the 'roles' section", str(caught.exception))
+        self.assertEqual(steps.DRAFTERS["roles"].__name__, "_roles")
+        with self.assertRaises(RuntimeError):
+            steps.drafter("no-such-section")
 
     # ---- Name and contact ----
 
@@ -622,7 +632,7 @@ class Steps(unittest.TestCase):
         self.assertEqual(lead["emphasis"], "team management, hiring and launches lead.")
         self.assertIn("junior", roles["exclude_titles"])
         self.assertNotIn("Until it's built", next(s for s in profile.STEPS if s["id"] == "roles")["meanwhile"])
-        self.assertIn('src="/static/profile/roles.js"', (server.STATIC / "index.html").read_text(encoding="utf-8"))
+        self.assertIn(b'src="/static/profile/roles.js"', server.page())
 
     def test_an_unchanged_roles_form_leaves_every_file_byte_for_byte(self):
         before = {key: (self.root / path).read_bytes() for key, path in profile.FILES.items() if (self.root / path).exists()}
@@ -1126,6 +1136,78 @@ class Companies(unittest.TestCase):
             found = server._test_board({"kind": "greenhouse", "key": "nobody"})
         self.assertFalse(found["ok"])
         self.assertIn("No Greenhouse board answers", found["hint"])
+
+
+class BlankMasters(unittest.TestCase):
+    """A blank workspace's master resume and letter start with only the name, and the assay needs a contact line in
+    each. Setup has to be able to put it there, since neither master's editor has a field for it."""
+
+    CONTACT = ["Springfield, IL", "sam@example.com"]
+    LINE = "@ Springfield, IL · sam@example.com"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for patcher in (mock.patch.object(store, "ROOT", self.root), mock.patch.object(store, "IS_EXAMPLE", False)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        workspace._make_blank(self.root / "profile", "Sam Doe")
+        self.view = {**profile.view(), **steps.view()}
+
+    def draft(self, step, edits):
+        return steps.draft(step, edits, self.view["versions"])
+
+    def save(self, result):
+        profile.write(result["changes"], self.view["versions"], "test")
+        self.view = {**profile.view(), **steps.view()}
+
+    def masters_form(self):
+        """Master resume's form as the page first sends it, on opening: everything as it is."""
+        blocks = self.view["master_blocks"]
+        return {"resume": {"headline": blocks["resume"]["headline"] or "", "blocks": []},
+                "letter": {"body": blocks["letter"]["body"] or ""}}
+
+    def test_name_and_contact_puts_the_line_under_the_name_in_both_masters(self):
+        result = self.draft("basics", {"name": "Sam Doe", "paper": "letter", "contact": self.CONTACT})
+        self.assertEqual(result["count"], 3)
+        self.assertTrue(lf(result, "resume").startswith(f"# Sam Doe\n{self.LINE}\n\n## Summary"))
+        self.assertEqual(lf(result, "letter"), f"# Sam Doe\n{self.LINE}\n")
+        self.assertEqual(sum("saving puts" in note for note in result["notes"]), 2, result["notes"])
+        self.save(result)
+        for key, kind in (("resume", "resume"), ("letter", "letter")):
+            self.assertFalse([p for p in doctor.master_problems(profile.read(key), kind, "Sam Doe", self.LINE)
+                              if "contact" in p], key)
+        # Done once, so the same form opened again has nothing to save.
+        self.assertEqual(self.draft("basics", {"name": "Sam Doe", "paper": "letter", "contact": self.CONTACT})["count"], 0)
+
+    def test_master_resume_puts_in_the_line_a_workspace_saved_without(self):
+        # A workspace whose Name and contact was saved before setup could put the line in has it only in facts.md.
+        self.save(self.draft("basics", {"contact": self.CONTACT}))
+        for key in ("resume", "letter"):
+            text = "".join(row for row in profile.read(key).splitlines(keepends=True) if not row.startswith("@ "))
+            (self.root / profile.FILES[key]).write_bytes(text.encode())
+        self.view = {**profile.view(), **steps.view()}
+        result = self.draft("masters", self.masters_form())
+        self.assertEqual(result["count"], 2)
+        self.assertIn(f"# Sam Doe\n{self.LINE}\n", lf(result, "resume"))
+        self.assertIn(f"# Sam Doe\n{self.LINE}\n", lf(result, "letter"))
+        self.assertFalse([e for e in result["preview"]["resume"]["errors"] if "contact" in e], result["preview"])
+
+    def test_master_resume_doesnt_pass_with_no_contact_line_anywhere(self):
+        result = self.draft("masters", self.masters_form())
+        self.assertEqual(result["count"], 0)
+        for key in ("resume", "letter"):
+            errors = result["preview"][key]["errors"]
+            self.assertTrue(any("no '@ ' contact line" in e and "Name and contact" in e for e in errors), errors)
+
+    def test_the_line_goes_under_the_headline_and_keeps_the_line_endings(self):
+        self.assertEqual(steps.with_contact("# A\n= Head\n\n## S\n", "x"), "# A\n= Head\n@ x\n\n## S\n")
+        self.assertEqual(steps.with_contact("# A", "x"), "# A\n@ x\n")
+        self.assertEqual(steps.with_contact("# A\r\n\r\n## S\r\n", "x"), "# A\r\n@ x\r\n\r\n## S\r\n")
+        self.assertIsNone(steps.with_contact("# A\n@ y\n", "x"))
+        self.assertIsNone(steps.with_contact("## S\n", "x"))
+        self.assertIsNone(steps.with_contact("# A\n", ""))
 
 
 if __name__ == "__main__":

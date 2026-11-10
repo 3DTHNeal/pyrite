@@ -17,11 +17,18 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import checks, confirm, discover, factsdoc, gaps, market, profile, score, store, tomledit, workspace
+from . import checks, confirm, discover, doctor, factsdoc, gaps, market, profile, score, store, tomledit, workspace
 
 # Parts of a contact line: "Madison, WI · (555) 010-0142 · alex@example.com".
 CONTACT_SEP = re.compile(r"(\s+[·|•]\s+)")
 SEP_CHARS = re.compile(r"[·|•]")
+# What to do about each thing doctor.master_problems finds, by a word in it. Name and contact puts a contact line in each
+# master that lacks one, and Work history writes the employer headings. The last is for anything else.
+MASTER_FIXES = (("differs", "Make its “@ ” line the same as the resume's."),
+                ("contact","Fill in Name and contact, and saving it puts the line in."),
+                ("Employer", "Add an employer under Work history, and saving it writes the heading."),
+                ("' line", "Your name should be the first line. Name and contact changes it."),
+                ("", "See “How the documents are written” in docs/documents.md."))
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PHONE = re.compile(r"\+?[\d(][\d\s().-]{6,}\d")
 LINK = re.compile(r"(?:https?://|www\.)\S+|[\w.-]+\.(?:com|net|org|io|dev|me|co|ai|app|page|site|info)(?:/\S*)?", re.I)
@@ -40,6 +47,27 @@ class Draft:
     count: int
     notes: list[str] = field(default_factory=list)
     preview: dict[str, Any] = field(default_factory=dict)
+
+
+Drafter = Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], Draft]
+# Each section's drafter, by its id in profile.STEPS. A drafter adds itself with @drafter where it's defined, so a new
+# section changes no shared line that another section's branch also changes.
+DRAFTERS: dict[str, Drafter] = {}
+
+
+def drafter(step: str) -> Callable[[Drafter], Drafter]:
+    """Register the function below as the drafter for the Profile section `step`. A second drafter for one section
+    stops Pyrite loading rather than quietly replacing the first, as two merged branches could otherwise do."""
+    if step not in profile.STEP_IDS:
+        raise RuntimeError(f"{step!r} isn't a Profile section, so it can't have a drafter.")
+
+    def register(func: Drafter) -> Drafter:
+        if step in DRAFTERS:
+            raise RuntimeError(f"Two drafters for the {step!r} section: {DRAFTERS[step].__name__} and {func.__name__}.")
+        DRAFTERS[step] = func
+        return func
+
+    return register
 
 
 def _one_line(value, what: str) -> str:
@@ -354,6 +382,7 @@ def fill_from_resume(reason: str) -> list[str]:
 
 # ---------- Name and contact ----------
 
+@drafter("basics")
 def _basics(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -399,6 +428,7 @@ def _basics(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -
             doc.insert(sections[0].start if sections else len(doc.lines), ["## Contact", contact, ""])
         out["facts"] = doc.render()
 
+    added = 0
     for key in ("resume", "letter"):
         if not texts[key]:
             continue
@@ -410,12 +440,20 @@ def _basics(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -
                 notes.append(f"{path} has no “# {old_name}” line, so its name wasn't changed. Its first line should be “# {name}”.")
             else:
                 lines[at] = _keep_end(lines[at], f"# {name}")
-        if contact != old_contact:
-            at = next((i for i, row in enumerate(lines) if row.startswith("@ ")), None)
-            if at is None:
-                notes.append(f"{path} has no “@ ” contact line, so it wasn't changed. Add “@ {contact}” under your name.")
-            else:
+        at = next((i for i, row in enumerate(lines) if row.startswith("@ ")), None)
+        if at is not None:
+            if contact != old_contact:
                 lines[at] = _keep_end(lines[at], f"@ {contact}")
+        elif contact:
+            # A blank workspace's master starts with only its name, so the line goes in here, or nothing could.
+            with_it = with_contact("".join(lines), contact)
+            if with_it is None:
+                notes.append(f"{path} has no “# {name}” line to put your contact line under, so it wasn't changed. "
+                             f"Add “# {name}” and then “@ {contact}” at its top.")
+            else:
+                lines = with_it.splitlines(keepends=True)
+                notes.append(f"{path} has no contact line yet, so saving puts “@ {contact}” under your name.")
+                added += 1
         out[key] = "".join(lines)
 
     source = contact_source(cfg)
@@ -426,8 +464,27 @@ def _basics(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -
     if name != old_name and heading and not _written(heading):
         notes.append(f"Your master resume, {heading}, opens with your name. This section doesn't change it, so change "
                      f"“# {old_name}” there too.")
-    count = (name != old_name) + (contact != old_contact) + (paper != (old_paper or "letter"))
+    count = (name != old_name) + (contact != old_contact) + (paper != (old_paper or "letter")) + added
     return Draft(out, count, notes, {"name": name, "contact": contact, "paper": paper})
+
+
+def with_contact(text: str, contact: str) -> str | None:
+    """A master resume or letter with “@ contact” put under its name, and under its headline if one follows the name.
+    None when it has a contact line already, or no “# Name” line near the top to put one under."""
+    lines = text.splitlines(keepends=True)
+    if not contact or any(row.startswith("@ ") for row in lines):
+        return None
+    name = next((i for i, row in enumerate(lines[:6]) if row.startswith("# ")), None)
+    if name is None:
+        return None
+    end = "\r\n" if lines[name].endswith("\r\n") else "\n"
+    at = name + 1
+    if at < len(lines) and lines[at].startswith("= "):
+        at += 1
+    if not lines[at - 1].endswith("\n"):
+        lines[at - 1] += end
+    lines.insert(at, f"@ {contact}{end}")
+    return "".join(lines)
 
 
 # ---------- Work history ----------
@@ -503,6 +560,7 @@ def _section_end(doc: factsdoc.Doc, section: factsdoc.Section) -> int:
     return at
 
 
+@drafter("history")
 def _history(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -938,6 +996,7 @@ def _pattern(raw) -> str:
     return pattern
 
 
+@drafter("offlimits")
 def _offlimits(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -1021,6 +1080,7 @@ def _offlimits(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]
 
 # ---------- Skills and terms ----------
 
+@drafter("skills")
 def _skills(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     text = texts["terms"]
@@ -1168,6 +1228,7 @@ def _fact_notes(texts: dict[str, Any], cfg: dict[str, Any], facts: list[str]) ->
     return notes
 
 
+@drafter("achievements")
 def _achievements(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -1299,6 +1360,12 @@ def _assay(texts: dict[str, Any], cfg: dict[str, Any], key: str, kind: str) -> d
     if kind == "resume" and guard.get("heading_source") == own:
         more, also = checks.check_resume_structure(texts[key], checked)
         errors, warnings = errors + more, warnings + also
+    # What the assay reads from a master before it checks a word of a draft, such as its contact line. Without it every
+    # draft fails, so the master doesn't pass here either.
+    contact = next((row for row in texts["resume"].splitlines() if row.startswith("@ ")), None) if texts["resume"] else None
+    for problem in doctor.master_problems(texts[key], kind, str(cfg.get("candidate", {}).get("name", "")), contact):
+        fix = next((fix for word, fix in MASTER_FIXES if word in problem), MASTER_FIXES[-1][1])
+        errors.append(f"It has {problem}, so no draft made from it can pass. {fix}")
     only = []
     if own in approved:
         others = "\n".join(checks.source_body(rel, source(rel)) for rel in approved if rel != own)
@@ -1307,6 +1374,7 @@ def _assay(texts: dict[str, Any], cfg: dict[str, Any], key: str, kind: str) -> d
     return {"path": own, "errors": errors, "warnings": warnings, "only_here": only, "is_source": own in approved}
 
 
+@drafter("masters")
 def _masters(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     count = 0
@@ -1368,13 +1436,26 @@ def _masters(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) 
             plan.apply(doc)
             out["letter"] = doc.render()
             count += 1
+    # A master with no contact line fails every draft made from it, and these fields can't hold one, so the line from
+    # Name and contact goes in with the next save. This one opens with it to save, since the page drafts as it opens.
+    notes = []
+    found = factsdoc.Doc(texts["facts"]).contact() if texts["facts"] else None
+    contact = found[1] if found else ""
+    for key in ("resume", "letter"):
+        with_it = with_contact(out[key], contact) if out[key] else None
+        if with_it is not None:
+            out[key] = with_it
+            count += 1
+            notes.append(f"{profile.FILES[key]} has no contact line yet, so saving puts “@ {contact}” from Name and "
+                         "contact under your name.")
     preview = {key: _assay(out, cfg, key, kind) for key, kind in (("resume", "resume"), ("letter", "letter"))
                if out[key] and cfg.get("candidate", {}).get("name")}
-    return Draft(out, count, [], preview)
+    return Draft(out, count, notes, preview)
 
 
 # ---------- Gaps to answer ----------
 
+@drafter("gaps")
 def _gap_answers(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     """Answers to the gaps that keep coming up, as lines in facts.md: a yes as a fact under the section you chose, and
     a no as a line under Unsupported. Leaving a question for later, or saying it doesn't apply, changes no file."""
@@ -1597,6 +1678,7 @@ def _manual_checks(config: str, cfg: dict[str, Any], raws) -> tuple[str, int]:
     return config, max(changed, 1)
 
 
+@drafter("companies")
 def _companies(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     """The boards Pyrite reads each morning, the companies you check by hand, and what it searches Workday sites for.
     A pasted careers page address is read as the board it names, for the page to offer to add."""
@@ -1750,6 +1832,7 @@ def _market_notes(chosen: dict[str, str]) -> list[str]:
     return notes
 
 
+@drafter("where")
 def _where(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     config = texts["config"]
@@ -2250,6 +2333,7 @@ def _set_rows(text: str, key: str, rows: list[list[Any]]) -> str:
     return new
 
 
+@drafter("roles")
 def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) -> Draft:
     out = dict(texts)
     notes: list[str] = []
@@ -2309,8 +2393,3 @@ def _roles(texts: dict[str, Any], cfg: dict[str, Any], edits: dict[str, Any]) ->
         "test": try_title(test, new_cfg) if test else None,
         "prospects": _prospects(cfg, new_cfg, changed),
     })
-
-
-DRAFTERS = {"basics": _basics, "history": _history, "offlimits": _offlimits, "skills": _skills,
-            "achievements": _achievements, "masters": _masters, "gaps": _gap_answers, "companies": _companies,
-            "where": _where, "roles": _roles}

@@ -667,7 +667,7 @@ function renderUsage() {
     h("td", { class: "num" }, tokens(t.input_tokens)),
     h("td", { class: "num" }, tokens(t.output_tokens)),
     h("td", { class: "num" }, cost(t)));
-  const counted = "Every Claude run Pyrite starts is counted: the daily run, judging postings, Refresh resume, Interview prep, checking mail, industry outlooks and skill ages. A Claude Code session of your own isn't.";
+  const counted = "Every Claude run Pyrite starts is counted: the daily run, judging postings, Refresh resume, Interview prep, checking mail, industry outlooks, employer research and skill ages. A Claude Code session of your own isn't.";
   $("usage-summary").textContent = usage.all.runs
     ? `${counted} Cost is Claude Code's own estimate at API prices, which isn't a bill if you're on a Claude plan.`
     : `No Claude runs have been started from here yet. ${counted}`;
@@ -1769,7 +1769,8 @@ function checkBlock(job) {
 
 const refreshing = (job) => Boolean(job.refresh && job.refresh.state === "running");
 const prepping = (job) => Boolean(job.prep && job.prep.state === "running");
-const working = (job) => refreshing(job) || prepping(job);
+const researching = (job) => Boolean(job.culture && job.culture.state === "running");
+const working = (job) => refreshing(job) || prepping(job) || researching(job);
 const fileHref = (file) => `/files/${file.split("/").map(encodeURIComponent).join("/")}`;
 
 async function startRefresh(job) {
@@ -1832,6 +1833,60 @@ function prepBlock(job) {
   }
   return h("div", { class: "callout" }, h("strong", {}, `Interview prep written ${ago(result.at)}`), detail,
     h("p", { class: "muted" }, "Read it against what you remember. The assay catches invented numbers and terms, not a true fact framed misleadingly."));
+}
+
+// What the web says about how the employer works, which every job there shares, and where to read reviews yourself.
+// Built like an industry's outlook: every point links the source the research run found it in.
+function culturePart(job) {
+  const c = job.culture;
+  const links = job.culture_links || [];
+  if (!c && !links.length) return null;
+  const report = c && c.report;
+  const running = researching(job);
+  const error = h("p", { class: "error", role: "alert" });
+  const start = c ? h("button", { class: "btn", type: "button", disabled: running, onclick: async () => {
+    start.disabled = true;
+    try {
+      await api(`/api/job/${job.id}/culture`, {});
+      await openJob(job.id);
+    } catch (err) {
+      error.textContent = err.message;
+      start.disabled = false;
+    }
+  } }, running ? "Researching…" : report ? "Research again" : "Research with Claude") : null;
+  let line;
+  if (running) line = `Searching the web, started ${ago(c.started_at)}. This takes a few minutes, and you can close this panel meanwhile.`;
+  else if (c && c.state === "failed") line = h("span", { class: "alert" }, `The last try didn't finish: ${c.detail}${report ? " The research below is the one before it." : ""}`);
+  else if (report) line = `Researched ${ago(report.generated_at)}${c.stale ? ", so it may be out of date" : ""}. Every job at ${job.company} shares it, and tailoring sums it up in the notes.`;
+  else if (c) line = "Claude searches the web for how this employer works: process, performance reviews, layoffs and its labor record. Every point links its source. Each run uses your Claude plan for a few minutes.";
+  const sources = report ? new Map(report.sources.map((s) => [s.n, s])) : new Map();
+  const cite = (n) => {
+    const source = sources.get(n);
+    const href = source && safeHref(source.url);
+    return href ? h("a", { class: "cite", href, target: "_blank", rel: "noopener noreferrer", title: source.title }, `[${n}]`) : null;
+  };
+  const dropped = report ? report.dropped.points : 0;
+  const empty = report ? report.nothing_found || [] : [];
+  return h("div", { class: "outlook" },
+    h("h3", {}, "Employer"),
+    start ? h("div", { class: "outlook-head" }, start, h("span", { class: "muted" }, line)) : null,
+    error,
+    report ? [
+      report.sections.map((section) => [
+        h("h4", {}, section.heading),
+        h("ul", {}, section.points.map((point) => h("li", {}, point.text, point.sources.map(cite)))),
+      ]),
+      empty.length ? h("p", { class: "info-note" }, `Found nothing on: ${empty.join(", ")}. That means nothing turned up, not that the record is clean.`) : null,
+      report.sources.length ? h("details", { class: "outlook-sources" }, h("summary", {}, `Sources (${report.sources.length})`),
+        h("ol", {}, report.sources.map((s) => h("li", { value: String(s.n) },
+          safeHref(s.url) ? h("a", { href: safeHref(s.url), target: "_blank", rel: "noopener noreferrer" }, s.title) : s.title,
+          [s.publisher, s.date].filter(Boolean).length ? h("span", { class: "muted" }, ` · ${[s.publisher, s.date].filter(Boolean).join(", ")}`) : null)))) : null,
+      h("p", { class: "info-note" }, "Written by Claude from a web search. Pyrite kept only points whose sources came up in that search",
+        dropped ? `, and dropped ${plural(dropped, "point")} that didn't` : "",
+        ". It can't tell whether a page says what a point claims, so open the source before relying on it."),
+    ] : null,
+    links.length ? h("p", { class: "muted" }, "Read reviews yourself, since review sites don't allow automated reading: ",
+      links.flatMap((link, i) => [i ? " · " : "", h("a", { href: safeHref(link.url), target: "_blank", rel: "noopener noreferrer" }, link.name)])) : null);
 }
 
 // Reopening would wipe anything being typed in the panel, so only do it once the result is in.
@@ -1967,6 +2022,7 @@ async function openJob(id, list) {
       h("button", { class: "btn", type: "button", onclick: () => tryAct(job.id, { action: "note", notes: notesEl.value }, undefined, ["notes"]) }, "Save notes"),
       notesStatus))),
     job.notes_md ? h("div", {}, h("h3", {}, "Fit and interview notes"), h("div", { class: "prose" }, job.notes_md)) : null,
+    culturePart(job),
     job.score_reasons.length ? h("div", {}, h("h3", {}, `Why it scored ${job.score}`), h("p", { class: "muted" }, job.score_reasons.join(" · "))) : null,
     job.freshness_reasons.length ? h("div", {}, h("h3", {}, `Why its priority is ${job.rank}`), h("p", { class: "muted" }, [`Score ${job.score}`, ...job.freshness_reasons].join(" · "))) : null,
     job.description ? h("div", {}, h("h3", {}, "Posting"), h("div", { class: "prose" }, job.description)) : null,

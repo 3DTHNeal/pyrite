@@ -30,6 +30,7 @@ from . import (
     checks,
     claude_code,
     confirm,
+    culture,
     deadline,
     discover,
     doctor,
@@ -96,12 +97,22 @@ STATIC_FILES = {
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
     "/static/profile.js": ("profile.js", "text/javascript; charset=utf-8"),
-    # Each Profile section's editor is its own file, and index.html loads each one by name.
+    # Each Profile section's editor is its own file, and page() loads every one of them.
     **{f"/static/profile/{path.name}": (f"profile/{path.name}", "text/javascript; charset=utf-8")
        for path in sorted((STATIC / "profile").glob("*.js"))},
     # The mark, its two animations and the stage icons, drawn by art/icons/build.py.
     **{f"/static/icons/{path.name}": (f"icons/{path.name}", "image/png") for path in sorted((STATIC / "icons").glob("*.png"))},
 }
+# The line in index.html that page() replaces with a script tag for each section's editor.
+SECTIONS_MARK = "<!-- profile sections -->"
+
+
+def page() -> bytes:
+    """index.html with a script tag for every file in static/profile/, in place of SECTIONS_MARK. No section's script
+    uses another's, so their order doesn't matter, and adding a section adds no line to a list here."""
+    text = (STATIC / "index.html").read_text(encoding="utf-8")
+    tags = "\n".join(f'<script src="{src}"></script>' for src in STATIC_FILES if src.startswith("/static/profile/"))
+    return text.replace(SECTIONS_MARK, tags, 1).encode()
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 HEARD_BACK = {"reply": "responded", "interview": "interviewing", "offer": "offer", "rejected": "rejected"}
@@ -628,6 +639,9 @@ def job_detail(conn, job_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
     job["autofill_refusal"] = workday.refusal(conn, row, cfg)
     job["can_autofill"] = job["autofill_refusal"] is None or (job["autofill"] or {}).get("state") == "running"
     job["autofill_log"] = f"{job['app_folder']}/{workday.LOG}" if job["app_folder"] and (ROOT / job["app_folder"] / workday.LOG).exists() else ""
+    # What the web says about the employer, shared by every job there, and where to read reviews yourself.
+    job["culture"] = culture.status(row["company"]) if culture.company_key(row["company"]) else None
+    job["culture_links"] = culture.links(row["company"])
     return job
 
 
@@ -825,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in STATIC_FILES:
                 name, mime = STATIC_FILES[path]
-                return self._send(200, (STATIC / name).read_bytes(), mime)
+                return self._send(200, page() if name == "index.html" else (STATIC / name).read_bytes(), mime)
             if path == "/api/state":
                 conn = connect()
                 try:
@@ -965,6 +979,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._update(conn, cfg, body.get("switch") is True)
             if path == "/api/industries/outlook":
                 outlook.start(cfg, str(body.get("name") or ""))
+                return self._json({"ok": True}, 202)
+            match = re.fullmatch(rf"/api/job/{JOB_ID}/culture", path)
+            if match:
+                culture.start(conn, int(match.group(1)))
                 return self._json({"ok": True}, 202)
             match = re.fullmatch(rf"/api/job/{JOB_ID}/action", path)
             if match:
