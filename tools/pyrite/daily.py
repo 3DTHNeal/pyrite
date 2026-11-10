@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from . import checks, claude_code, confirm, discover, signals, skillage
+from . import checks, claude_code, confirm, culture, discover, signals, skillage
 from .claude_code import ClaudeFailed, find_claude
 from .cli import BOARD_FIELDS, apply_triage, ensure_folder, finish_job, queue
 from .store import ROOT, get_job, log_event, now, shorten
@@ -107,6 +107,7 @@ def tailor_prompt(job, folder: str, cfg: dict[str, Any], feedback: str = "", pol
     text += claude_code.files_section(ROOT, folder, tuple(path.rsplit("/", 1)[1] for path in tailor_files(folder, cfg)))
     text += claude_code.job_line(job) + f"Today is {today:%B} {today.day}, {today.year}.\n"
     text += skillage.prompt_section(skillage.signals(job["description"] or "", today))
+    text += culture.tailor_section(job["company"] or "", today)
     if feedback:
         text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{feedback}\n"
     if polish:

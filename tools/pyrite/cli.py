@@ -458,6 +458,27 @@ def cmd_outlook(args, conn):
 
 
 @_with_db
+def cmd_culture(args, conn):
+    """Have Claude research how one job's employer works. The job's panel on the dashboard runs this in the background with --worker."""
+    from . import culture
+    from .claude_code import ClaudeFailed
+
+    if not args.worker and store.IS_EXAMPLE:
+        sys.exit("The demo doesn't run Claude. Point PYRITE_HOME at your own workspace to research an employer.")
+    try:
+        if not args.worker and culture.status(store.get_job(conn, args.id)["company"])["state"] == "running":
+            sys.exit("That employer is already being researched.")
+        report = culture.run(conn, load_config(), args.id)
+    except (ClaudeFailed, ValueError, store.JobNotFound) as err:
+        sys.exit(str(err))
+    points = sum(len(s["points"]) for s in report["sections"])
+    empty = f" Found nothing on: {', '.join(report['nothing_found'])}." if report["nothing_found"] else ""
+    print(f"Kept {points} points about {report['company']} from {len(report['sources'])} sources. Dropped "
+          f"{report['dropped']['points']} points and {report['dropped']['sources']} sources that this run's searches never "
+          f"came across.{empty}")
+
+
+@_with_db
 def cmd_skills(args, conn):
     """List when the skills Pyrite knows became usable, or look up ones it doesn't on the web."""
     from . import skillage
@@ -1167,6 +1188,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name", help="the industry's name, as under [[promote.industry]]")
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_outlook)
+
+    p = sub.add_parser("culture", help="have Claude research how a job's employer works and treats people, keeping only sourced points")
+    p.add_argument("id", type=int, help=JOB_ID)
+    p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_culture)
 
     p = sub.add_parser("skills", help="list how long the skills postings ask years of have existed, or have Claude look new ones up on the web")
     p.add_argument("phrases", nargs="*", help="skills to look up, as postings write them")

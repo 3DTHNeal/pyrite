@@ -57,6 +57,7 @@ SECTIONS: tuple[dict[str, Any], ...] = (
               _model("inbox.model", "Reading mail", "Used when replies are read through Gmail.", mail.DEFAULT_MODEL),
               _model("market.model", "Industry outlooks", "Researches an outlook when you ask for one.", outlook.DEFAULT_MODEL),
               _model("skills.model", "Skill ages", "Used when research = true under [skills].", outlook.DEFAULT_MODEL),
+              _model("culture.model", "Employer research", "Researches how an employer works when you ask, from a job's panel.", outlook.DEFAULT_MODEL),
           )},
      )},
     {"id": "mail", "label": "Mail", "status": "mail",

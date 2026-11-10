@@ -285,7 +285,7 @@ class HowPyriteRuns(SettingsBase):
                 options.save({"version": options.view()["version"], "values": {name: value}})
         self.assertEqual(self.text(), SETTINGS_TOML)
         # The fact check's rules, the filters and the names the dashboard answers to are never in the list.
-        self.assertLessEqual({field["table"] for field in options.FIELDS.values()}, {"claude", "inbox", "market", "skills", "run", "dashboard"})
+        self.assertLessEqual({field["table"] for field in options.FIELDS.values()}, {"claude", "inbox", "market", "skills", "culture", "run", "dashboard"})
         self.assertNotIn("dashboard.allowed_hosts", options.FIELDS)
         self.assertNotIn("dashboard.port", options.FIELDS)
 

@@ -10,7 +10,8 @@ Your workspace (the folder `PYRITE_HOME` points to) holds:
 - each application's posting, drafts, notes, built documents and autofill log;
 - `data/pyrite.db`: jobs, statuses, timelines, the run log, the time, tokens and estimated cost of each Claude run, and, for possible replies and scam warnings, the sender, subject and date of matching mail.
 - `data/history/`: the earlier text of each profile file you change on the dashboard, so any save can be put back;
-- `data/market/`: the official employment numbers downloaded for the Industries tab, and the research each industry's outlook found.
+- `data/market/`: the official employment numbers downloaded for the Industries tab, and the research each industry's outlook found;
+- `data/culture/`: what the research on each employer you asked about found.
 
 The dashboard listens on localhost only. Nothing on it is reachable from another machine unless you set that up yourself.
 
@@ -24,6 +25,7 @@ The dashboard listens on localhost only. Nothing on it is reachable from another
 | IMAP reply detection | Your mail provider | Your credentials, to sign in read-only. Only message headers (sender, subject, date) are requested, never message bodies. |
 | Industries tab, official numbers | The US Bureau of Labor Statistics (data.bls.gov) | Requests for its public employment tables. The area codes asked for show the metro area and state you set under `[market]`. The BLS sees your IP address and Pyrite's user agent. |
 | Industries tab, outlook | Anthropic, through Claude Code, with web search and web fetch | The industry's name and codes, the metro area, state and country you set, the employers you follow in it, and the official numbers. Claude's searches and the pages it opens go to search providers and those sites. |
+| Employer research | Anthropic, through Claude Code, with web search and web fetch | The employer's name, the job's title and the posting's link. Nothing about you. Claude's searches and the pages it opens go to search providers and those sites. The review links on the job's panel open a DuckDuckGo search, or the NLRB's case search, for the employer's name, and only when you click one. |
 | Workday autofill | The employer's Workday site | What your answer sheet and tailored documents say, typed into a browser window you watch. Nothing is submitted. |
 | Update available | GitHub, or wherever Pyrite's code folder was cloned from | A `git fetch` of `main`, once an hour while the dashboard is open, and the code itself when you click **Update and restart**. GitHub sees your IP address. Nothing about you is sent. `check_updates = false` under `[dashboard]` turns it off. |
 | Building `.docx` and `.pdf` | LibreOffice or Word on your computer | Nothing leaves your computer. |
