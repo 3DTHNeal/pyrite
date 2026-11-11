@@ -1,0 +1,5 @@
+### Added
+
+- For tools built on the assay package: `numbers.MEASURED` reads scale as evidence nobody wrote as facts writes it. A currency code counts as a currency sign, against the digits or a space before them, so `EUR 2.4m` is 2.4 million and `RMB208.31 million` is read at all. A scale word may be plural, as in "27 thousands ordinary shares". A range states its scale or percent sign once, so `$40-50M` is 40 million to 50 million and `1.2-1.8%` is two percentages. A `Policy` asks for this with `wide`.
+- `numbers.MEASURED` sets aside three more kinds of digits that measure nothing: a day with no year or a run of days ("June 12", "12 June", "Mar 3-4, 2025"), a reference to a place in a document ("Note 4", "Lists 2-4", "item 6"), and a form or a numbered paper ("20-F", "COM(2024) 123"). A day or a reference that is an amount, such as "May 5 million" or "Notes 85,000", is still read.
+- The assay's version is 1.2.0. The default policy reads none of this, so what a Pyrite draft passes or fails is the same as before.
