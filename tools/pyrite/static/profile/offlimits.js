@@ -2,7 +2,7 @@
 // Off limits: what drafts must never mention, and what you haven't done. Each is a line in facts.md, which tells the
 // drafter, and a pattern under [guard]. The fact check reads both: a capitalized name under Do not use is blocked by
 // name even with no pattern. Blocking a term writes both. Taking anything off lets drafts say more, so saving that
-// asks for a code from this computer.
+// asks for a code from this computer once the workspace is set up.
 
 profileStep("offlimits", {
   render(ctx) {
@@ -158,7 +158,9 @@ profileStep("offlimits", {
     const main = h("div", { class: "stack profile-form" },
       byName,
       h("div", { class: "profile-pair" }, panel("never"), panel("nottrue")),
-      h("small", { class: "muted" }, "Blocking takes effect when you save. Taking something off lets drafts say more, so saving that asks for a code from this computer."),
+      h("small", { class: "muted" }, data.setting_up
+        ? "Blocking takes effect when you save. Your workspace is new, so taking something off needs no code yet. Once setup is done, it asks for one from this computer, because it lets drafts say more."
+        : "Blocking takes effect when you save. Taking something off lets drafts say more, so saving that asks for a code from this computer."),
       h("section", { class: "panel stack", "aria-label": "Test a sentence" },
         h("h3", { class: "profile-sub" }, "Test a sentence"), sentence,
         h("div", { class: "row" }, examples.map(([label, text]) => h("button", { class: "btn small", type: "button", onclick: () => {
