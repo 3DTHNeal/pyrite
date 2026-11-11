@@ -96,9 +96,10 @@ class Reading(unittest.TestCase):
         grouped = sorted(sorted((gap.folder, gap.number) for gap in g.gaps) for g in gaps.group(found))
         self.assertEqual(grouped, every(found))
 
-    def test_the_example_ranks_what_both_applications_raise(self):
+    def test_the_example_ranks_what_its_applications_raise(self):
         found = gaps.view()
-        self.assertEqual(found["applications"], 2)
+        # Four applications, two of which raise only safety certification, which the fact bank already lists as unsupported.
+        self.assertEqual(found["applications"], 4)
         by_id = {g["id"]: g for g in found["groups"]}
         self.assertEqual([g["id"] for g in gaps.questions(found)], ["rust", "team-size"])
         self.assertEqual(by_id["rust"]["count"], 2)
@@ -276,7 +277,7 @@ class Answering(Workspace):
     def test_the_hub_says_how_many_questions_are_waiting(self):
         view = profile.view()
         section = next(s for s in view["steps"] if s["id"] == "gaps")
-        self.assertEqual(section["summary"], "2 questions from 2 applications")
+        self.assertEqual(section["summary"], "2 questions from 4 applications")
         self.assertEqual(section["status"], "attention")
         self.assertTrue(any(n["step"] == "gaps" for n in view["needs"]))
 
@@ -309,7 +310,7 @@ class Command(Workspace):
     def test_listing_in_words(self):
         with mock.patch.object(cli, "_as_json", return_value=False):
             text = self.run_cli()
-        self.assertIn("2 requirements keep coming up as gaps, from 2 applications' notes", text)
+        self.assertIn("2 requirements keep coming up as gaps, from 4 applications' notes", text)
         self.assertIn("rust  Rust", text)
         self.assertIn("1 more gap came up in fewer applications", text)
 

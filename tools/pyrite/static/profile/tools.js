@@ -21,7 +21,7 @@ profileStep("tools", {
         h("dl", { class: "profile-facts" },
           h("dt", {}, "What it's for"), h("dd", {}, tool.for),
           h("dt", {}, "Without it"), h("dd", {}, tool.without),
-          tool.fix ? [h("dt", {}, tool.ok === true ? "Note" : "How to get it"), h("dd", { class: "profile-fix" }, tool.fix)] : null),
+          tool.fix ? [h("dt", {}, tool.ok === true ? "Note" : "How to get it"), h("dd", { class: "profile-fix" }, withCode(tool.fix))] : null),
         where);
     };
 
