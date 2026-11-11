@@ -213,14 +213,18 @@ EMPTY_LIST = re.compile(r"\A\[\s*\]\Z")
 
 
 def _find_list(raw: str) -> list[Any]:
-    """The longest JSON list of objects anywhere in the text, so a code fence or a sentence around it does no harm.
+    """The one JSON list of objects in the text, so a code fence or a sentence around it does no harm.
 
     A run that couldn't read the mail mustn't pass for one that found none, or the mail it missed would never be read
     again. So the error object the instructions ask for, a list of messages that was cut off, and an empty list with
     anything around it, even a sentence, all raise ValueError. Only an answer that is just `[]` means no mail.
+
+    So does an answer with two lists of objects. An email can hold a list of its own for Claude to copy out, and
+    there'd be no telling which list was the real one.
     """
     decoder = json.JSONDecoder()
     best: list[Any] = []
+    lists = 0
     position = 0
     while (found := JSON_START.search(raw, position)) is not None:
         start = found.start()
@@ -232,8 +236,13 @@ def _find_list(raw: str) -> list[Any]:
             position = start + 1
             continue
         if isinstance(value, dict) and "error" in value:
-            raise ValueError(f"It said it couldn't read the mail: {inbox._clean(value['error'], 200).rstrip('.') or 'no reason given'}.")
-        if isinstance(value, list) and len(value) > len(best) and any(isinstance(entry, dict) for entry in value):
+            said = inbox._clean(value["error"], 200).rstrip(".")
+            raise ValueError(f"It said it couldn't read the mail, in its words: “{said}”." if said else
+                             "It said it couldn't read the mail, and gave no reason.")
+        if isinstance(value, list) and any(isinstance(entry, dict) for entry in value):
+            lists += 1
+            if lists > 1:
+                raise ValueError("Its answer held more than one list of messages, so neither could be trusted.")
             best = value
         # Past a whole list, so a list inside a message isn't taken for one of its own. Into an object, for a list inside it.
         position = end if isinstance(value, list) else start + 1
@@ -248,6 +257,81 @@ def _find_list(raw: str) -> list[Any]:
 def parse_export(raw: str) -> list[Item]:
     """The messages Claude handed back, with anything malformed left out. Raises ValueError if there's no list at all."""
     return [item for item in map(_item, _find_list(raw)[:MAX_ITEMS]) if item]
+
+
+# The parts of a search result the sender wrote, which could name any address.
+SENDERS_OWN_WORDS = re.compile(r"snippet|body|text|content", re.I)
+
+
+def _carrying(value: Any, wanted: str) -> list[dict[str, Any]]:
+    """Every object in a parsed search result with `wanted` as one of its own values, innermost first."""
+    found: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        for child in value.values():
+            found += _carrying(child, wanted)
+        if any(child == wanted for child in value.values()):
+            found.append(value)
+    elif isinstance(value, list):
+        for child in value:
+            found += _carrying(child, wanted)
+    return found
+
+
+def _headers(value: Any) -> str:
+    """The strings in one message's part of a search result, leaving out its snippet and any body: those are the
+    sender's own words, which could name any address."""
+    if isinstance(value, dict):
+        return " ".join(_headers(child) for key, child in value.items() if not SENDERS_OWN_WORDS.search(str(key)))
+    if isinstance(value, list):
+        return " ".join(_headers(child) for child in value)
+    return str(value) if isinstance(value, (str, int)) else ""
+
+
+def searched(answer: str) -> list[str] | None:
+    """What every Gmail search in the run returned, or None for an answer that doesn't say, such as an export made
+    by hand. Raises ValueError if the run called a tool a mail check never needs, since an email may have asked it to."""
+    output = getattr(answer, "output", None)
+    if output is None:
+        return None
+    calls = claude_code.tool_calls(output)
+    stray = sorted({name for name, _ in calls if name not in ("ToolSearch", *GMAIL_TOOLS)})
+    if stray:
+        raise ValueError(f"It called {', '.join(stray)}, which a mail check never needs, so nothing it handed back was used.")
+    return [result for name, result in calls if name == GMAIL_TOOLS[0]]
+
+
+def vouched(item: Item, results: list[str]) -> bool:
+    """Whether Gmail's own search results hold this message, from this sender. Claude copies the list out of them, and
+    an email can ask it to copy something else: another sender, say, so a scam passes for the employer's reply.
+
+    The message is the innermost object holding its id. Its thread may hold mail from others too, as a reply to the
+    employer's message can be threaded with it, so only the message's own headers count."""
+    if not item.message_id:
+        return False
+    sender = f"{item.local}@{item.domain}".lower()
+    for result in results:
+        try:
+            parsed = json.loads(result)
+        except ValueError:
+            # Not JSON, so there's no telling headers from what the sender wrote. The id and address must both be there.
+            if re.search(rf"(?<!\w){re.escape(item.message_id)}(?!\w)", result) and sender in result.lower():
+                return True
+            continue
+        own = _carrying(parsed, item.message_id)[:1]
+        if own and sender in _sender(own[0]).lower():
+            return True
+    return False
+
+
+# The field that says who sent a message: `sender` in the connector's search results, `from` in other shapes.
+SENDER_KEY = re.compile(r"\A(sender|from)(_?address)?\Z", re.I)
+
+
+def _sender(message: dict[str, Any]) -> str:
+    """Who a message in a search result is from. Only its sender field counts where it has one: a scam can copy the
+    employer's address into its own To or Cc, and those are headers too."""
+    named = [value for key, value in message.items() if SENDER_KEY.match(str(key))]
+    return _headers(named) if named else _headers(message)
 
 
 def known_companies(conn, cfg: dict[str, Any], applied: bool = False) -> dict[str, set[str]]:
@@ -269,9 +353,13 @@ def known_companies(conn, cfg: dict[str, Any], applied: bool = False) -> dict[st
 
 
 def _own_domain(site: str, core: str, domains: set[str]) -> bool:
+    """Whether mail from `site` is the company's own. Once its domains are known, only they count: anyone can register
+    contoso.top, so the company's name with another ending is a lookalike, not Contoso."""
+    if domains:
+        return site in domains
     label, _, suffix = site.partition(".")
     compact = inbox._compact(core)
-    return site in domains or compact in (label, label + suffix)
+    return compact in (label, label + suffix)
 
 
 def _looks_like(label: str, core: str) -> bool:
@@ -499,14 +587,15 @@ def failed(conn, cfg: dict[str, Any], message: str) -> dict[str, Any]:
     return {"state": "error", "message": message[:300]}
 
 
-def ingest(conn, cfg: dict[str, Any], items: list[Item]) -> dict[str, Any]:
-    """Judge exported messages: possible replies to tracked jobs, and warnings about likely scams."""
+def ingest(conn, cfg: dict[str, Any], items: list[Item], left_out: int = 0) -> dict[str, Any]:
+    """Judge exported messages: possible replies to tracked jobs, and warnings about likely scams. `left_out` counts
+    the messages Claude listed that Gmail's search didn't vouch for."""
     jobs = inbox.tracked_jobs(conn)
     found = inbox.record_matches(conn, jobs, items, cfg)
     alerts = record_alerts(conn, items, jobs, known_companies(conn, cfg))
     inbox._record_status(conn, count=len(items), source_key=SOURCE_KEY, company="Email replies (Gmail)")
     conn.commit()
-    return {"state": "ok", "jobs": len(jobs), "messages": len(items), "found": found, "alerts": alerts}
+    return {"state": "ok", "jobs": len(jobs), "messages": len(items), "found": found, "alerts": alerts, "left_out": left_out}
 
 
 def ingest_file(conn, cfg: dict[str, Any], path: Path) -> dict[str, Any]:
@@ -542,6 +631,7 @@ def run(conn, cfg: dict[str, Any], claude: str | None = None, ask=claude_code.as
                 continue
             return _fail(conn, why + (" It was tried twice." if attempt == 2 else ""))
         try:
+            results = searched(answer)
             items = parse_export(answer)
         except ValueError as err:
             # Claude Code finished cleanly, but the run read no mail, so it isn't counted as a good one.
@@ -552,7 +642,16 @@ def run(conn, cfg: dict[str, Any], claude: str | None = None, ask=claude_code.as
             preview = inbox._clean(answer, 120)
             tried = " It was tried twice." if attempt == 2 else ""
             return _fail(conn, f"Claude didn't hand back a usable list: {err}{tried} Its answer began: {preview}")
-        return ingest(conn, cfg, items)
+        left_out = 0
+        if results is not None:
+            kept = [item for item in items if vouched(item, results)]
+            if items and not kept:
+                # Every message failing points at the run or a change in what Gmail returns, not at one email.
+                claude_code.mark_failed(conn, answer)
+                return _fail(conn, f"None of the {len(items)} messages Claude listed matched what Gmail's search returned, "
+                                   "by id and sender, so none were used.")
+            left_out, items = len(items) - len(kept), kept
+        return ingest(conn, cfg, items, left_out)
     raise AssertionError("unreachable")
 
 
@@ -568,7 +667,12 @@ def summary(result: dict[str, Any]) -> str:
     if result["state"] == "ok":
         replies, alerts = len(result["found"]), len(result.get("alerts", []))
         said = f"Mail checked: {replies} possible repl{'y' if replies == 1 else 'ies'}"
-        return said + (f", {alerts} possible scam{'' if alerts == 1 else 's'}." if alerts else ".")
+        said += f", {alerts} possible scam{'' if alerts == 1 else 's'}." if alerts else "."
+        left_out = result.get("left_out", 0)
+        if left_out:
+            said += (f" {left_out} message{' was' if left_out == 1 else 's were'} left out because Gmail's search didn't "
+                     "show it from the sender Claude named.")
+        return said
     if result["state"] == "error":
         return "Mail couldn't be checked: see the Sources tab."
     return "Reply detection isn't set up, so no mail was checked."

@@ -17,6 +17,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from assay.text import COMMENT
+
 from . import store
 
 PASTE_SHEET = Path("profile") / "workday-paste.md"
@@ -96,10 +98,11 @@ def paste_roles(lines: list[str]) -> list[dict[str, Any]]:
 
 
 def resume_roles(text: str) -> list[dict[str, Any]]:
-    """Each `####` role in a resume.md, with its bullets as the plain text a description box takes."""
+    """Each `####` role in a resume.md, with its bullets as the plain text a description box takes. Notes are left
+    out, as the built resume leaves them out, so the box gets the text the assay checked."""
     roles: list[dict[str, Any]] = []
     company = ""
-    for raw in text.splitlines():
+    for raw in COMMENT.sub("", text).splitlines():
         line = raw.strip()
         if line.startswith("#### "):
             title = line[5:].split(" | ")[0].strip()

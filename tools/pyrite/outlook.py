@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -339,10 +340,15 @@ def vet(answer: str, seen: Iterable[str], headings: tuple[str, ...] = HEADINGS) 
 
 def ask_web(conn, claude: str, kind: str, text: str, model: str, minutes: int) -> tuple[str, set[str]]:
     """One web-only Claude run: its closing message, and the pages it came across, for checking what it cites.
-    Recorded under `kind` for the usage panel. Raises ClaudeFailed when it doesn't finish."""
+    Recorded under `kind` for the usage panel. Raises ClaudeFailed when it doesn't finish.
+
+    It starts in an empty folder of its own, not the workspace. It reads no files, and a run that can fetch any page
+    shouldn't carry what Claude Code picks up from where it starts, such as the workspace's CLAUDE.md and the recent
+    commits in its git history, which name the employers applied to. A page it reads could ask for them in a link."""
     began = time.monotonic()
     try:
-        out = claude_code.run_process(command(claude, model), input=text, cwd=ROOT, timeout=minutes * 60)
+        with tempfile.TemporaryDirectory(prefix="pyrite-web-") as nowhere:
+            out = claude_code.run_process(command(claude, model), input=text, cwd=Path(nowhere), timeout=minutes * 60)
     except subprocess.TimeoutExpired as err:
         claude_code.record(conn, None, kind, claude_code.cut_short(err.stdout), time.monotonic() - began, ok=False)
         raise ClaudeFailed(f"Claude hadn't finished after {minutes} minutes.") from err

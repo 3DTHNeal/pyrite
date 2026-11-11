@@ -126,7 +126,8 @@ def job(data: dict[str, Any]) -> str:
         said.append(f"track {plain(data['track'])}")
     if data.get("priority"):
         said.append("your pick")
-    lines = [f"Job {data['id']} at {plain(data['company'])}: {', '.join(said)}."]
+    at = f" at {plain(data['company'])}" if data.get("company") else ""
+    lines = [f"Job {data['id']}{at}: {', '.join(said)}."]
     if data.get("fit"):
         reason = f": {plain(data['fit_reason'])}" if data.get("fit_reason") else "."
         lines.append(f"Fit {data['fit']}{reason}")

@@ -7,6 +7,8 @@ EMPHASIS = re.compile(r"\*+|(?<!\w)_+|_+(?!\w)")
 PLACEHOLDER = re.compile(
     r"\[[^\]]*\]|\{\{|\{[^{}\n]{0,40}\}|\bTODO\b|\bTBD\b|\bFIXME\b|\bX{2,}\b|<[A-Za-z_ ]+>"
 )
+# A note to yourself in the source, which the builder leaves out of every document. The same as build_resume.COMMENT.
+COMMENT = re.compile(r"<!--.*?-->", re.S)
 # A blank to fill in, such as ___%. Looked for before emphasis markers are taken out, since those are underscores too.
 BLANK = re.compile(r"_{3,}")
 # Letters from other alphabets, and Latin small capitals, that a reader takes for plain Latin ones. A word spelled only
@@ -59,9 +61,12 @@ def _fold_lookalikes(match: re.Match[str]) -> str:
 
 def matchable(text: str) -> str:
     """The text as a reader sees it: compatibility forms folded (full-width digits, no-break spaces), accents and
-    look-alike letters read as the plain letter, invisible characters and emphasis markers gone. Every check reads
-    this, and so do the sources it's compared with, so a word split by formatting or an accent is still that word."""
-    text = unicodedata.normalize("NFKD", text)
+    look-alike letters read as the plain letter, invisible characters, notes and emphasis markers gone. Every check reads
+    this, and so do the sources it's compared with, so a word split by formatting or an accent is still that word.
+
+    A note, `<!-- … -->`, prints nothing, so a word or number split by one prints whole: ph<!---->d is phd, and
+    4<!---->4 is 44. Its own text prints nowhere either, so it's left out rather than judged."""
+    text = unicodedata.normalize("NFKD", COMMENT.sub("", text))
     text = "".join(ch for ch in text if unicodedata.category(ch) not in ("Cf", "Mn"))
     text = unicodedata.normalize("NFC", text).translate(PLAIN_LATIN)
     text = re.sub(r"[^\W\d_]+", _fold_lookalikes, text)

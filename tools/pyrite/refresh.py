@@ -80,9 +80,9 @@ def prompt(job, folder: str, feedback: str = "", polish: str = "", unusable: boo
     text += claude_code.job_line(job) + f"Today is {datetime.now().date().isoformat()}.\n"
     if feedback:
         heading = "Your last answer couldn't be used:" if unusable else "The fact checker blocked your last draft. Fix the draft:"
-        text += f"\n{heading}\n{feedback}\n"
+        text += f"\n{heading}\n{feedback if unusable else claude_code.quoted(feedback)}\n"
     if polish:
-        text += f"\n{checks.POLISH_ASK}\n{polish}\n"
+        text += f"\n{checks.POLISH_ASK}\n{claude_code.quoted(polish)}\n"
     return text + claude_code.hand_back(DRAFT, (NOTES,))
 
 

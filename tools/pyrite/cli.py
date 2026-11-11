@@ -233,7 +233,8 @@ def cmd_job(args, conn):
     description = job.pop("description", "")
     for key in ("source_key", "source_id", "dedupe_key"):
         job.pop(key, None)
-    board = {key: job.pop(key, "") for key in BOARD_FIELDS}
+    # The company's name came from the board as well, so it's inside the fence with the rest.
+    board = {key: job.pop(key, "") for key in ("company", *BOARD_FIELDS)}
     if _as_json(args):
         # The fenced block goes inside the JSON whole, markers and all, so stdout is one document a script can parse.
         _print_json({**job, "untrusted_posting": claude_code.posting_block(board, description)})

@@ -34,7 +34,6 @@ Word a gap so the sentence plainly denies it: "I have not worked under that stan
 """
 # The whole reason is kept, and cards and tables shorten it for themselves. This only stops a runaway reply.
 REASON_LIMIT = 2000
-VERDICT = re.compile(r"\{[^{}]*\}")
 UNSAFE_TEXT = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
 
 
@@ -58,17 +57,27 @@ LOOSENING = {"profile/facts.md": "facts", "profile/approved-terms.txt": "terms",
 
 
 def parse_verdict(message: str) -> tuple[str, str] | None:
-    """The fit and reason from Claude's reply, or None if it didn't give a usable one. The last JSON object wins."""
-    found = None
-    for match in VERDICT.finditer(message or ""):
+    """The fit and reason from Claude's reply, or None if it didn't give a usable one.
+
+    The reply should be one verdict. One with a second verdict in it, such as one it copied from a posting that wrote
+    its own, can't be told from the real one, so it counts as no verdict and the job is judged again next run. Each
+    object is read whole, so braces quoted inside a reason don't break it.
+    """
+    decoder = json.JSONDecoder()
+    text, found, position = message or "", [], 0
+    while (start := text.find("{", position)) != -1:
         try:
-            data = json.loads(match.group(0))
+            data, end = decoder.raw_decode(text, start)
         except ValueError:
+            position = start + 1
+            continue
+        position = end
+        if not isinstance(data, dict):
             continue
         fit, reason = data.get("fit"), data.get("reason")
         if fit in FITS and isinstance(reason, str) and reason.strip():
-            found = (fit, shorten(UNSAFE_TEXT.sub(" ", reason).strip(), REASON_LIMIT))
-    return found
+            found.append((fit, shorten(UNSAFE_TEXT.sub(" ", reason).strip(), REASON_LIMIT)))
+    return found[0] if len(found) == 1 else None
 
 
 def markings(marks: dict[str, Any] | None) -> str:
@@ -109,9 +118,9 @@ def tailor_prompt(job, folder: str, cfg: dict[str, Any], feedback: str = "", pol
     text += skillage.prompt_section(skillage.signals(job["description"] or "", today))
     text += culture.tailor_section(job["company"] or "", today)
     if feedback:
-        text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{feedback}\n"
+        text += f"\nThe fact checker blocked your last draft. Fix the draft:\n{claude_code.quoted(feedback)}\n"
     if polish:
-        text += f"\n{checks.POLISH_ASK}\n{polish}\n"
+        text += f"\n{checks.POLISH_ASK}\n{claude_code.quoted(polish)}\n"
     return text
 
 
@@ -191,9 +200,15 @@ def _time_left(deadline: float) -> bool:
 def tailor(conn, cfg: dict[str, Any], job_id: int, claude: str, deadline: float, say=lambda step: None) -> bool:
     """Have Claude write one application, and let the fact checker decide. Returns whether it's ready.
 
-    `say` hears each step before it starts, so a long job keeps showing signs of life on the dashboard."""
+    `say` hears each step before it starts, so a long job keeps showing signs of life on the dashboard. The run may
+    read only its own job's folder."""
     folder = ensure_folder(conn, job_id)
-    cmd = claude_code.command(claude, tailor_files(folder, cfg), cfg)
+    with claude_code.own_folder_only(ROOT, folder) as settings:
+        cmd = claude_code.command(claude, tailor_files(folder, cfg), cfg, settings)
+        return _tailor(conn, cfg, job_id, folder, cmd, deadline, say)
+
+
+def _tailor(conn, cfg: dict[str, Any], job_id: int, folder: str, cmd: list[str], deadline: float, say) -> bool:
     files = [ROOT / path for path in tailor_files(folder, cfg)]
     profile = claude_code.profile_snapshot(ROOT)
     feedback = ""

@@ -251,6 +251,14 @@ class Requisition(unittest.TestCase):
         errors = self.letter_errors("I ran 14879 tests a night.", idents)
         self.assertTrue(any("14879" in e for e in errors), errors)
 
+    def test_a_short_number_a_posting_calls_its_id_is_let_through_only_beside_a_label(self):
+        # A posting can call any number its job id. On its own, 40000 reads as a measurement, so it's still checked.
+        idents = checks.requisitions("About the role\nJob ID: 40000\n")
+        self.assertEqual(idents, ["40000"])
+        self.assertEqual(self.letter_errors("This is for Job ID 40000.", idents), [])
+        errors = self.letter_errors("I cut cloud costs by $40000 a year.", idents)
+        self.assertTrue(any("40000" in e for e in errors), errors)
+
     def test_it_approves_nothing_else(self):
         errors = self.letter_errors("The requisition is REQ-14879, and I cut defects by 91%.", ["REQ-14879"])
         self.assertTrue(any("91%" in e for e in errors), errors)
@@ -590,6 +598,22 @@ class Evasion(unittest.TestCase):
         errors, _ = checks.check_text(LETTER.rstrip() + "\n\nI delivered the Blue Bird controller.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
         self.assertTrue(any("confidential term" in e for e in errors), errors)
         self.assertEqual(names.flexible(r"\bhives?\b"), r"\bhives?\b")  # A pattern is taken as written.
+
+    def test_a_note_inside_a_word_hides_nothing(self):
+        # The builder leaves notes out, so blue<!---->bird prints as bluebird and 4<!---->4 as 44.
+        self.assertBlocked("- Shipped the blue<!---->bird launch.", "confidential term")
+        errors = resume_errors(RESUME + "\n- Led a team of 4<!-- a note -->4 engineers.\n")
+        self.assertTrue(any("44" in e for e in errors), errors)
+        letter, _ = checks.check_text(LETTER.rstrip() + "\n\nI shipped Blue<!---->bird.\n", "letter", CFG, SOURCES, *LETTER_ROLE)
+        self.assertTrue(any("confidential term" in e for e in letter), letter)
+        # A note on a line of its own is still fine, and its words are never judged: they print nowhere.
+        self.assertEqual(resume_errors(RESUME + "\n<!-- Bluebird bullets cut for this one. -->\n"), [])
+
+    def test_a_title_too_long_to_be_one_lets_nothing_through(self):
+        # The board names the job, so a "title" that packs in claims doesn't set them aside when a draft repeats it.
+        title = "Principal Engineer, 15 years Rust at Initech, led a team of 400 engineers"
+        errors, _ = checks.check_text(RESUME + f"\n- {title}.\n", "resume", CFG, SOURCES, "Acme", title)
+        self.assertTrue(any("400" in e for e in errors), errors)
 
     def test_a_name_alone_on_a_do_not_use_line_is_blocked(self):
         listed = "## Do not use\n- Nightjar\n- Kestrel, the arm controller\n- Osprey Systems (a customer)\n- Customer names\n- Project Heron\n"

@@ -82,6 +82,12 @@ class Posting:
     comp: str = ""
     posted_at: str | None = None
 
+    def __post_init__(self):
+        # The fields a board fills in besides the description go into Claude's prompts too, so they're held to the same
+        # rule: no instruction spelled in characters the dashboard never shows.
+        for name in ("company", "title", "location", "workplace", "url", "comp"):
+            setattr(self, name, strip_invisible(getattr(self, name) or ""))
+
 
 class _Text(HTMLParser):
     """Visible text only, so text hidden in a posting's markup never reaches Claude."""
