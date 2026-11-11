@@ -1,0 +1,4 @@
+### Added
+
+- For tools built on the assay package: `numbers.MEASURED` sets aside digits that measure nothing, such as dates, years, act and CAS numbers, a unit label like "(in thousands)" and the nine months of "9M 2025", which it no longer reads as nine million. It reads an accounting negative, `$(103,567) thousand`, as that number. A `Policy` names what it sets aside, `numbers.not_measured` says what was set aside and where, and each finding keeps its place in the text as written. The default policy sets nothing aside, so what a Pyrite draft passes or fails is the same as before.
+- The assay has a version of its own, `assay.__version__`, and `seal.with_checker` adds it to a seal's hashes, so a pass can say which version of the checker gave it. Pyrite's own seals don't record it yet, so no earlier pass is affected.

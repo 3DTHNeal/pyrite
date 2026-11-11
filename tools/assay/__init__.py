@@ -14,7 +14,12 @@ that: nothing here may import from outside this package except a short list of s
 - `names`: confidential names, blocked however they're split, joined or pluralized.
 - `claims`: unsupported claims, and when a sentence names one only to deny it.
 - `links`: web addresses, domains and emails the sources don't write.
-- `seal`: hashes that tie a verdict to the exact text, sources and rules it judged.
+- `seal`: hashes that tie a verdict to the exact text, sources and rules it judged, and to this version of the checker.
 
 A tool builds its own gate from these, adding the rules particular to what it writes.
 """
+
+# The checker's own version, apart from any tool's built on it. The minor number goes up whenever a verdict could change
+# under some policy, and the major one when a caller would have to change too, so a seal that records it says which rules
+# gave a pass. 1.0 was the package with findings and policies, and 1.1 adds what a policy sets aside as not measured.
+__version__ = "1.1.0"

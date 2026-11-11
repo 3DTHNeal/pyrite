@@ -234,5 +234,102 @@ class TheLineBetweenTheTwo(unittest.TestCase):
         self.assertTrue(re.search(r"\$\s3m", numbers._blanked(numbers.PERCENT, "$5%3m")[0]))
 
 
+class NotMeasured(unittest.TestCase):
+    """Digits a source writes without measuring anything. `MEASURED` sets them aside and `EXACT` reads them as before."""
+    KINDS = [
+        ("date", "Filed on 2025-03-31 by the board.", "2025-03-31"),
+        ("date", "Filed on 31 March 2025 by the board.", "31 March 2025"),
+        ("date", "Filed on Mar. 31, 2025 by the board.", "Mar. 31, 2025"),
+        ("period", "Sales for 9M 2025 rose.", "9M"),  # Its year is set aside as a year.
+        ("identifier", "Under Regulation 2023/1230 the plant was cleared.", "2023/1230"),
+        ("identifier", "Solvent 7732-18-5 was used.", "7732-18-5"),
+        ("unit label", "Revenue (in thousands of dollars) is shown.", "(in thousands of dollars)"),
+        ("unit label", "Revenue (Millions) is shown.", "(Millions)"),
+        ("year", "In 2024, the mill reopened.", "2024"),
+    ]
+
+    def found(self, body: str, policy: Policy, known: str = "") -> list[str]:
+        return [f.text for f in numbers.number_findings(body, known, policy)]
+
+    def test_each_kind_is_set_aside_under_measured(self):
+        for kind, body, text in self.KINDS:
+            with self.subTest(body):
+                start = body.index(text)
+                self.assertIn((kind, start, start + len(text)), numbers.not_measured(body, MEASURED))
+                self.assertEqual(self.found(body, MEASURED), [])
+                self.assertEqual(numbers.quantities(body, MEASURED), [])
+
+    def test_and_read_as_before_under_exact(self):
+        for _kind, body, _text in self.KINDS:
+            with self.subTest(body):
+                self.assertEqual(numbers.not_measured(body, EXACT), [])
+                self.assertEqual(numbers.quantities(body, EXACT), numbers.quantities(body))
+                self.assertEqual(numbers.number_errors("Draft", body, "", "there", EXACT), errors_as_they_were("Draft", body, "", "there"))
+                self.assertTrue(self.found(body, EXACT))
+
+    def test_the_default_sets_nothing_aside_across_the_corpus(self):
+        for line in corpus():
+            with self.subTest(line=line[:80]):
+                self.assertEqual(numbers.quantities(line, EXACT), numbers.quantities(line))
+
+    def test_nine_months_isnt_nine_million(self):
+        body = "Revenue for 9M 2025 was $9M."
+        self.assertEqual([(q.value, q.text) for q in numbers.quantities(body)], [("9000000", "9M"), ("2025", "2025"), ("9000000", "$9M")])
+        self.assertEqual([(q.value, q.text) for q in numbers.quantities(body, MEASURED)], [("9000000", "$9M")])
+        self.assertEqual(self.found(body, MEASURED, known="Revenue was 9,000,000 (in dollars)."), [])
+        self.assertEqual(self.found("Revenue for 9M 2025 was $8M.", MEASURED, known="Revenue was 9,000."), ["$8M"])
+
+    def test_an_accounting_negative_is_its_number(self):
+        body = "Net loss was $(103,567) thousand."
+        self.assertEqual(numbers.not_measured(body, MEASURED), [("negative", body.index("("), body.index(")") + 1)])
+        read = numbers.quantities(body, MEASURED)
+        self.assertEqual([(q.value, q.text) for q in read], [("103567000", "$(103,567) thousand")])
+        self.assertEqual([(q.value, q.text) for q in numbers.quantities(body)], [("103567", "103,567"), ("thousand", "thousand")])
+        self.assertEqual(self.found(body, MEASURED, known="Net loss | (103,567) | (98,210)"), [])
+        self.assertEqual(self.found("Net loss was $(103,568) thousand.", MEASURED, known="Net loss | (103,567)"), ["$(103,568) thousand"])
+        self.assertEqual([(q.kind, q.text) for q in numbers.quantities("Margin fell (12.5)% and (3.1)%.", MEASURED)],
+                         [("percent", "(12.5)%"), ("percent", "(3.1)%")])
+        # Brackets against a word or other digits keep apart what they keep apart, and are read as before.
+        for body in ("See note(3).", "Items (3)(4) and (5)6."):
+            with self.subTest(body):
+                self.assertEqual(numbers.not_measured(body, MEASURED), [])
+                self.assertEqual(numbers.quantities(body, MEASURED), numbers.quantities(body))
+
+    def test_findings_keep_their_place_in_the_text_as_written(self):
+        body = "On 31 March 2025, (in thousands) revenue was $(551,102) and 2024 staff 1,757 at a 41.2% margin."
+        found = numbers.number_findings(body, "", MEASURED)
+        self.assertEqual([f.text for f in found], ["$(551,102)", "1,757", "41.2%"])
+        for f in found:
+            self.assertEqual(body[f.start:f.end], f.text)
+        self.assertEqual([body[start:end] for _kind, start, end in numbers.not_measured(body, MEASURED)],
+                         ["31 March 2025", "(in thousands)", "(551,102)", "2024"])
+
+    def test_a_year_written_as_an_amount_is_still_an_amount(self):
+        for body, text in (("Spent $2050 on parts.", "$2050"), ("Grew 2000% in a decade.", "2000%"),
+                           ("A budget of 1950 million.", "1950 million"), ("A 2020-fold rise.", "2020-fold")):
+            with self.subTest(body):
+                self.assertEqual(numbers.not_measured(body, MEASURED), [])
+                self.assertIn(text, self.found(body, MEASURED))
+        self.assertEqual(self.found("Staff of 2,024 and 2024.5 tonnes.", MEASURED), ["2,024", "2024.5"])
+
+    def test_evidence_is_read_the_same_way(self):
+        # A date in the evidence supports no number, as a date in the text judged is no claim.
+        self.assertEqual(self.found("A team of 31.", EXACT, known="Filed 31 March 2025."), [])
+        self.assertEqual(self.found("A team of 31.", MEASURED, known="Filed 31 March 2025."), ["31"])
+        held = numbers.evidence("Filed 31 March 2025. Loss $(4,120) thousand.", policy=MEASURED)
+        self.assertEqual(held.numbers, frozenset({"4120000"}))
+        self.assertEqual(numbers.number_findings("Loss of $4.12M.", held, MEASURED), [])
+
+    def test_a_policy_names_the_kinds_it_sets_aside(self):
+        years_only = Policy(set_aside=("year",))
+        body = "On 2025-03-31, in 2024, (103,567) thousand."
+        self.assertEqual([kind for kind, _start, _end in numbers.not_measured(body, years_only)], ["year", "year"])
+        self.assertEqual([q.text for q in numbers.quantities(body, years_only) if q.kind == "number"], ["03", "31,", "103,567"])
+        self.assertEqual([kind for kind, _start, _end in numbers.not_measured(body, Policy(negatives=True))], ["negative"])
+        self.assertEqual(set(MEASURED.set_aside), set(numbers.NOT_MEASURED))
+        self.assertTrue(MEASURED.negatives)
+        self.assertEqual((EXACT.set_aside, EXACT.negatives), ((), False))
+
+
 if __name__ == "__main__":
     unittest.main()

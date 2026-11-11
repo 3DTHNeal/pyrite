@@ -4,7 +4,9 @@ sources state, with the same value and scale. Nothing is worked out: 42 s to 9 s
 `number_errors` gives the verdict as sentences and `number_findings` gives it as data, each finding with its place in
 the text. Both take a `Policy`. The default, `EXACT`, is the rule above. `MEASURED` is for evidence nobody wrote as a
 list of facts, such as a filing whose tables state their unit once in a heading: it accepts a figure the evidence
-gives more exactly or at another scale, and still nothing is worked out."""
+gives more exactly or at another scale, and still nothing is worked out. It also sets aside what such evidence writes in
+digits without measuring anything, such as dates, years and act numbers, and reads an accounting negative, (103,567), as
+its number. `not_measured` says what a policy sets aside, and where."""
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -53,6 +55,29 @@ NUMBER_WORD = re.compile(
 )
 
 
+# What a source writes in digits that isn't a measurement. A policy names which of these it sets aside, and each is
+# read as blank space of the same length, in this order, on both sides of a check. A date: 2025-03-31, 31 March 2025,
+# March 31, 2025. A period counted in months before its year: the 9M of "9M 2025" is nine months, not nine million.
+# An identifier: an act numbered by its year, such as 2023/1230, or a CAS number, such as 7732-18-5. A unit label in
+# brackets: "(in thousands of dollars)" says what the figures are in, and its "thousands" counts nothing. A year from
+# 1900 to 2100 standing alone, though not one written as money, a percentage, a multiple or with a scale: $2050, 2000%
+# and 1950 million are amounts.
+MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?"
+YEAR = r"(?:19|20)\d{2}"
+NOT_MEASURED: dict[str, re.Pattern[str]] = {
+    "date": re.compile(rf"\b{YEAR}-\d{{2}}(?:-\d{{2}})?\b|\b\d{{1,2}} {MONTH} {YEAR}\b|\b{MONTH} \d{{1,2}}, {YEAR}\b"),
+    "period": re.compile(rf"\b\d{{1,2}}M(?= {YEAR}\b)"),
+    "identifier": re.compile(rf"\b{YEAR}/\d{{1,4}}\b|\b\d{{2,7}}-\d{{2}}-\d\b"),
+    "unit label": re.compile(r"\((?:in )?(?:thousands?|millions?|billions?)(?: of)?(?: [A-Za-z]+)?\)", re.I),
+    "year": re.compile(r"(?<![\d,.$€£])(?:19\d{2}|20\d{2}|2100)"
+                       r"(?![\d%×]|[,.]\d|\s?(?:[KkMBx]|MM|(?i:thousand|million|billion|trillion|bn|times|fold))\b|-fold)"),
+}
+# An accounting negative: $(103,567) thousand is that number, in thousands. A policy that reads negatives drops the
+# brackets, so a currency sign or scale written outside them still belongs to the number. Brackets straight after a
+# letter or against other digits, as in note(3) or (3)(4), are left alone: dropped, they would join what they keep apart.
+NEGATIVE = re.compile(r"(?<![\w.)])\((\d[\d,]*(?:\.\d+)?)\)(?![\d(]|\.\d)")
+
+
 def value(digits: str, scale: str = "") -> str:
     """A number as one canonical string: 1,500,000 and 1.5M are both 1500000, and 4.0 is 4."""
     digits = digits.replace(",", "")
@@ -81,6 +106,79 @@ def spelled(text: str) -> set[str]:
 
 def _phrases(pattern: re.Pattern[str], text: str) -> set[str]:
     return {m.group(0).lower() for m in pattern.finditer(text)}
+
+
+@dataclass(frozen=True)
+class Policy:
+    """How closely the evidence has to state a figure for it to support a claim.
+
+    The default asks for the same value at the same scale, which is right where a person wrote the evidence for this
+    purpose: $3M isn't the 3 a fact bank measured. Evidence that was written for something else states its unit once,
+    in a table's heading, and rounds as it pleases. For that, `rounded` accepts a figure the evidence gives more
+    exactly, and `shifts` lists the powers of ten its figures may be off by because their unit is said elsewhere.
+    `bare_percent` accepts a percentage the evidence gives as a plain number, as a column headed "%" does.
+
+    A figure is matched at another scale only when it's written to at least `figures` digits. A lone 2 would otherwise
+    be supported by any 1,757 the evidence holds, read as thousands and rounded.
+
+    `set_aside` names the kinds in `NOT_MEASURED` that aren't read as numbers at all, in the text judged and in its
+    evidence alike. `negatives` reads an accounting negative, (103,567), as the number in its brackets."""
+    rounded: bool = False
+    shifts: tuple[int, ...] = (0,)
+    bare_percent: bool = False
+    figures: int = 3
+    set_aside: tuple[str, ...] = ()
+    negatives: bool = False
+
+
+# The same value at the same scale, with every figure read as written. What every caller gets unless it asks otherwise.
+EXACT = Policy()
+# For evidence a person didn't write as a list of facts, such as a filing whose tables are in thousands. Dates, years
+# and the rest of `NOT_MEASURED` are set aside, and accounting negatives are read.
+MEASURED = Policy(rounded=True, shifts=(0, 3, 6, 9, -3, -6, -9), bare_percent=True, set_aside=tuple(NOT_MEASURED), negatives=True)
+
+
+def not_measured(text: str, policy: Policy = MEASURED) -> list[tuple[str, int, int]]:
+    """What a policy doesn't read as written, as (kind, start, end) in the order it stands, text[start:end] being it.
+    The kind is one of `NOT_MEASURED`, read as blank space, or "negative" for an accounting negative, read as the number
+    in its brackets. Under `EXACT` there is nothing."""
+    found = []
+    for kind, pattern in NOT_MEASURED.items():
+        if kind in policy.set_aside:
+            spans = [(m.start(), m.end()) for m in pattern.finditer(text)]
+            found += [(kind, start, end) for start, end in spans]
+            for start, end in spans:  # Blanked in place, so no later kind reads what this one took.
+                text = text[:start] + " " * (end - start) + text[end:]
+    if policy.negatives:
+        found += [("negative", m.start(), m.end()) for m in NEGATIVE.finditer(text)]
+    return sorted(found, key=lambda span: (span[1], span[2]))
+
+
+def _as_measured(text: str, policy: Policy) -> tuple[str, list[int], set[int]]:
+    """The text as a policy reads it, for each character of that the place it had in the text, with one more place at
+    the end, and the places of the brackets it dropped. What's set aside is blanked to the same length, and a
+    negative's brackets are dropped."""
+    spans = not_measured(text, policy)
+    if not spans:
+        return text, list(range(len(text) + 1)), set()
+    pieces: list[str] = []
+    places: list[int] = []
+    brackets: set[int] = set()
+    last = 0
+    for kind, start, end in spans:
+        pieces.append(text[last:start])
+        places += range(last, start)
+        if kind == "negative":
+            pieces.append(text[start + 1:end - 1])
+            places += range(start + 1, end - 1)
+            brackets |= {start, end - 1}
+        else:
+            pieces.append(" " * (end - start))
+            places += range(start, end)
+        last = end
+    pieces.append(text[last:])
+    places += [*range(last, len(text)), len(text)]
+    return "".join(pieces), places, brackets
 
 
 @dataclass(frozen=True)
@@ -130,51 +228,40 @@ def _amount(digits: str, scale: str = "") -> tuple[Decimal | None, int, int]:
     return amount, power - (len(digits.split(".")[1]) if "." in digits else 0), len(digits.replace(".", "").lstrip("0"))
 
 
-def quantities(text: str) -> list[Quantity]:
+def quantities(text: str, policy: Policy = EXACT) -> list[Quantity]:
     """Every number a text states, of each kind the checks know, in the order they stand. `numbers`, `percents` and
-    `spelled` are views of this: the same patterns, read the same way, with each one's place kept."""
+    `spelled` are views of this: the same patterns, read the same way, with each one's place kept. Under a policy that
+    sets figures aside, the text is read as `not_measured` says, and each quantity keeps its place in the text given."""
+    read, outer, brackets = _as_measured(text, policy)
+
+    def place(m: re.Match[str], inner: list[int] | None = None) -> tuple[int, int]:
+        """Where a match in what was read stands in the text, through the places of a blanked copy if it was one. A
+        negative's brackets, dropped to read it, are part of it again."""
+        first, last = (m.start(), m.end() - 1) if inner is None else (inner[m.start()], inner[m.end() - 1])
+        start, end = outer[first], outer[last] + 1
+        return start - (start - 1 in brackets), end + (end in brackets)
+
     found = []
-    for m in PERCENT.finditer(text):
-        found.append(Quantity("percent", value(m.group(1)), m.group(0), m.start(), m.end(), *_amount(m.group(1))))
-    without_percents, places = _blanked(PERCENT, text)
+    for m in PERCENT.finditer(read):
+        start, end = place(m)
+        found.append(Quantity("percent", value(m.group(1)), text[start:end], start, end, *_amount(m.group(1))))
+    without_percents, places = _blanked(PERCENT, read)
     for m in NUMBER.finditer(without_percents):
         scale = m.group("word") or m.group("letter") or m.group("cash") or ""
-        start, end = places[m.start()], places[m.end() - 1] + 1
+        start, end = place(m, places)
         found.append(Quantity("number", value(m.group("digits"), scale), text[start:end], start, end,
                               *_amount(m.group("digits"), scale)))
-    without_numbers, places = _blanked(NUMBER, text)
+    without_numbers, places = _blanked(NUMBER, read)
     for m in NUMBER_WORD.finditer(without_numbers):
-        start, end = places[m.start()], places[m.end() - 1] + 1
+        start, end = place(m, places)
         found.append(Quantity("spelled", m.group(0).lower(), text[start:end], start, end))
-    for m in MULTIPLE.finditer(text):
-        found.append(Quantity("multiple", m.group(0).lower(), m.group(0), m.start(), m.end()))
-    for m in NUMERIC_MULTIPLE.finditer(text):
-        found.append(Quantity("multiple", f"{value(m.group(1))}x", m.group(0), m.start(), m.end(), *_amount(m.group(1))))
+    for m in MULTIPLE.finditer(read):
+        start, end = place(m)
+        found.append(Quantity("multiple", m.group(0).lower(), text[start:end], start, end))
+    for m in NUMERIC_MULTIPLE.finditer(read):
+        start, end = place(m)
+        found.append(Quantity("multiple", f"{value(m.group(1))}x", text[start:end], start, end, *_amount(m.group(1))))
     return sorted(found, key=lambda q: (q.start, q.end, q.kind))
-
-
-@dataclass(frozen=True)
-class Policy:
-    """How closely the evidence has to state a figure for it to support a claim.
-
-    The default asks for the same value at the same scale, which is right where a person wrote the evidence for this
-    purpose: $3M isn't the 3 a fact bank measured. Evidence that was written for something else states its unit once,
-    in a table's heading, and rounds as it pleases. For that, `rounded` accepts a figure the evidence gives more
-    exactly, and `shifts` lists the powers of ten its figures may be off by because their unit is said elsewhere.
-    `bare_percent` accepts a percentage the evidence gives as a plain number, as a column headed "%" does.
-
-    A figure is matched at another scale only when it's written to at least `figures` digits. A lone 2 would otherwise
-    be supported by any 1,757 the evidence holds, read as thousands and rounded."""
-    rounded: bool = False
-    shifts: tuple[int, ...] = (0,)
-    bare_percent: bool = False
-    figures: int = 3
-
-
-# The same value at the same scale. What every caller gets unless it asks otherwise.
-EXACT = Policy()
-# For evidence a person didn't write as a list of facts, such as a filing whose tables are in thousands.
-MEASURED = Policy(rounded=True, shifts=(0, 3, 6, 9, -3, -6, -9), bare_percent=True)
 
 
 @dataclass(frozen=True)
@@ -189,9 +276,22 @@ class Evidence:
     percent_amounts: tuple[Decimal, ...] = ()
 
 
-def evidence(known: str, amounts_too: bool = True) -> Evidence:
+def evidence(known: str, amounts_too: bool = True, policy: Policy = EXACT) -> Evidence:
     """The numbers a known text holds, read the way a draft's are. The exact policy compares them as written and
-    never looks at the amounts, so the check leaves those out when that's the policy it was given."""
+    never looks at the amounts, so the check leaves those out when that's the policy it was given. What a policy sets
+    aside is set aside here too, so a date in the evidence supports no number. Judge a text by the policy its evidence
+    was read with."""
+    if policy.set_aside or policy.negatives:
+        found = quantities(known, policy)
+
+        def held(kind: str) -> frozenset[str]:
+            return frozenset(q.value for q in found if q.kind == kind)
+
+        def held_amounts(kind: str) -> tuple[Decimal, ...]:
+            return tuple(sorted({q.amount for q in found if q.kind == kind and q.amount is not None}))
+
+        return Evidence(held("number"), held("percent"), held("spelled"), held("multiple"),
+                        held_amounts("number"), held_amounts("percent"))
     read = quantities(known) if amounts_too else []
 
     def amounts(kind: str) -> tuple[Decimal, ...]:
@@ -244,9 +344,9 @@ def _supported(claim: Quantity, known: Evidence, policy: Policy) -> bool:
 def number_findings(body: str, known: str | Evidence, policy: Policy = EXACT) -> list[Finding]:
     """Each number, percentage, spelled-out number and multiple in body that the known text doesn't hold, in the order
     they stand. `known` is the evidence as text, or as `evidence` read it when many bodies are judged against it."""
-    held = known if isinstance(known, Evidence) else evidence(known, amounts_too=policy != EXACT)
+    held = known if isinstance(known, Evidence) else evidence(known, amounts_too=policy != EXACT, policy=policy)
     return [Finding("numbers", q.kind, q.value, q.text, q.start, q.end)
-            for q in quantities(body) if not _supported(q, held, policy)]
+            for q in quantities(body, policy) if not _supported(q, held, policy)]
 
 
 def number_errors(label: str, body: str, known: str | Evidence, where: str, policy: Policy = EXACT) -> list[str]:

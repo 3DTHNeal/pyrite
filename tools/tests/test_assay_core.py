@@ -96,6 +96,19 @@ class WorksOnItsOwn(unittest.TestCase):
         after = {"facts.md": seal.digest(b"two"), "rules": seal.value_digest({"a": 2, "b": 1})}
         self.assertEqual(seal.changed(before, after), ["facts.md"])
 
+    def test_a_seal_can_name_the_checker_that_gave_it(self):
+        import assay
+        self.assertRegex(assay.__version__, r"^\d+\.\d+\.\d+$")
+        prints = {"facts.md": seal.digest(b"one")}
+        sealed = seal.with_checker(prints)
+        self.assertEqual(sealed, {"facts.md": seal.digest(b"one"), seal.CHECKER_KEY: assay.__version__})
+        self.assertEqual(prints, {"facts.md": seal.digest(b"one")})  # The caller's own record is left as it was.
+        self.assertEqual(seal.changed(sealed, seal.with_checker(prints)), [])
+        self.assertEqual(seal.changed({**sealed, seal.CHECKER_KEY: "0.9.0"}, sealed), [seal.CHECKER_KEY])
+        # A seal recorded before the version was kept names it once, and one that never keeps it is compared as before.
+        self.assertEqual(seal.changed(prints, sealed), [seal.CHECKER_KEY])
+        self.assertEqual(seal.changed(prints, dict(prints)), [])
+
 
 class SaysWhyItWontLoad(unittest.TestCase):
     """An install that can't reach tools/assay gets a reason and a fix, not a traceback from deep inside an import."""
