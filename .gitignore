@@ -37,3 +37,7 @@ approved-terms.previous.txt
 *.egg-info/
 build/
 dist/
+
+# Claude Code worktrees and per-machine Claude settings
+.claude/worktrees/
+.claude/settings.local.json
