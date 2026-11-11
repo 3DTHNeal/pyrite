@@ -13,6 +13,8 @@ Your workspace (the folder `PYRITE_HOME` points to) holds:
 - `data/market/`: the official employment numbers downloaded for the Industries tab, and the research each industry's outlook found;
 - `data/culture/`: what the research on each employer you asked about found.
 
+Your browser also keeps a copy of what the dashboard last showed, in its storage for the dashboard's address, so the next load can show it at once while Pyrite works out the latest. Clearing that site's data in the browser removes it.
+
 The dashboard listens on localhost only. Nothing on it is reachable from another machine unless you set that up yourself.
 
 ## What goes where

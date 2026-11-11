@@ -184,12 +184,18 @@ def group(gaps: list[Gap]) -> list[Group]:
     """Gaps that name the same requirement, together, most often raised first. Each gap joins the first group with a
     gap it matches, so the result is the same each time for the same notes."""
     groups: list[Group] = []
+    # The groups holding a gap with each word. Two gaps that share no word are never the same, so only these are checked.
+    having: dict[str, set[int]] = {}
     for gap in gaps:
         # A gap with no words to match by stands alone: two gaps called "Domain" can be about anything.
-        home = next((g for g in groups if any(same(gap.tokens, other.tokens) for other in g.gaps)), None)
-        if home is None:
-            groups.append(home := Group("", ""))
-        home.gaps.append(gap)
+        near = sorted(set().union(*(having.get(word, ()) for word in gap.tokens)))
+        at = next((i for i in near if any(same(gap.tokens, other.tokens) for other in groups[i].gaps)), None)
+        if at is None:
+            at = len(groups)
+            groups.append(Group("", ""))
+        groups[at].gaps.append(gap)
+        for word in gap.tokens:
+            having.setdefault(word, set()).add(at)
     used: set[str] = set()
     for found in groups:
         names = Counter(gap.name.lower() for gap in found.gaps)
@@ -305,8 +311,9 @@ def view(conn=None, root: Path | None = None) -> dict[str, Any]:
         members = []
         for gap in found.gaps:
             job = jobs.get(gap.folder)
+            # When the notes were written only matters against an answer, and reading it for every gap is slow on Windows.
             notes = root / gap.folder / NOTES
-            written = datetime.fromtimestamp(notes.stat().st_mtime).astimezone() if notes.exists() else None
+            written = datetime.fromtimestamp(notes.stat().st_mtime).astimezone() if since and notes.exists() else None
             members.append({
                 "folder": gap.folder, "title": folders.get(gap.folder, {}).get("title", gap.folder),
                 "number": gap.number, "name": gap.name, "text": gap.text[:MAX_TEXT * 2], "kind": gap.kind,

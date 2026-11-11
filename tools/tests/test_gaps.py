@@ -77,6 +77,25 @@ class Reading(unittest.TestCase):
         bare = gaps.group(gaps.parse("## Gaps to prepare for\n\n1. **Domain.**\n", "a") + gaps.parse("## Gaps to prepare for\n\n1. **Domain.**\n", "b"))
         self.assertEqual([g.folders for g in bare], [["a"], ["b"]])
 
+    def test_grouping_puts_each_gap_where_checking_every_group_would(self):
+        # Only groups sharing a word with a gap are checked against it, which must change nothing.
+        names = ["Rust", "Rust in production", "Team size", "Leading a team of ten", "C++", "Hands-on C++", "Kubernetes",
+                 "Vendor management", "Vendors", "Public cloud", "Production services", "Domain", "Size of team",
+                 "Production Rust services", "Cloud vendors", "Domain"]
+        found = [gaps.Gap(f"f{i % 5}", i, name, name, "open", gaps.tokens(name)) for i, name in enumerate(names * 3)]
+
+        def every(items):
+            groups: list[list[gaps.Gap]] = []
+            for gap in items:
+                home = next((g for g in groups if any(gaps.same(gap.tokens, other.tokens) for other in g)), None)
+                if home is None:
+                    groups.append(home := [])
+                home.append(gap)
+            return sorted(sorted((gap.folder, gap.number) for gap in g) for g in groups)
+
+        grouped = sorted(sorted((gap.folder, gap.number) for gap in g.gaps) for g in gaps.group(found))
+        self.assertEqual(grouped, every(found))
+
     def test_the_example_ranks_what_both_applications_raise(self):
         found = gaps.view()
         self.assertEqual(found["applications"], 2)

@@ -739,6 +739,22 @@ class Promotion(unittest.TestCase):
         self.assertEqual(self.view(company="Globex")["promoted"], ["Robotics"])
         self.assertEqual(self.view(company="Globexian Foods")["promoted"], [])
 
+    def test_patterns_read_as_one_match_as_they_would_one_at_a_time(self):
+        cases = [
+            ([r"\brobots?\b", r"\bplcs?\b", "motion control"], "Our PLC team", re.I),
+            ([r"\brobots?\b", r"\bplcs?\b"], "A plain posting", re.I),
+            ([r"(a)\1", "zzz"], "aa", re.I),  # A group number means another group once joined.
+            ([r"(?P<x>a)", r"(?P<x>b)"], "b", 0),  # So does a name, twice.
+            (["(?i)foo", "bar"], "FOO", 0),  # A flag must open the whole pattern.
+            (["Acme"], "acme", 0),
+            ([], "anything", re.I),
+        ]
+        for patterns, text, flags in cases:
+            with self.subTest(patterns=patterns):
+                self.assertEqual(score._any(patterns, text, flags), any(re.search(p, text, flags) for p in patterns))
+        self.assertIsNone(score._either((r"(a)\1", "zzz"), re.I))
+        self.assertIsNotNone(score._either((r"\brobots?\b", "(?i:x)"), re.I))
+
     def test_a_promotion_does_not_outweigh_age(self):
         fresh = self.view(posted_at="2026-11-03")
         stale = self.view(posted_at="2026-09-01", location="Hill Valley", company="Globex")

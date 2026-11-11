@@ -100,6 +100,9 @@ def _named(name: str) -> str:
 @lru_cache(maxsize=20000)
 def _mentions(terms: tuple[str, ...], text: str) -> int:
     """Cached because the dashboard ranks every job on every refresh, and descriptions rarely change."""
+    # Most postings name none of an industry's terms, and one read of the text says so.
+    if not _any(terms, text):
+        return 0
     return sum(len(re.findall(term, text, re.I)) for term in terms)
 
 
@@ -210,8 +213,30 @@ def freshness(job: dict[str, Any], cfg: dict[str, Any], today: date, swept_at: s
     }
 
 
+# A group number or name would point at another pattern's group once they're joined, and a flag such as (?i) must open
+# the whole pattern, so patterns with any of these are read one at a time.
+_UNJOINABLE = re.compile(r"\\\d|\(\?P[=<]|\(\?<\w|\(\?[a-zA-Z]+\)")
+
+
+@lru_cache(maxsize=1024)
+def _either(patterns: tuple[str, ...], flags: int) -> re.Pattern[str] | None:
+    """The patterns joined into one, so a text is read once rather than once for each, or None if they can't be."""
+    if any(_UNJOINABLE.search(p) for p in patterns):
+        return None
+    try:
+        return re.compile("|".join(f"(?:{p})" for p in patterns), flags)
+    except re.error:
+        return None
+
+
 def _any(patterns, text, flags=re.I):
-    return any(re.search(p, text, flags) for p in patterns)
+    patterns = tuple(patterns)
+    if not patterns:
+        return False
+    joined = _either(patterns, flags)
+    if joined is None:
+        return any(re.search(p, text, flags) for p in patterns)
+    return joined.search(text) is not None
 
 
 # What may come between plain words: spaces, commas, hyphens, periods and parentheses, so "St. Louis" matches
