@@ -240,6 +240,27 @@ class ReplyMatching(InboxBase):
         self.assertEqual(self.replies(first), [])
         self.assertEqual(len(self.replies(second)), 1)
 
+    def test_a_subject_naming_a_closed_role_goes_to_none_of_the_open_ones(self):
+        first = self.applied(title="Staff Firmware Engineer")
+        second = self.applied(title="Engineering Manager, Platform")
+        self.applied(title="Principal Robotics Engineer", status="rejected")
+        self.scan(mail("Contoso <contoso@myworkday.com>", "Contoso Job Application Update: R1234 Principal Robotics Engineer (Open)"))
+        self.assertEqual((self.replies(first), self.replies(second)), ([], []))
+        # A subject that names no role at all still goes to every open one, since it could be about any of them.
+        self.scan(mail("sam@contoso.com", "Hello"))
+        self.assertEqual((len(self.replies(first)), len(self.replies(second))), (1, 1))
+
+    def test_mail_from_the_employers_shop_is_not_a_reply(self):
+        job = self.applied()
+        self.scan(
+            mail("Contoso.com <auto-confirm@contoso.com>", "Ordered 1 item: Shoes"),
+            mail("Contoso <ship@contoso.com>", "Your package has shipped"),
+            mail("Contoso <orders@contoso.com>", "Your order #4412 is out for delivery"),
+        )
+        self.assertEqual(self.replies(job), [])
+        self.scan(mail("sam@contoso.com", "Your application: next steps"))
+        self.assertEqual(len(self.replies(job)), 1)
+
     def test_receipts_and_account_mail_are_not_replies(self):
         job = self.applied()
         self.scan(
@@ -658,6 +679,15 @@ class MailScan(MailBase):
         answer = self.scan(exported(subject="Thank you for applying to Contoso", id="m2",
                                     snippet="Unfortunately we have decided to move forward with other candidates."))
         self.assertEqual([hit["job_id"] for hit in answer["found"]], [job])
+
+    def test_thank_you_for_your_interest_is_a_receipt_only_when_its_text_says_so(self):
+        job = self.applied()
+        thanks = self.scan(exported("no-reply@us.greenhouse-mail.io", "Thank you for your interest in Contoso",
+                                    snippet="We'll review your application and be in touch if there's a fit."))
+        self.assertEqual(thanks["found"], [])
+        rejection = self.scan(exported("no-reply@us.greenhouse-mail.io", "Thank you for your interest in Contoso", id="m2",
+                                       snippet="Unfortunately we have decided not to move forward."))
+        self.assertEqual([hit["job_id"] for hit in rejection["found"]], [job])
 
     def test_a_scam_is_kept_once_with_reasons_and_tied_to_the_job_it_names(self):
         job = self.applied()

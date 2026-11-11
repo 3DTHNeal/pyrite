@@ -78,6 +78,16 @@ RECEIPT_SUBJECT = re.compile(
     r"|(sign[- ]in|security|access) code)\b",
     re.I,
 )
+# "Thank you for your interest" is a receipt as often as a rejection. It counts as a receipt only when the message's
+# own text is at hand and says neither, since header-only mail can't tell the two apart.
+INTEREST_SUBJECT = re.compile(r"\bthanks? (you )?for your interest\b", re.I)
+# An employer that also sells to the public sends its shop's mail from the same domain. An order is never a reply.
+SHOP_SUBJECT = re.compile(
+    r"\b(your (order|package|delivery|shipment|purchase|receipt|invoice|subscription)|order (confirmation|confirmed|"
+    r"#?\d+)|ordered \d+ items?|(has |have )?(shipped|been delivered|out for delivery|arriving)|delivery update|"
+    r"refund|payment (received|confirmation))\b",
+    re.I,
+)
 # Words that make a receipt-like subject a real answer after all, when the message's own text is at hand.
 ANSWER_TEXT = re.compile(
     r"\b(unfortunately|regret|not (to )?(move|moving) forward|other candidates|decided to|interview\w*|schedule|"
@@ -360,10 +370,16 @@ def _read_mailbox(creds: Credentials, jobs: list[sqlite3.Row], cfg: dict[str, An
 
 def is_receipt(message: Message) -> bool:
     """Automatic mail an application sets off, which isn't the company answering. When the message's own text is at
-    hand, as it is through Gmail, a receipt-like subject over a rejection or an interview invitation still counts."""
+    hand, as it is through Gmail, a receipt-like subject over a rejection or an interview invitation still counts.
+    Mail from the employer's shop, such as an order or a delivery, is left out with them."""
+    if SHOP_SUBJECT.search(message.subject) and not HIRING_SUBJECT.search(message.subject):
+        return True
+    text = getattr(message, "text", "") or ""
+    if INTEREST_SUBJECT.search(message.subject):
+        return bool(text.strip()) and not ANSWER_TEXT.search(text)
     if not RECEIPT_SUBJECT.search(message.subject):
         return False
-    return not ANSWER_TEXT.search(getattr(message, "text", "") or "")
+    return not ANSWER_TEXT.search(text)
 
 
 def _words(text: str) -> str:
@@ -375,11 +391,20 @@ def _names_title(subject: str, title: str) -> bool:
     return words.strip() != "" and words in _words(subject)
 
 
+def _names_another_job(conn, matched: list[sqlite3.Row], subject: str) -> bool:
+    """Whether the subject names a job at the same companies other than these, such as one you've heard back on."""
+    ids = {job["id"] for job in matched}
+    companies = sorted({job["company"] for job in matched})
+    rows = conn.execute(f"SELECT id, title FROM jobs WHERE company IN ({', '.join('?' * len(companies))})", companies)
+    return any(row["id"] not in ids and _names_title(subject, row["title"]) for row in rows)
+
+
 def record_matches(conn, jobs: list[sqlite3.Row], messages: Sequence[Message], cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Add each new match to its job's timeline. This never touches a job's status.
 
     Receipts are left out. When a message matches several applications at one company and its subject names some of
-    their titles, only those get it; otherwise there's no telling which it's about, so they all do."""
+    their titles, only those get it. A subject that names another job at that company, such as one already closed,
+    goes to none of them. Otherwise there's no telling which it's about, so they all do."""
     found = []
     domains = {job["id"]: employer_domains(job, cfg) for job in jobs}
     cutoffs = {job["id"]: _cutoff(job) for job in jobs}
@@ -391,6 +416,8 @@ def record_matches(conn, jobs: list[sqlite3.Row], messages: Sequence[Message], c
             continue
         matched = [job for job in jobs if message.date >= cutoffs[job["id"]] and is_match(job, message, domains[job["id"]])]
         named = [job for job in matched if _names_title(message.subject, job["title"])]
+        if matched and not named and _names_another_job(conn, matched, message.subject):
+            continue
         detail = message.detail()
         for job in named or matched:
             if detail in seen[job["id"]]:

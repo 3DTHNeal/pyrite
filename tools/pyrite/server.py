@@ -568,9 +568,11 @@ def build_state(conn, cfg) -> dict[str, Any]:
     brief = conn.execute("SELECT * FROM briefings ORDER BY id DESC LIMIT 1").fetchone()
     briefing = dict(brief) if brief else None
     if briefing:
-        # The report names jobs as they stood when it was written, so say how much has moved since.
+        # The report names jobs as they stood when it was written, so say how much has moved since. A pass you undid
+        # or reopened doesn't count: the job is where the report left it. Applying can't be undone.
         briefing["since"] = {kind: count for kind, count in conn.execute(
-            "SELECT kind, COUNT(DISTINCT job_id) FROM events WHERE ts > ? AND kind IN ('applied', 'passed') GROUP BY kind",
+            """SELECT e.kind, COUNT(DISTINCT e.job_id) FROM events e JOIN jobs j ON j.id = e.job_id
+               WHERE e.ts > ? AND (e.kind = 'applied' OR (e.kind = 'passed' AND j.status = 'passed')) GROUP BY e.kind""",
             (briefing["ts"],))}
     # The boards search.toml watches now, and the inbox. A board taken out of it isn't checked any more, so its last
     # good read would otherwise stay on the list as working. The demo's boards are made up, and the example's search.toml

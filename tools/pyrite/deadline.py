@@ -14,6 +14,7 @@ close any day but hasn't closed. Only a firm deadline that has passed makes a jo
 """
 import re
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +113,8 @@ def _without_year(text: str, today: date) -> date | None:
     return None
 
 
+# The dashboard reads every job's deadline on each refresh, from text that rarely changes.
+@lru_cache(maxsize=5000)
 def in_posting(description: str, today: date | None = None) -> tuple[str | None, bool]:
     """The closing date a posting states, as an ISO date or None, and whether it's firm rather than a floor. Given
     `today`, a date written without a year is read as the one nearest today. That year is a guess, so once the date

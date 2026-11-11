@@ -68,6 +68,14 @@ class Dashboard(Base):
         # The funnel still has every job at its stage, so its stages add up to every job.
         self.assertEqual(next(f["count"] for f in state["funnel"] if f["stage"] == "Ready to send"), 2)
 
+    def test_the_field_report_leaves_out_a_pass_you_undid(self):
+        self.conn.execute("INSERT INTO briefings (ts, body) VALUES ('2000-01-01T00:00:00+00:00', 'Report')")
+        kept, undone = self.add(source_id="1"), self.add(source_id="2")
+        for job in (kept, undone):
+            server.apply_action(self.conn, job, {"action": "status", "status": "passed"}, CFG)
+        server.apply_action(self.conn, undone, {"action": "unpass"}, CFG)
+        self.assertEqual(server.build_state(self.conn, CFG)["briefing"]["since"], {"passed": 1})
+
     def test_a_board_no_longer_watched_leaves_the_sources_list(self):
         ts = store.now()
         for key in ("greenhouse:anthropic", "workday:dropped", "inbox:gmail"):

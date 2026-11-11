@@ -257,10 +257,14 @@ def _fact_lines(facts: str) -> list[str]:
     return [item.text for section in doc.sections() if section.kind == "facts" for item in doc.items(section)]
 
 
-def covered(found: Group, lines: list[str]) -> str | None:
-    """The first line that names every word of one of the group's gaps, or None."""
-    for line in lines:
-        words = tokens(line)
+def tokenized(lines: list[str]) -> list[tuple[str, frozenset[str]]]:
+    """Each line with its words, read once for every group `covered` checks against them."""
+    return [(line, tokens(line)) for line in lines]
+
+
+def covered(found: Group, lines: list[tuple[str, frozenset[str]]]) -> str | None:
+    """The first line that names every word of one of the group's gaps, or None. `lines` comes from `tokenized`."""
+    for line, words in lines:
         if any(gap.tokens and gap.tokens <= words for gap in found.gaps):
             return line
     return None
@@ -288,7 +292,8 @@ def view(conn=None, root: Path | None = None) -> dict[str, Any]:
         facts = (root / "profile" / "facts.md").read_text(encoding="utf-8")
     except OSError:
         facts = ""
-    unsupported, fact_lines, rows = _unsupported(facts), _fact_lines(facts), answers()
+    # Tokenized once here: every group is checked against every line, which was most of the dashboard's load time.
+    unsupported, fact_lines, rows = tokenized(_unsupported(facts)), tokenized(_fact_lines(facts)), answers()
     out = []
     for found in group(gaps):
         answer = answer_for(found, rows)
