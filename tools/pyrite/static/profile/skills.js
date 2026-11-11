@@ -1,6 +1,7 @@
 "use strict";
 // Skills and terms: words a draft may use that aren't elsewhere in your facts, from approved-terms.txt. Taking one off
-// is saved at once; approving one lets every draft name it, so saving that asks for a code from this computer.
+// is saved at once; approving one lets every draft name it, so saving that asks for a code from this computer once
+// the workspace is set up.
 
 profileStep("skills", {
   render(ctx) {
@@ -60,7 +61,9 @@ profileStep("skills", {
         review),
       aside: h("div", { class: "panel stack" }, h("h2", {}, "Before you approve one"),
         h("p", {}, "Every future draft may name an approved term, so approve only what you could talk about in an interview."),
-        h("p", { class: "muted" }, "Approving asks for a code sent to this computer's notifications. Taking a term off needs none.")),
+        h("p", { class: "muted" }, ctx.data.setting_up
+          ? "Your workspace is new, so approving a term needs no code from this computer yet. Once setup is done, approving asks for one. Taking a term off never needs one."
+          : "Approving asks for a code sent to this computer's notifications. Taking a term off needs none.")),
     };
   },
 });
