@@ -45,7 +45,20 @@ def settings(cfg: dict[str, Any]) -> dict[str, Any]:
         else DEFAULT_HOUSING_SHARE / 100,
         # None while unset, when the home state's statewide local tax, if it has one, is counted. [] is none at all.
         "home_local_taxes": [str(key) for key in local if key in taxes.LOCAL] if isinstance(local, list) else None,
+        "own_local_taxes": own_taxes(raw),
     }
+
+
+def own_taxes(raw: dict[str, Any]) -> list[taxes.LocalTax]:
+    """Your own local taxes from [relocation] own_local_taxes, leaving out any that can't be used: problems() names them."""
+    entries = raw.get("own_local_taxes")
+    found = []
+    for entry in entries if isinstance(entries, list) else []:
+        try:
+            found.append(taxes.own_local_tax(entry if isinstance(entry, dict) else {}))
+        except ValueError:
+            continue
+    return found
 
 
 def problems(cfg: dict[str, Any]) -> list[str]:
@@ -70,6 +83,16 @@ def problems(cfg: dict[str, Any]) -> list[str]:
             if unknown:
                 found.append(f"home_local_taxes under [relocation] names {', '.join(map(repr, unknown))}, which Pyrite doesn't know. "
                              "`pyrite relocate --taxes` lists the ones it does.")
+    own = raw.get("own_local_taxes")
+    if own is not None:
+        if not isinstance(own, list):
+            found.append('own_local_taxes under [relocation] needs to be a list, as in [{ name = "Transit district tax", rate = 0.5 }].')
+        else:
+            for at, entry in enumerate(own, 1):
+                try:
+                    taxes.own_local_tax(entry if isinstance(entry, dict) else {})
+                except ValueError as err:
+                    found.append(f"own_local_taxes under [relocation], number {at}: {err}.")
     return found
 
 
@@ -77,7 +100,7 @@ def problems(cfg: dict[str, Any]) -> list[str]:
 class Home:
     area: prices.Area
     state: str
-    local: tuple[str, ...]
+    local: tuple[taxes.Local, ...]  # Keys of taxes.LOCAL, then your own.
     pay: float | None
     filing: str
     housing: str
@@ -104,7 +127,7 @@ def home(cfg: dict[str, Any]) -> Home | str:
     if area is None:
         area = prices.state(abbr)
     named = rules["home_local_taxes"]
-    local = tuple(named) if named is not None else tuple(taxes.local_for(abbr, ""))
+    local = (*(named if named is not None else taxes.local_for(abbr, "")), *rules["own_local_taxes"])
     return Home(area, abbr, local, rules["current_pay"], rules["filing"], rules["housing"], rules["housing_share"])
 
 
@@ -149,9 +172,9 @@ def compare(place: prices.Found, comp: str, cfg: dict[str, Any], here: Home | No
     views.sort(key=lambda v: v["id"] != lead)
     return {
         "home": {"name": here.area.name, "state": here.state, "pay": round(here.pay), "net": round(now.net),
-                 "taxes": _tax_lines(now), "local": [taxes.LOCAL[key].name for key in here.local]},
+                 "taxes": _tax_lines(now), "local": [taxes.resolve(item).name for item in here.local]},
         "there": {"name": place.area.name, "kind": place.area.kind, "state": place.state, "said": place.said,
-                  "places": place.places, "local": [taxes.LOCAL[key].name for key in local],
+                  "places": place.places, "local": [taxes.resolve(item).name for item in local],
                   "same_pay_net": round(same.net), "same_pay_taxes": _tax_lines(same)},
         "prices": {"all": round(ratios["all"], 4), "housing": round(ratios["housing"], 4)},
         "views": views,
@@ -216,6 +239,13 @@ def for_job(job: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any] | None:
     no place named. When it can't be worked out, {"problem": a sentence}."""
     if job.get("location_kind") not in MOVING_KINDS or not (job.get("location") or "").strip():
         return None
+    try:
+        return _for_job(job, cfg)
+    except prices.Unavailable as err:
+        return {"problem": f"Pyrite couldn't get BEA's price levels, which it downloads the first time: {err}"}
+
+
+def _for_job(job: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any] | None:
     here = home(cfg)
     if isinstance(here, str):
         return {"problem": here}
@@ -252,10 +282,60 @@ def text(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def local_taxes_text() -> str:
-    """Every local tax Pyrite knows, for choosing home_local_taxes."""
-    lines = ["Local income taxes Pyrite knows. Name the ones you pay at home under [relocation] home_local_taxes:", ""]
-    for key, tax in sorted(taxes.LOCAL.items(), key=lambda item: (item[1].state, item[0])):
-        where = "statewide, unless a city's own applies" if tax.statewide else ", ".join(tax.places) or "by district, never matched from a posting"
-        lines.append(f"  {key:<16} {US_STATES.get(tax.state, tax.state)}: {tax.name} ({tax.year}). {where}.")
+def known_tax(key: str) -> dict[str, Any]:
+    """One of Pyrite's own local taxes, as the Settings tab and `pyrite relocate --taxes` list it."""
+    tax = taxes.LOCAL[key]
+    where = ("anywhere in the state, unless a city's own applies" if tax.statewide
+             else f"in {', '.join(tax.places)}" if tax.places else "")
+    return {"key": key, "name": tax.name, "state": tax.state, "state_name": US_STATES.get(tax.state, tax.state),
+            "year": tax.year, "rate": taxes.describe(tax), "where": where, "note": tax.note}
+
+
+def own_entry(tax: taxes.LocalTax, entry: dict[str, Any]) -> dict[str, Any]:
+    """One of your own local taxes, as search.toml has it and in words."""
+    return {**{k: entry[k] for k in ("name", "rate", "over", "over_married", "base") if k in entry}, "said": taxes.describe(tax)}
+
+
+def local_view(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Your local taxes at home and Pyrite's table to pick from, for the Settings tab."""
+    raw = cfg.get("relocation") if isinstance(cfg.get("relocation"), dict) else {}
+    assert isinstance(raw, dict)
+    rules = settings(cfg)
+    market = cfg.get("market") or {}
+    state_name = str(market.get("state") or "").strip()
+    abbr = prices.state_code(state_name) if state_name else None
+    named = rules["home_local_taxes"]
+    entries = [entry for entry in raw.get("own_local_taxes") or [] if isinstance(entry, dict)] \
+        if isinstance(raw.get("own_local_taxes"), list) else []
+    own = []
+    for entry in entries:
+        try:
+            own.append(own_entry(taxes.own_local_tax(entry), entry))
+        except ValueError:
+            continue
+    return {
+        "named": named, "own": own, "unset": named is None,
+        # While none are named, the home state's statewide one counts, so the page says which that is.
+        "default": taxes.local_for(abbr, "") if abbr and named is None else [],
+        "home": {"metro": market.get("metro") or "", "state": state_name},
+        "table": [known_tax(key) for key in sorted(taxes.LOCAL, key=lambda k: (taxes.LOCAL[k].state, k))],
+        "bases": taxes.OWN_BASES, "max_rate": taxes.OWN_MAX_RATE,
+    }
+
+
+def local_taxes_text(words: str = "") -> str:
+    """The local taxes Pyrite knows that match `words`, or all of them, for choosing home_local_taxes."""
+    keys = taxes.search_local(words)
+    if not keys:
+        return (f"Pyrite's table has no local tax matching \"{words}\". If you pay one, add it yourself under "
+                "[relocation] own_local_taxes, or have Claude look it up: `pyrite relocate --research-taxes \"City, ST\"`.")
+    lead = "Local income taxes Pyrite knows" + (f", matching \"{words}\"" if words else "")
+    lines = [f"{lead}. Name the ones you pay at home under [relocation] home_local_taxes:", ""]
+    for key in sorted(keys, key=lambda k: (taxes.LOCAL[k].state, k)):
+        tax = known_tax(key)
+        where = f" Charged {tax['where']}." if tax["where"] else ""
+        lines.append(f"  {key:<14} {tax['state_name']}: {tax['name']}, {tax['rate']} ({tax['year']}).{where}")
+    lines += ["", "One that isn't here, such as a district's, goes under own_local_taxes as a rate over a threshold:",
+              '  own_local_taxes = [{ name = "Transit district tax", rate = 0.5, over = 0, base = "wages" }]',
+              "`pyrite relocate --research-taxes \"City, ST\"` has Claude look up the ones where you live, with sources."]
     return "\n".join(lines)

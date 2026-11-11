@@ -935,6 +935,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(_settings_page())
             if path == "/api/settings/schedule":
                 return self._json(schedule.view())
+            if path == "/api/settings/local-taxes":
+                return self._json(options.local_taxes_view())
             if path == "/api/settings/status":
                 fresh = parse_qs(urlparse(self.path).query).get("fresh") == ["1"]
                 return self._json(options.status(load_config(), fresh))
@@ -1345,6 +1347,8 @@ PROFILE_WRITES = {
     "/api/settings": _save_settings,
     "/api/settings/options": _save_options,
     "/api/settings/schedule": _change_schedule,
+    "/api/settings/local-taxes": lambda body: options.save_local_taxes(body),
+    "/api/settings/local-taxes/research": lambda body: options.research_local_taxes(body),
     "/api/facts": _save_facts,
     "/api/profile": _save_profile,
     "/api/profile/put-back": _put_back,

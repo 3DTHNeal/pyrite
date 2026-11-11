@@ -8,7 +8,9 @@ A small, honest model, not tax advice. What it assumes:
   wages, so two earners would pay somewhat more than this says.
 - Federal income tax, Social Security and Medicare (FICA, with the extra 0.9% Medicare), the state's income tax, the
   state's mandatory payroll taxes on employees (disability and paid leave insurance, transit taxes), and a short table
-  of the local income taxes that matter most. Local taxes not in LOCAL are left out, and the table's notes say so.
+  of the city and county income taxes that matter most. A job elsewhere comes under the ones in LOCAL; other local
+  taxes are left out, and the table's notes say so. At home, you name yours: from LOCAL, or your own, as a rate over a
+  threshold, which covers the district taxes no city name tells apart.
 - Each state's brackets, standard deduction, personal exemption and personal credits, and the phase-outs and
   recaptures that change the answer by more than a few hundred dollars at pay from about $50k to $500k. What's left
   out is said beside the state.
@@ -20,8 +22,11 @@ is marked 2025, which is what it is. Payroll and local rates carry their own yea
 tables here and the years beside them, and the tests in test_relocate.py say what moved.
 """
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from .score import US_STATES
 
 INF = float("inf")
 FILINGS = ("single", "married")
@@ -238,8 +243,9 @@ PAYROLL: dict[str, tuple[Payroll, ...]] = {
 
 @dataclass(frozen=True)
 class LocalTax:
-    """A city's, county's or district's income tax. `base` is what it's charged on: "wages", or "state" for the state's
-    taxable income. `brackets` are (single, married), as for a state; `of_state_tax` is a share of the state's tax."""
+    """A city's, county's or district's income tax. `base` is what it's charged on: "wages", or "taxable" for the
+    state's taxable income. `brackets` are (single, married), as for a state; `of_state_tax` is a share of the state's
+    tax. One of your own, from [relocation] own_local_taxes, has no state and a year of 0."""
     name: str
     state: str
     year: int
@@ -260,14 +266,14 @@ def _flat(rate: float) -> tuple[Brackets, Brackets]:
 LOCAL: dict[str, LocalTax] = {
     "nyc": LocalTax("New York City income tax", "NY", 2026,
                     (((0, .03078), (12_000, .03762), (25_000, .03819), (50_000, .03876)),
-                     ((0, .03078), (21_600, .03762), (45_000, .03819), (90_000, .03876))), base="state",
+                     ((0, .03078), (21_600, .03762), (45_000, .03819), (90_000, .03876))), base="taxable",
                     places=("New York City", "New York, NY", "NYC", "Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island")),
     "yonkers": LocalTax("Yonkers resident surcharge", "NY", 2026, ((), ()), of_state_tax=.1675, places=("Yonkers",)),
     "philadelphia": LocalTax("Philadelphia wage tax", "PA", 2026, _flat(.0374), places=("Philadelphia",)),
     "pittsburgh": LocalTax("Pittsburgh earned income tax", "PA", 2026, _flat(.03), places=("Pittsburgh",)),
     "pa": LocalTax("Local earned income tax", "PA", 2026, _flat(.01), statewide=True,
                    note="Most Pennsylvania towns and school districts together charge at least 1%."),
-    "md": LocalTax("County income tax", "MD", 2026, _flat(.032), base="state", statewide=True,
+    "md": LocalTax("County income tax", "MD", 2026, _flat(.032), base="taxable", statewide=True,
                    note="3.2% is the rate in most of the populous counties. The range is 2.25% to 3.3%."),
     "in": LocalTax("County income tax", "IN", 2026, _flat(.015), statewide=True,
                    note="Every Indiana county charges one. 1.5% is near the middle of the range."),
@@ -286,14 +292,6 @@ LOCAL: dict[str, LocalTax] = {
     "lexington": LocalTax("Lexington occupational tax", "KY", 2026, _flat(.0225), places=("Lexington",)),
     "wilmington": LocalTax("Wilmington wage tax", "DE", 2026, _flat(.0125), places=("Wilmington",)),
     "birmingham": LocalTax("Birmingham occupational tax", "AL", 2026, _flat(.01), places=("Birmingham",)),
-    # District taxes whose boundaries don't follow any one city's name, so a posting never puts a job under them. Name
-    # them for your home under [relocation] home_local_taxes.
-    "metro-shs": LocalTax("Metro supportive housing services tax", "OR", 2026,
-                          (((0, 0.0), (125_000, .01)), ((0, 0.0), (200_000, .01))), base="state",
-                          note="Charged on residents of the Metro district, in parts of three counties."),
-    "multnomah-pfa": LocalTax("Multnomah County Preschool for All tax", "OR", 2026,
-                              (((0, 0.0), (125_000, .015), (250_000, .03)), ((0, 0.0), (200_000, .015), (400_000, .03))),
-                              base="state", places=("Multnomah",), note="Charged on residents of Multnomah County."),
 }
 
 
@@ -302,6 +300,59 @@ def local_for(state: str, city: str) -> list[str]:
     own = [key for key, tax in LOCAL.items() if tax.state == state and city and any(
         re.search(rf"(?<!\w){re.escape(place)}(?!\w)", city, re.I) for place in tax.places)]
     return own or [key for key, tax in LOCAL.items() if tax.state == state and tax.statewide]
+
+
+# What a local tax of your own may be charged on, as [relocation] own_local_taxes writes it.
+OWN_BASES = {"wages": "your wages", "taxable": "your state taxable income"}
+OWN_MAX_RATE = 10.0  # Percent. No local income tax in the country comes near it, so more is a typo.
+
+
+def own_local_tax(entry: dict[str, Any]) -> LocalTax:
+    """One of your own local taxes, from search.toml: { name = "...", rate = 1.5, over = 125000, over_married = 200000,
+    base = "taxable" }. `rate` is a percent on what's past `over` (0 if left out), and `over_married` is the threshold
+    for a joint return (the same as `over` if left out). Two rates over two thresholds are two entries, since each
+    adds to the one below it. Raises ValueError, naming what's wrong, for an entry that can't be used."""
+    name = entry.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 100:
+        raise ValueError("needs a name, in quotes, of up to 100 characters")
+    rate = entry.get("rate")
+    if isinstance(rate, bool) or not isinstance(rate, int | float) or not 0 < rate <= OWN_MAX_RATE:
+        raise ValueError(f"{name}: rate needs to be a percent above 0 and at most {OWN_MAX_RATE:g}, as in 1.5")
+    over = entry.get("over", 0)
+    married = entry.get("over_married", over)
+    for label, value in (("over", over), ("over_married", married)):
+        if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= 10_000_000:
+            raise ValueError(f"{name}: {label} needs to be a number of dollars, 0 or more, as in 125000")
+    base = entry.get("base", "wages")
+    if base not in OWN_BASES:
+        raise ValueError(f"{name}: base needs to be \"wages\" or \"taxable\"")
+    brackets: tuple[Brackets, Brackets] = (((0, 0.0), (float(over), rate / 100)), ((0, 0.0), (float(married), rate / 100)))
+    return LocalTax(name.strip(), "", 0, brackets, base=str(base))
+
+
+def describe(tax: LocalTax, filing: str = "single") -> str:
+    """A local tax's rate in a few words, as "1% over $125,000 of your state taxable income"."""
+    if tax.of_state_tax:
+        return f"{tax.of_state_tax:.4g} of the state's income tax"
+    steps = [(start, rate) for start, rate in _by_filing(tax.brackets, filing) if rate]
+    on = OWN_BASES.get(tax.base, "your wages")
+    if len(steps) == 1 and not steps[0][0]:
+        return f"{steps[0][1] * 100:.4g}% of {on}"
+    if len(steps) == 1:
+        return f"{steps[0][1] * 100:.4g}% over ${steps[0][0]:,.0f} of {on}"
+    return f"{steps[0][1] * 100:.4g}% to {steps[-1][1] * 100:.4g}% of {on}, by brackets"
+
+
+def search_local(words: str) -> list[str]:
+    """The keys of the LOCAL taxes that match every word given, in a tax's name, the places it's matched by, its
+    state's name, or its key. A state's two letters match that state alone. No words lists them all."""
+    wanted = [word for word in re.split(r"[\s,]+", (words or "").lower()) if word]
+    found = []
+    for key, tax in LOCAL.items():
+        text = " ".join([key, tax.name, US_STATES.get(tax.state, ""), *tax.places, tax.note]).lower()
+        if all(word.upper() == tax.state if len(word) == 2 and word.upper() in US_STATES else word in text for word in wanted):
+            found.append(key)
+    return found
 
 
 @dataclass
@@ -398,16 +449,25 @@ def payroll_taxes(wages: float, state: str) -> list[tuple[str, float]]:
     return [(item.name, min(wages, item.cap) * item.rate + item.flat) for item in PAYROLL.get(state, ())]
 
 
-def local_tax(key: str, wages: float, filing: str, state_taxable_income: float, state_tax: float) -> float:
-    tax = LOCAL[key]
+# A local tax named by its key in LOCAL, or one of your own.
+Local = str | LocalTax
+
+
+def resolve(item: Local) -> LocalTax:
+    return LOCAL[item] if isinstance(item, str) else item
+
+
+def local_tax(item: Local, wages: float, filing: str, state_taxable_income: float, state_tax: float) -> float:
+    tax = resolve(item)
     if tax.of_state_tax:
         return state_tax * tax.of_state_tax
-    base = state_taxable_income if tax.base == "state" else wages
+    base = state_taxable_income if tax.base == "taxable" else wages
     return bracket_tax(base, _by_filing(tax.brackets, filing))
 
 
-def take_home(wages: float, state: str, filing: str = "single", local: tuple[str, ...] | list[str] = ()) -> TakeHome:
-    """What `wages` leave after every tax this models, in `state` (its two-letter code), with the LOCAL taxes named."""
+def take_home(wages: float, state: str, filing: str = "single", local: Sequence[Local] = ()) -> TakeHome:
+    """What `wages` leave after every tax this models, in `state` (its two-letter code), with the local taxes given:
+    keys of LOCAL, or your own."""
     if state not in STATES:
         raise ValueError(f"No tax table for '{state}'. Use a state's two-letter code, as in WI.")
     if filing not in FILINGS:
@@ -419,14 +479,14 @@ def take_home(wages: float, state: str, filing: str = "single", local: tuple[str
     payroll = payroll_taxes(wages, state)
     result.payroll = sum(amount for _name, amount in payroll)
     taxable = state_taxable(wages, state, filing, result.federal)
-    locals_ = [(LOCAL[key].name, local_tax(key, wages, filing, taxable, result.state_income)) for key in local]
+    locals_ = [(resolve(item).name, local_tax(item, wages, filing, taxable, result.state_income)) for item in local]
     result.local = sum(amount for _name, amount in locals_)
     result.lines = [("Federal income tax", result.federal), ("Social Security and Medicare", result.fica),
                     ("State income tax", result.state_income), *payroll, *locals_]
     return result
 
 
-def solve_wages(target_net: float, state: str, filing: str = "single", local: tuple[str, ...] | list[str] = ()) -> float:
+def solve_wages(target_net: float, state: str, filing: str = "single", local: Sequence[Local] = ()) -> float:
     """The wages whose take-home in `state` is `target_net`. Take-home rises with wages everywhere this models, save a
     few cliffs of a few dollars where an exemption ends, so halving the interval finds it to the dollar."""
     low, high = 0.0, max(1_000.0, target_net * 4)

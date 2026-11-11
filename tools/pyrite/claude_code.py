@@ -40,7 +40,8 @@ def sign_in_help(claude: str) -> str:
         command = f'"{claude}" auth login'
     return f"Claude Code isn't signed in for background use. Run this once in a terminal: {command}"
 KIND_LABELS = {"refresh": "Refresh resume", "prep": "Interview prep", "triage": "Judging postings", "tailor": "Tailoring resumes",
-               "mail": "Checking mail", "outlook": "Industry outlook", "culture": "Employer research", "skills": "Skill ages"}
+               "mail": "Checking mail", "outlook": "Industry outlook", "culture": "Employer research", "skills": "Skill ages",
+               "localtax": "Local tax research"}
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 # The longest a single Claude run of a judging or writing job may take. How long a task can go quiet before it
 # counts as dead is worked out from this, so it covers one step, not a whole job.

@@ -137,7 +137,15 @@ Taxes are worked out the same way in both places: federal income tax, Social Sec
 
 A posting's place is read as a city and state. A city that's one of a metro area's principal cities, as the government lists them, gets that metro's prices, so a job in a suburb named in that list finds its metro. Anywhere else gets the state's average, which runs a little high for a small town. When the posting names more than one place, the first in a metro area is used, and the panel says which.
 
-Local taxes at home can't be told from a metro area, so name any you pay under `[relocation]` in `search.toml`. `pyrite relocate --taxes` lists the ones Pyrite knows. Left unset, a state's statewide one counts, as in Maryland, Indiana and Pennsylvania.
+### Local taxes at home
+
+Your local taxes at home can't be told from a metro area, so you name them, under **Local taxes at home** on **Settings › Relocation**. Until you do, a state's statewide one counts, as in Maryland, Indiana and Pennsylvania. The panel has three ways to find yours:
+
+- **Search Pyrite's table** of the city and county income taxes that matter most, by a city, county or state, and **Add** the ones you pay. A job elsewhere comes under the same table, by the city its posting names.
+- **Add your own**: a name, a rate, the income it starts above, and whether it's charged on your wages or your state taxable income. A school district's or a transit or housing district's tax, whose boundary no city's name follows, goes here. A tax with two rates is two entries: the second is what it adds over its own threshold.
+- **Look up where you live** has Claude search the web for the city, county and district taxes where you live, from the town or county you type. Like employer research, it gets nothing else about you, and every tax it proposes must cite a page the run actually found and read as a rate Pyrite can use. Nothing is saved until you click **Add** beside one, so open its source first. It uses your Claude plan for a few minutes, with the model set under **Models for the smaller jobs**.
+
+In `search.toml` they're two lists under `[relocation]`:
 
 ```toml
 [relocation]
@@ -146,11 +154,19 @@ filing = "single"        # or "married"
 housing = "rent"         # or "own"
 housing_share = 30       # percent of spending
 home_local_taxes = ["nyc"]
+own_local_taxes = [
+  { name = "Transit district tax", rate = 0.5, base = "wages" },
+  { name = "Housing services tax", rate = 1.0, over = 125000, over_married = 200000, base = "taxable" },
+]
 ```
+
+From a terminal, `pyrite relocate --taxes` lists Pyrite's table, `pyrite relocate --taxes ohio` the ones matching a word, and `pyrite relocate --research-taxes "City, ST"` runs the lookup and prints each tax it found as a line to paste.
+
+### The command and the price levels
 
 `pyrite relocate <id>` prints the same comparison for a job, and `pyrite relocate --where "City, ST" --pay "$165k-$215k"` for any place and pay.
 
-The prices ship with Pyrite in `tools/pyrite/rpp.json`, with their year and release date. BEA publishes a new year each December, and `python tools/refresh_prices.py` rebuilds the file from BEA's and the Census Bureau's own downloads.
+The price levels don't ship with Pyrite. The first comparison downloads them from BEA, and each metro area's principal cities from the Census Bureau, about 200 KB in all, and keeps them in the workspace's `data/prices/rpp.json`. Without a network the first time, the panel says it couldn't get them, and Pyrite tries again within the hour. BEA publishes a new year each December, so a copy over 60 days old is looked for anew, and kept if the download fails. `pyrite relocate --refresh-prices` downloads them again now.
 
 ## Keys
 
@@ -168,11 +184,11 @@ The prices ship with Pyrite in `tools/pyrite/rpp.json`, with their year and rele
 
 | Section | What it sets | In `search.toml` |
 |---|---|---|
-| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks, skill ages and employer research | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]`, `[skills]` and `[culture]` |
+| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks, skill ages, employer research and local tax research | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]`, `[skills]`, `[culture]` and `[relocation]` |
 | **Mail** | Whether replies are read over IMAP or through the Gmail connector, and how many days back | `[inbox]` `source` and `lookback_days` |
 | **Daily run** | When the pan and the daily run start, on Windows. How many postings are judged and resumes written each morning, how many tries a draft gets, and whether a cover letter is written | Task Scheduler, for when. `[run]` `triage_per_day`, `tailor_per_day`, `fix_attempts` and `cover_letters` |
 | **Dashboard** | When the to-do list reminds you to follow up, calls an application ghosted or a deadline close, whether it reminds you to reach out, and whether it asks GitHub for updates | `[run]` `follow_up_days`, `quiet_days` and `decide_days`; `[dashboard]` `reach_out` and `check_updates` |
-| **Relocation** | Your pay now, filing status, whether you rent or own, and your share of spending on housing, for [Moving for a job](#moving-for-a-job) | `[relocation]` `current_pay`, `filing`, `housing` and `housing_share` |
+| **Relocation** | Your pay now, filing status, whether you rent or own, your share of spending on housing, and your local taxes at home, for [Moving for a job](#moving-for-a-job) | `[relocation]` `current_pay`, `filing`, `housing`, `housing_share`, `home_local_taxes` and `own_local_taxes` |
 | **Cities and industries** | The places and industries to see first. [Preferred cities and industries](prospects.md#preferred-cities-and-industries) covers it | `[promote]` |
 
 Claude and Mail open with a **Connection** panel: whether Claude Code is on this computer and signed in, and where replies are read from, whether the last read worked and when. **Check again** asks Claude Code afresh, which takes a second or two.

@@ -477,11 +477,35 @@ def cmd_culture(args, conn):
 
 def cmd_relocate(args):
     """What a job somewhere else is worth after taxes and prices there, against your pay now: one tracked job's, or
-    any place and pay you name."""
-    from . import prices, relocate
+    any place and pay you name. Also lists and looks up local taxes, and fetches the price levels again."""
+    from . import localtax, prices, relocate
+    from .claude_code import ClaudeFailed
 
-    if args.taxes:
-        print(relocate.local_taxes_text())
+    if args.taxes is not None:
+        print(words.plain(relocate.local_taxes_text(args.taxes)))
+        return
+    if args.research_taxes is not None:
+        if store.IS_EXAMPLE:
+            sys.exit("The demo doesn't run Claude. Point PYRITE_HOME at your own workspace to look up local taxes.")
+        if not args.worker and localtax.status()["state"] == "running":
+            sys.exit("Local taxes are already being looked up.")
+        with closing(_open_db()) as conn:
+            try:
+                report = localtax.run(conn, load_config(), args.research_taxes)
+            except (ClaudeFailed, ValueError) as err:
+                sys.exit(str(err))
+        if _as_json(args):
+            _print_json(report)
+        else:
+            print(words.plain(localtax.text(report)))
+        return
+    if args.refresh_prices:
+        try:
+            found = prices.refresh()
+        except prices.Unavailable as err:
+            sys.exit(f"The price levels couldn't be downloaded: {err}")
+        print(f"BEA's {found['year']} price levels, released {found['released']}, for {len(found['metros'])} metro areas and "
+              f"{len(found['states'])} states, are kept in {prices.path()}.")
         return
     if (args.id is None) == (args.where is None):
         sys.exit("Name a job's number, as in `pyrite relocate 12`, or a place with --where \"Austin, TX\", not both.")
@@ -496,11 +520,13 @@ def cmd_relocate(args):
             sys.exit(f"Job {args.id} is {job.get('location_kind') or 'not placed'} ({job.get('location') or 'no place named'}), "
                      "so it doesn't ask you to move. Use --where to compare a place anyway.")
     else:
-        place = prices.find(args.where)
-        if place is None:
-            sys.exit(f"Pyrite couldn't tell where \"{args.where}\" is. Write a city and state, as in \"Austin, TX\".")
         try:
+            place = prices.find(args.where)
+            if place is None:
+                sys.exit(f"Pyrite couldn't tell where \"{args.where}\" is. Write a city and state, as in \"Austin, TX\".")
             result = relocate.compare(place, args.pay or "", cfg)
+        except prices.Unavailable as err:
+            sys.exit(f"Pyrite couldn't get BEA's price levels, which it downloads the first time: {err}")
         except ValueError as err:
             sys.exit(str(err))
     if _as_json(args):
@@ -1223,12 +1249,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("relocate", help="what a job elsewhere pays after taxes and local prices, against your pay now",
                        formatter_class=argparse.RawDescriptionHelpFormatter,
-                       epilog='for example:\n  pyrite relocate 12\n  pyrite relocate --where "Austin, TX" --pay "$165k-$215k"\n\n'
-                              "Your pay now and where you live come from [relocation] and [market] in search.toml.")
+                       epilog='for example:\n  pyrite relocate 12\n  pyrite relocate --where "Austin, TX" --pay "$165k-$215k"\n'
+                              '  pyrite relocate --taxes ohio\n  pyrite relocate --research-taxes "Springfield, IL"\n\n'
+                              "Your pay now and where you live come from [relocation] and [market] in search.toml. The first "
+                              "comparison downloads BEA's price levels into the workspace.")
     p.add_argument("id", type=int, nargs="?", help=JOB_ID)
     p.add_argument("--where", help="a place to compare instead of a job's, as a city and state")
     p.add_argument("--pay", default="", help="pay there, as a posting writes it: \"$165k-$215k\" or \"$190,000\"")
-    p.add_argument("--taxes", action="store_true", help="list the local income taxes Pyrite knows, for home_local_taxes")
+    p.add_argument("--taxes", nargs="?", const="", metavar="WORDS",
+                   help="list the local income taxes Pyrite knows, or those matching a place or name, for home_local_taxes")
+    p.add_argument("--research-taxes", metavar="PLACE",
+                   help="have Claude look up the local taxes where you live, as \"City, ST\", keeping only sourced ones")
+    p.add_argument("--refresh-prices", action="store_true", help="download BEA's price levels and the metro areas' cities again now")
+    p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     _json_flag(p)
     p.set_defaults(func=cmd_relocate)
 
