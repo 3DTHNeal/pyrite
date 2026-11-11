@@ -158,7 +158,9 @@ profileStep("offlimits", {
     const main = h("div", { class: "stack profile-form" },
       byName,
       h("div", { class: "profile-pair" }, panel("never"), panel("nottrue")),
-      h("small", { class: "muted" }, "Blocking takes effect when you save. Taking something off lets drafts say more, so saving that asks for a code from this computer."),
+      h("small", { class: "muted" }, data.setting_up
+        ? "Blocking takes effect when you save. Your workspace is new, so taking something off needs no code from this computer yet."
+        : "Blocking takes effect when you save. Taking something off lets drafts say more, so saving that asks for a code from this computer."),
       h("section", { class: "panel stack", "aria-label": "Test a sentence" },
         h("h3", { class: "profile-sub" }, "Test a sentence"), sentence,
         h("div", { class: "row" }, examples.map(([label, text]) => h("button", { class: "btn small", type: "button", onclick: () => {

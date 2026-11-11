@@ -670,6 +670,19 @@ class PageScripts(unittest.TestCase):
         self.assertNotIn("profileGo(", needs)
         self.assertIn("profileOpenLabel(step)", needs)
 
+    def test_skills_and_offlimits_say_no_code_is_needed_while_setting_up(self):
+        for name, ref in (("skills.js", "ctx.data.setting_up"), ("offlimits.js", "data.setting_up")):
+            with self.subTest(name=name):
+                script = (server.STATIC / "profile" / name).read_text(encoding="utf-8")
+                code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("//"))
+                match = re.search(rf'{re.escape(ref)}\s*\?\s*("[^"]*")\s*:\s*("[^"]*")', code)
+                self.assertIsNotNone(match, f"{name} should choose its code message from {ref}")
+                when_setting_up, after_setup = match.group(1), match.group(2)
+                self.assertIn("needs no code", when_setting_up)
+                self.assertNotIn("asks for a code", when_setting_up)
+                self.assertIn("asks for a code", after_setup)
+                self.assertEqual(code.count("asks for a code"), 1)
+
     def test_the_page_served_is_the_one_with_the_section_scripts(self):
         httpd = server.make_server(0)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
