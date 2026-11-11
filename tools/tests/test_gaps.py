@@ -90,6 +90,16 @@ class Reading(unittest.TestCase):
         self.assertEqual(by_id["travel"]["count"], 1)
         self.assertEqual([g["id"] for g in gaps.questions(found, 1)], ["rust", "team-size", "travel"])
 
+    def test_each_fact_line_is_read_once_however_many_gaps_there_are(self):
+        # The dashboard builds this on every refresh. Reading the fact bank again for each gap took seconds.
+        facts = (gaps.store.ROOT / "profile" / "facts.md").read_text(encoding="utf-8")
+        lines = len(gaps._fact_lines(facts)) + len(gaps._unsupported(facts))
+        found_gaps = len(gaps.read_all(gaps.store.ROOT)[0])
+        with mock.patch.object(gaps, "tokens", wraps=gaps.tokens) as counted:
+            gaps.view()
+        # Each line once, and each gap's name (or the text after it) once or twice.
+        self.assertLessEqual(counted.call_count, lines + found_gaps * 2)
+
     def test_the_tailor_is_told_the_shape_the_count_reads(self):
         text = (Path(gaps.__file__).parent / "tailor.md").read_text(encoding="utf-8")
         self.assertIn("## Gaps to prepare for", text)

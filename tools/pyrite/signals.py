@@ -19,11 +19,16 @@ import copy
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from . import deadline, pay, score, skillage
 from .sources import find_comp
+
+# The dashboard reads every job's pay twice on each refresh, from text that rarely changes. Cached here rather than on
+# find_comp itself, so a sweep reading thousands of postings once each doesn't keep them all.
+_find_comp = lru_cache(maxsize=2000)(find_comp)
 
 RARE_DAYS = 90
 RARE_WATCHED_DAYS = 30
@@ -70,7 +75,7 @@ def comp_for(job: dict[str, Any]) -> str:
     """The job's pay text. The one stored when it was found, unless reading its description now finds more: a range
     that was missed then, or the same range with the period or currency that came after it, which older code dropped."""
     stored = (job.get("comp") or "").strip()
-    found = find_comp(job.get("description") or "", job.get("title") or "")
+    found = _find_comp(job.get("description") or "", job.get("title") or "")
     return found if found and (not stored or found.startswith(stored)) else stored
 
 
