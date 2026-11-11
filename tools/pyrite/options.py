@@ -1,5 +1,6 @@
 """How Pyrite runs, for the dashboard's Settings tab: which Claude model judges and writes and how hard it thinks,
-where replies are read from, how much the morning run does, and what the dashboard reminds you of.
+where replies are read from, how much the morning run does, what the dashboard reminds you of, and the pay that a job
+elsewhere is compared with.
 
 Each setting is one key in search.toml, named in SECTIONS with what it may hold. The page draws its forms from that
 list, and a save sets those keys and nothing else, so the rest of the file keeps its layout and comments and no key
@@ -14,7 +15,7 @@ import time
 import tomllib
 from typing import Any
 
-from . import confirm, deadline, doctor, inbox, mail, outlook, profile, settings, store, tomledit
+from . import confirm, deadline, doctor, inbox, mail, outlook, profile, relocate, settings, store, tomledit
 
 CLAUDE_DEFAULT = "Claude Code's default"
 # Claude Code is asked whether it's signed in at most this often, since asking starts it.
@@ -115,6 +116,31 @@ SECTIONS: tuple[dict[str, Any], ...] = (
      ),
      "notes": ("The port, and the extra names the dashboard answers to, can only be changed under [dashboard] in "
                "profile/search.toml.",)},
+    {"id": "relocation", "label": "Relocation", "status": None,
+     "intro": "What a job somewhere else would pay after taxes and local prices, against what you earn now where you "
+              "live. It shows on the panel of any job outside your area that names its place.",
+     "panels": (
+         {"title": "Your pay now", "hint": "Base pay only, here and there. A bonus or equity isn't counted on either side.",
+          "fields": (
+              _field("relocation.current_pay", "number", "Current pay", "A year's base pay, before tax, in dollars.",
+                     min=0, max=10_000_000),
+              _field("relocation.filing", "choice", "Filing status",
+                     "Married counts your pay as the household's only wages.",
+                     choices=[list(choice) for choice in relocate.FILING_CHOICES], default="single"),
+          )},
+         {"title": "Housing", "hint": "",
+          "fields": (
+              _field("relocation.housing", "choice", "Where you live now",
+                     "Which view of prices comes first: renting at market if you rent, all prices if you own.",
+                     choices=[list(choice) for choice in relocate.HOUSING_CHOICES], default="rent"),
+              _field("relocation.housing_share", "number", "Share of spending on housing",
+                     "A percent, for the renting-at-market view.", default=relocate.DEFAULT_HOUSING_SHARE,
+                     unset=str(relocate.DEFAULT_HOUSING_SHARE), min=5, max=80),
+          )},
+     ),
+     "notes": ("Home is the metro area, or else the state, under Where you'll work on the Profile tab. Local income taxes "
+               "you pay at home, such as a city's, go under [relocation] home_local_taxes in profile/search.toml: "
+               "`pyrite relocate --taxes` lists the ones Pyrite knows.",)},
 )
 FIELDS: dict[str, dict[str, Any]] = {field["id"]: field for section in SECTIONS for panel in section["panels"] for field in panel["fields"]}
 

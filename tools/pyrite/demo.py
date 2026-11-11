@@ -41,7 +41,10 @@ JOBS = [
     ("Massive Dynamic", "Principal Firmware Engineer", "Remote - US", "remote", TRACK_EMBEDDED, 73, "", "", "new", 0),
     ("Umbrella Instruments", "Senior Firmware Engineer", "Waunakee, WI", "local", TRACK_EMBEDDED, 61, "", "", "new", 1),
     ("Oscorp Robotics", "Staff AI Engineer, Inference", "Remote - US", "remote", TRACK_AI, 58, "", "", "new", 1),
+    ("Vandelay Motion", "Staff Motion Control Engineer", "Austin, TX", "elsewhere", TRACK_EMBEDDED, 63, "", "", "new", 2),
 ]
+# Pay ranges, as boards write them, for the postings that give one. A job elsewhere with one shows Moving for it.
+COMP = {"Vandelay Motion": "$165,000 - $215,000 a year, plus equity"}
 # The steps a job passes through on its way to its final status.
 PATH = {
     "applied": ["shortlisted", "ready", "applied"],
@@ -91,13 +94,15 @@ def _add_job(conn, cfg, row, index) -> int:
         posting_file.read_text(encoding="utf-8").partition("- **Saved:**")[2].partition("\n")[2].strip()
         if posting_file else f"Fictional posting. {company} is hiring a {title} to work on firmware, robots and motor control in C++."
     )
-    reasons = [f"{track} title +25", "seniority +10", f"{kind} +{15 if kind == 'local' else 10}", f"skills +{score - 45}: firmware, c++, robot"]
+    where = "outside your area +0" if kind == "elsewhere" else f"{kind} +{15 if kind == 'local' else 10}"
+    reasons = [f"{track} title +25", "seniority +10", where, f"skills +{score - 45}: firmware, c++, robot"]
     cursor = conn.execute(
         """INSERT INTO jobs (source_key, source_id, company, title, location, location_kind, url, description, first_seen, last_seen,
-               score, score_reasons, track, flags, status, status_changed_at, fit, fit_reason, app_folder, files)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'new', ?, ?, ?, ?, ?)""",
+               score, score_reasons, track, flags, status, status_changed_at, fit, fit_reason, app_folder, files, comp)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?)""",
         (f"demo:{slug}", str(index), company, title, location, kind, f"https://careers.{slug}.example/jobs/{1000 + index}",
-         description, found, _stamp(0), score, json.dumps(reasons), track, found, fit, why, folder, json.dumps(files)),
+         description, found, _stamp(0), score, json.dumps(reasons), track, json.dumps(["Outside your area"] if kind == "elsewhere" else []),
+         found, fit, why, folder, json.dumps(files), COMP.get(company, "")),
     )
     job_id = cursor.lastrowid
     log_event(conn, job_id, "found", f"score {score}")

@@ -1790,6 +1790,42 @@ function readBlock(job) {
   return h("div", {}, h("h3", {}, "What Pyrite read into it"), h("ul", { class: "muted" }, lines.map((line) => h("li", {}, line))));
 }
 
+// For a job that asks you to move: what its pay is worth after taxes and prices there, against your pay now at home.
+// relocate.py works it all out. This only lays it out: the break-even pay, then the range in home dollars, in each view.
+const thousands = (n) => `$${Math.round(n / 1000).toLocaleString()}k`;
+const signedPercent = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(Math.round(n * 100))}%`;
+
+function relocationBlock(job) {
+  const r = job.relocation;
+  if (!r) return null;
+  const heading = h("h3", {}, "Moving for it");
+  if (r.problem) return h("div", { class: "relocation" }, heading, h("p", { class: "muted" }, r.problem));
+  const views = r.views;
+  const rows = [h("tr", {}, h("td", {}, "Break-even pay"), views.map((v) => h("td", { class: "num" }, thousands(v.break_even))))];
+  views[0].points.forEach((point, at) => rows.push(h("tr", {},
+    h("td", {}, `${point.label} of range, ${thousands(point.pay)}`),
+    views.map((v) => {
+      const p = v.points[at];
+      return h("td", { class: `num ${p.change >= 0 ? "up" : "down"}` }, `${thousands(p.worth)} (${signedPercent(p.change)})`);
+    }))));
+  const there = r.there;
+  const local = there.local.length ? ` Local taxes there: ${there.local.join(", ")}.` : "";
+  const taxRows = (lines) => h("ul", {}, lines.map((line) => h("li", {}, `${line.label}: ${thousands(line.amount)}`)));
+  return h("div", { class: "relocation" },
+    heading,
+    h("p", {}, r.summary),
+    h("div", { class: "table-wrap" }, h("table", { class: "grid" },
+      h("thead", {}, h("tr", {}, h("th", {}, ""), views.map((v) => h("th", { class: "num" }, v.label)))),
+      h("tbody", {}, rows))),
+    h("p", { class: "info-note" }, `Home is ${r.home.name}, where your ${thousands(r.home.pay)} takes home ${thousands(r.home.net)}. `,
+      `In ${there.name}, prices are ${signedPercent(r.prices.all - 1)} on everything and ${signedPercent(r.prices.housing - 1)} on housing, `,
+      `and the same pay would take home ${thousands(there.same_pay_net)}.${local} The percents compare with your take-home now.`),
+    h("details", { class: "relocation-taxes" }, h("summary", {}, "Taxes on each side"),
+      h("p", { class: "muted" }, `Your ${thousands(r.home.pay)} at home, a year:`), taxRows(r.home.taxes),
+      h("p", { class: "muted" }, `The same pay in ${there.name}:`), taxRows(there.same_pay_taxes)),
+    h("ul", { class: "info-note" }, r.notes.map((note) => h("li", {}, note))));
+}
+
 const fileLabel = (file) => file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " ");
 const fileLink = (file, label = fileLabel(file), cls = "btn") => h("a", { class: cls, href: fileHref(file), target: "_blank", rel: "noopener" }, label);
 // Workday mangles a PDF's line breaks, so it gets the Word file. Everywhere else the PDF looks the same for every reader.
@@ -2124,6 +2160,7 @@ async function openJob(id, list) {
     h("dl", { class: "facts" }, facts.flatMap(([key, value]) => [h("dt", {}, key), h("dd", {}, value)])),
     (job.flags.length ? h("div", { class: "callout" }, `Flagged: ${job.flags.join(", ")}`) : null),
     readBlock(job),
+    relocationBlock(job),
     h("div", {}, h("h3", {}, "Next step"), h("div", { class: "stack" }, nextText,
       h("div", { class: "row" }, nextDate, h("button", { class: "btn", type: "button",
         onclick: () => tryAct(job.id, { action: "next_action", text: nextText.value, date: nextDate.value }, undefined, ["nextText", "nextDate"]) }, "Save"),

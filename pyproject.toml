@@ -48,7 +48,7 @@ package-dir = { "" = "tools" }
 packages = ["pyrite", "assay"]
 
 [tool.setuptools.package-data]
-pyrite = ["*.md", "*.toml", "imap.env.example", "static/*", "static/icons/*", "systemd/*", "blank/*"]
+pyrite = ["*.md", "*.toml", "*.json", "imap.env.example", "static/*", "static/icons/*", "systemd/*", "blank/*"]
 
 [tool.ruff]
 target-version = "py311"
@@ -87,7 +87,7 @@ ignore = [
 "tools/pyrite/daily.py" = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pyrite", "assay", "check_public", "build_resume", "changelog"]
+known-first-party = ["pyrite", "assay", "check_public", "build_resume", "changelog", "refresh_prices"]
 split-on-trailing-comma = false
 # The tests' support module points PYRITE_HOME at a throwaway workspace, so it has to load before anything from pyrite.
 section-order = ["future", "standard-library", "third-party", "test-support", "first-party", "local-folder"]
@@ -97,7 +97,8 @@ test-support = ["support"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["tools/pyrite", "tools/assay", "tools/check_public.py", "tools/build_resume.py", "tools/changelog.py"]
+files = ["tools/pyrite", "tools/assay", "tools/check_public.py", "tools/build_resume.py", "tools/changelog.py",
+         "tools/refresh_prices.py"]
 mypy_path = "tools"
 ignore_missing_imports = true
 # Without this, mypy skips the body of every function that has no annotations, which is most of the commands.

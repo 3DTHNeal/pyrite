@@ -46,6 +46,7 @@ from . import (
     prep,
     profile,
     refresh,
+    relocate,
     schedule,
     settings,
     signals,
@@ -727,6 +728,8 @@ def job_detail(conn, job_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
     # What the web says about the employer, shared by every job there, and where to read reviews yourself.
     job["culture"] = culture.status(row["company"]) if culture.company_key(row["company"]) else None
     job["culture_links"] = culture.links(row["company"])
+    # For a job that asks you to move: its pay after taxes and prices there, against yours now where you live.
+    job["relocation"] = relocate.for_job(job, cfg)
     return job
 
 

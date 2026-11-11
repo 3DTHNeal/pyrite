@@ -287,7 +287,7 @@ class HowPyriteRuns(SettingsBase):
                 options.save({"version": options.view()["version"], "values": {name: value}})
         self.assertEqual(self.text(), SETTINGS_TOML)
         # The fact check's rules, the filters and the names the dashboard answers to are never in the list.
-        self.assertLessEqual({field["table"] for field in options.FIELDS.values()}, {"claude", "inbox", "market", "skills", "culture", "run", "dashboard"})
+        self.assertLessEqual({field["table"] for field in options.FIELDS.values()}, {"claude", "inbox", "market", "skills", "culture", "run", "dashboard", "relocation"})
         self.assertNotIn("dashboard.allowed_hosts", options.FIELDS)
         self.assertNotIn("dashboard.port", options.FIELDS)
 
@@ -470,7 +470,7 @@ class SettingsOverHttp(SettingsBase):
 
     def test_how_pyrite_runs_is_read_and_saved_beside_the_cities_and_industries(self):
         status, data = self.call()
-        self.assertEqual((status, [section["id"] for section in data["options"]["sections"]]), (200, ["claude", "mail", "run", "dashboard"]))
+        self.assertEqual((status, [section["id"] for section in data["options"]["sections"]]), (200, ["claude", "mail", "run", "dashboard", "relocation"]))
         status, data = self.post({"version": data["options"]["version"], "values": {"claude.effort": "high"}}, "/api/settings/options")
         self.assertEqual((status, store.load_config()["claude"]), (200, {"effort": "high"}))
         # The answer is the whole tab again, so the page's copy of the other half stays whole.

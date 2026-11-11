@@ -475,6 +475,40 @@ def cmd_culture(args, conn):
           f"came across.{empty}")
 
 
+def cmd_relocate(args):
+    """What a job somewhere else is worth after taxes and prices there, against your pay now: one tracked job's, or
+    any place and pay you name."""
+    from . import prices, relocate
+
+    if args.taxes:
+        print(relocate.local_taxes_text())
+        return
+    if (args.id is None) == (args.where is None):
+        sys.exit("Name a job's number, as in `pyrite relocate 12`, or a place with --where \"Austin, TX\", not both.")
+    cfg = load_config()
+    if args.id is not None:
+        with closing(_open_db()) as conn:
+            job = job_dict(get_job(conn, args.id))  # A number that isn't a job is said by main, as for every command.
+        if args.pay:
+            job["comp"] = args.pay
+        result = relocate.for_job(job, cfg)
+        if result is None:
+            sys.exit(f"Job {args.id} is {job.get('location_kind') or 'not placed'} ({job.get('location') or 'no place named'}), "
+                     "so it doesn't ask you to move. Use --where to compare a place anyway.")
+    else:
+        place = prices.find(args.where)
+        if place is None:
+            sys.exit(f"Pyrite couldn't tell where \"{args.where}\" is. Write a city and state, as in \"Austin, TX\".")
+        try:
+            result = relocate.compare(place, args.pay or "", cfg)
+        except ValueError as err:
+            sys.exit(str(err))
+    if _as_json(args):
+        _print_json(result)
+    else:
+        print(words.plain(relocate.text(result)))
+
+
 @_with_db
 def cmd_skills(args, conn):
     """List when the skills Pyrite knows became usable, or look up ones it doesn't on the web."""
@@ -1186,6 +1220,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_culture)
+
+    p = sub.add_parser("relocate", help="what a job elsewhere pays after taxes and local prices, against your pay now",
+                       formatter_class=argparse.RawDescriptionHelpFormatter,
+                       epilog='for example:\n  pyrite relocate 12\n  pyrite relocate --where "Austin, TX" --pay "$165k-$215k"\n\n'
+                              "Your pay now and where you live come from [relocation] and [market] in search.toml.")
+    p.add_argument("id", type=int, nargs="?", help=JOB_ID)
+    p.add_argument("--where", help="a place to compare instead of a job's, as a city and state")
+    p.add_argument("--pay", default="", help="pay there, as a posting writes it: \"$165k-$215k\" or \"$190,000\"")
+    p.add_argument("--taxes", action="store_true", help="list the local income taxes Pyrite knows, for home_local_taxes")
+    _json_flag(p)
+    p.set_defaults(func=cmd_relocate)
 
     p = sub.add_parser("skills", help="list how long the skills postings ask years of have existed, or have Claude look new ones up on the web")
     p.add_argument("phrases", nargs="*", help="skills to look up, as postings write them")

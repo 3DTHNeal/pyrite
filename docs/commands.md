@@ -62,6 +62,7 @@ Commands use the Windows path `.venv/Scripts/python.exe`. Elsewhere, it's `.venv
 | `demo`, `check` | [The README](../README.md) |
 | `import-resume`, `folder`, `finish` | [Writing the documents](documents.md) |
 | `serve`, `open` | [The dashboard](dashboard.md) |
+| `relocate` | [Moving for a job](dashboard.md#moving-for-a-job) |
 | `add`, `skills`, `outlook` | [Finding and ranking postings](prospects.md) |
 | `culture`, `fill`, `autofill`, `sent`, `outreach`, `prep` | [Applying and after](applying.md) |
 | `code` | [Confirming with a code](profile.md#confirming-with-a-code) |
