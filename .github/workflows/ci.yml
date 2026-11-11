@@ -82,8 +82,18 @@ jobs:
       - if: steps.passed.outputs.cache-hit != 'true'
         run: python -m pip install -r tools/requirements.txt -r tools/requirements-autofill.txt -r tools/requirements-dev.txt
       # Lets the privacy check's tests read a real PDF. Windows runners get pdftotext with Git.
+      # On Linux its packages are kept between runs, so a run doesn't fail when the runner can't reach Ubuntu's mirror.
+      # Kept packages are for one Ubuntu release: a new one starts over.
+      - id: ubuntu
+        if: steps.passed.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: echo "release=$(. /etc/os-release && echo "$VERSION_ID")" >> "$GITHUB_OUTPUT"
       - if: steps.passed.outputs.cache-hit != 'true' && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/apt-kept/poppler
+          key: apt-kept-poppler-${{ runner.arch }}-${{ steps.ubuntu.outputs.release }}
+      - if: steps.passed.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: bash .github/apt-kept.sh poppler poppler-utils
       - if: steps.passed.outputs.cache-hit != 'true' && runner.os == 'macOS'
         run: brew install poppler
       - id: playwright
@@ -94,9 +104,25 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      # With the browser restored from the cache, this only installs the system libraries it needs.
+      # The system libraries the browser needs, kept between runs like poppler's. Playwright names them in the command
+      # it would run itself. If that ever reads differently, it installs them its own way.
       - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
-        run: python -m playwright install --with-deps chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/apt-kept/browser
+          key: apt-kept-browser-${{ runner.arch }}-${{ steps.ubuntu.outputs.release }}-${{ steps.playwright.outputs.version }}
+      - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
+        run: |
+          packages=$(python -m playwright install-deps --dry-run chromium | tr ' ' '\n' | sed '1,/--no-install-recommends/d' | tr -d "\"'" | tr '\n' ' ')
+          echo "Playwright's packages: $packages"
+          if [ -n "${packages// /}" ]; then
+            APT_KEPT_OPTS=--no-install-recommends bash .github/apt-kept.sh browser $packages
+          else
+            python -m playwright install-deps chromium
+          fi
+      # With the browser restored from the cache, this downloads nothing.
+      - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
+        run: python -m playwright install chromium
       - if: steps.passed.outputs.cache-hit != 'true' && !matrix.browser
         run: python -m unittest discover -s tools/tests
       - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
@@ -152,7 +178,14 @@ jobs:
         with:
           python-version: "3.12"
       # pdftotext reads the example PDFs. Without it the check refuses them, since nothing would vouch for their pages.
-      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      # Its packages are kept between runs, as in the test job.
+      - id: ubuntu
+        run: echo "release=$(. /etc/os-release && echo "$VERSION_ID")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/apt-kept/poppler
+          key: apt-kept-poppler-${{ runner.arch }}-${{ steps.ubuntu.outputs.release }}
+      - run: bash .github/apt-kept.sh poppler poppler-utils
       # The built-in layer only. The denylist stays on the owner's machine, in the pre-push hook.
       - run: python tools/check_public.py
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
