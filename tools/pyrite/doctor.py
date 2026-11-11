@@ -19,7 +19,7 @@ from assay.factbank import uncommented
 from . import discover, factsdoc, inbox, score
 from .checks import listed_terms, unenforced_claims
 from .claude_code import find_claude, signed_in
-from .store import DB_PATH, EXAMPLE_ROOT
+from .store import DB_PATH, EXAMPLE_ROOT, IS_EXAMPLE
 
 # The profile files a new workspace copies from the example and must then make its own.
 OWN_FILES = ("profile/facts.md", "profile/approved-terms.txt", "profile/run-notes.md", "profile/resume.md", "profile/cover-letter.md")
@@ -440,9 +440,13 @@ def mail_check(cfg: dict[str, Any] | None) -> dict[str, Any]:
     """Where replies are read from and whether the last read worked, as {"ok", "what", "fix"}. None means it's
     optional and not set up."""
     source = (cfg or {}).get("inbox", {}).get("source", "imap")
-    trouble = last_mail_error(source)
+    last_ok, trouble = last_mail_check(source)
     if trouble:
         return {"ok": False, "what": "Reply detection's last check failed", "fix": f"{trouble}\nTry again with `pyrite inbox`."}
+    if IS_EXAMPLE and last_ok:
+        # The demo's replies come from a made-up inbox it lists on the Sources tab, which no login stands behind.
+        return {"ok": True, "what": "Reply detection reads the demo's made-up inbox",
+                "fix": "In your own workspace, docs/mail.md says how to set it up."}
     if source == "gmail":
         return {"ok": True, "what": "Reply detection reads Gmail through Claude Code", "fix": "Test it with `pyrite inbox`."}
     if inbox.CREDENTIALS_PATH.exists():

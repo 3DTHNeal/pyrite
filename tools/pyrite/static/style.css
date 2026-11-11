@@ -239,7 +239,9 @@ td.empty-state .stage-icon { display: block; margin: 0 auto 8px; }
 input, select, textarea { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 9px; max-width: 100%; }
 input:hover, select:hover, textarea:hover { border-color: var(--ink-3); }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
-#radar-search { width: 260px; }
+#radar-search, #archive-search { width: 260px; }
+/* A filter that's leaving postings out, such as one remembered from an earlier visit. */
+.filters .filtered { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .muted { color: var(--ink-3); }
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .grid { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -297,6 +299,21 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 .reply-detail { margin: 4px 0; overflow-wrap: anywhere; font-weight: 600; }
 .reply-actions { margin-top: 6px; }
 .prose { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; max-height: 340px; overflow-y: auto; background: var(--surface-2); padding: 10px 12px; border-radius: 4px; }
+/* Notes written in Markdown, drawn as headings, lists and tables rather than the characters that mark them. */
+.prose.markdown { white-space: normal; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown h4, .markdown h5, .markdown h6 { margin: 14px 0 6px; font-size: 14px; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre { margin: 6px 0; }
+.markdown ul, .markdown ol { padding-left: 20px; }
+.markdown blockquote { border-left: 3px solid var(--line-strong); padding-left: 10px; color: var(--ink-2); }
+.markdown pre { white-space: pre-wrap; }
+.markdown code, .fix code, .profile-fix code { font-family: var(--mono); font-size: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+.markdown pre code { display: block; padding: 6px 8px; }
+.markdown .md-table { overflow-x: auto; margin: 6px 0; }
+.markdown table { border-collapse: collapse; font-size: 12px; }
+.markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.markdown th { background: var(--surface); }
 .timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; font-size: 13px; }
 .timeline time { color: var(--ink-3); font-family: var(--mono); font-size: 12px; margin-right: 8px; }
 .timeline .detail { display: block; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -340,7 +357,7 @@ textarea { width: 100%; resize: vertical; }
 @media (max-width: 640px) {
   main { padding: 14px 16px 48px; }
   .order { grid-template-columns: 76px minmax(0, 1fr); }
-  #radar-search { width: 100%; }
+  #radar-search, #archive-search { width: 100%; }
 }
 
 .demo-tag { font-size: 13px; font-weight: 600; color: var(--bad); }
