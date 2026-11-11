@@ -67,8 +67,8 @@ def prompt(job, folder: str, feedback: str = "", last: str = "") -> str:
     text += claude_code.files_section(ROOT, folder, ("resume.md", "cover-letter.md", "notes.md"), models=False)
     text += claude_code.job_line(job)
     if feedback and last:
-        text += f"\nThe fact checker blocked your last brief. Fix the brief:\n{feedback}\n\n"
-        text += claude_code.file_block(f"{folder}/{BRIEF}", last)
+        text += f"\nThe fact checker blocked your last brief. Fix the brief:\n{claude_code.quoted(feedback)}\n\n"
+        text += claude_code.file_block(f"{folder}/{BRIEF}", last, untrusted="draft")
     elif feedback:
         text += f"\nYour last answer couldn't be used:\n{feedback}\n"
     return text + claude_code.hand_back(BRIEF)

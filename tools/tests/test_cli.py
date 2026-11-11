@@ -119,7 +119,9 @@ class WordsOrJson(Base):
         self.conn.commit()
         said = self.command("job", str(job), terminal=True)
         header, _, block = said.partition("<untrusted_posting>")
-        self.assertEqual(header.strip(), f"Job {job} at Acme: new, score 60.\nFit good: Close to the posting.")
+        # The company's name came from the board too, so it's in the fence, not the header.
+        self.assertEqual(header.strip(), f"Job {job}: new, score 60.\nFit good: Close to the posting.")
+        self.assertIn('"company": "Acme"', block)
         # The title is in the board's JSON, which escapes control codes itself. The description is printed as it came.
         self.assertIn("Staff Firmware Engineer", block)
         self.assertIn("Real text.[2J", block)

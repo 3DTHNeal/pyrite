@@ -242,14 +242,34 @@ def requisitions(posting: str = "", source_key: str = "", source_id: str = "") -
 
 def _set_aside_requisitions(body: str, idents: list[str]) -> str:
     """A letter's body with the job's requisition numbers blanked out: each as written anywhere, in any case, and its
-    digits alone where a label says what they are, as in "requisition 0145" for R-0145."""
+    digits alone where a label says what they are, as in "requisition 0145" for R-0145.
+
+    A short number on its own, such as 40000, reads as a measurement, and a posting can call any number its job id. So
+    one of those is blanked only where a label says what it is, and "cut costs by $40000" is still checked."""
     for ident in idents:
         ident = matchable(ident).strip()
-        body = re.sub(rf"(?<!\w){re.escape(ident)}(?!\w)", " ", body, flags=re.I)
         digits = re.sub(r"\D", "", ident)
+        if ident.isdigit() and len(ident) < SHORT_ID_DIGITS:
+            body = re.sub(rf"\b{REQUISITION_LABEL}{re.escape(ident)}(?!\w)", " ", body, flags=re.I)
+            continue
+        body = re.sub(rf"(?<!\w){re.escape(ident)}(?!\w)", " ", body, flags=re.I)
         if digits != ident and len(digits) >= 4:
             body = re.sub(rf"\b{REQUISITION_LABEL}{re.escape(digits)}(?!\w)", " ", body, flags=re.I)
     return body
+
+
+# A requisition number of only digits, and fewer than this many, could pass for a measurement.
+SHORT_ID_DIGITS = 7
+# The most words a company's name and a job's title can have and still be set aside as names. The board supplies
+# both, so a "title" that packs in claims, such as "Principal Engineer, 15 years Rust, led a team of 400", isn't a
+# name, and its numbers and terms need a source like any other text in the draft.
+NAME_WORDS = {"company": 6, "title": 12}
+
+
+def _as_name(phrase: str, words: int) -> str:
+    """A company or title as it may be set aside: as it is, or nothing if it's too long, or holds more than one
+    number, to be only a name."""
+    return phrase if len(phrase.split()) <= words and len(re.findall(r"\d+", phrase)) <= 1 else ""
 
 
 def explain(sentence: str, guard: dict[str, Any]) -> dict[str, Any]:
@@ -275,6 +295,7 @@ def check_text(
         errors.append(f"{label} has an unfilled placeholder: {blank[:120]!r}")
     # The draft and everything it's compared with are read the same way.
     text, sources, company, title, posting = (matchable(part) for part in (text, sources, company, title, posting))
+    company, title = _as_name(company, NAME_WORDS["company"]), _as_name(title, NAME_WORDS["title"])
     lines = [line.strip() for line in text.splitlines() if line.strip()]
 
     # Nothing from the do-not-use list, anywhere.
@@ -381,6 +402,7 @@ def check_brief(text: str, cfg: dict[str, Any], sources: str, company: str = "",
     guard = cfg["guard"]
     errors += disguises(text, "Brief")
     text, sources, company, title, posting = (matchable(part) for part in (text, sources, company, title, posting))
+    company, title = _as_name(company, NAME_WORDS["company"]), _as_name(title, NAME_WORDS["title"])
 
     for pattern, where in blocked_patterns(cfg):
         match = re.search(pattern, text, re.I)
