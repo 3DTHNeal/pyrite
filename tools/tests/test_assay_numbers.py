@@ -240,11 +240,21 @@ class NotMeasured(unittest.TestCase):
         ("date", "Filed on 2025-03-31 by the board.", "2025-03-31"),
         ("date", "Filed on 31 March 2025 by the board.", "31 March 2025"),
         ("date", "Filed on Mar. 31, 2025 by the board.", "Mar. 31, 2025"),
+        ("day", "The offer ran from Sept 28 to its close.", "Sept 28"),
+        ("day", "A premium to the June 12 close.", "June 12"),
+        ("day", "Reported Mar 3-4, 2025 by two papers.", "Mar 3-4, 2025"),
+        ("day", "The board met on 6 October again.", "6 October"),
         ("period", "Sales for 9M 2025 rose.", "9M"),  # Its year is set aside as a year.
         ("identifier", "Under Regulation 2023/1230 the plant was cleared.", "2023/1230"),
         ("identifier", "Solvent 7732-18-5 was used.", "7732-18-5"),
+        ("identifier", "Proposed in COM(2024) 123 last spring.", "COM(2024) 123"),
+        ("identifier", "Its annual report on Form 20-F is due.", "20-F"),
         ("unit label", "Revenue (in thousands of dollars) is shown.", "(in thousands of dollars)"),
         ("unit label", "Revenue (Millions) is shown.", "(Millions)"),
+        ("reference", "See Note 4 for the terms.", "Note 4"),
+        ("reference", "Lists 2-4 carry the higher rate.", "Lists 2-4"),
+        ("reference", "See item 6 below.", "item 6"),
+        ("reference", "Sections 2b and 2c give the detail.", "Sections 2b and 2c"),
         ("year", "In 2024, the mill reopened.", "2024"),
     ]
 
@@ -329,6 +339,97 @@ class NotMeasured(unittest.TestCase):
         self.assertEqual(set(MEASURED.set_aside), set(numbers.NOT_MEASURED))
         self.assertTrue(MEASURED.negatives)
         self.assertEqual((EXACT.set_aside, EXACT.negatives), ((), False))
+
+    def test_a_day_or_a_reference_that_is_an_amount_is_still_one(self):
+        for body, texts in (("In May 5 million units shipped.", ["5 million"]), ("By March 3.5% had left.", ["3.5%"]),
+                            ("The Notes 85,000 holders signed.", ["85,000"]), ("Under Section 3 million was set aside.", ["3 million"]),
+                            ("See Exhibit 99.1 and Table 2.5.", ["99.1", "2.5"])):
+            with self.subTest(body):
+                self.assertEqual(numbers.not_measured(body, MEASURED), [])
+                self.assertEqual(self.found(body, MEASURED), texts)
+
+    def test_a_word_that_only_starts_like_a_month_or_reads_as_a_verb_is_no_label(self):
+        # "Margin 12" is no date, and "lists 44" may be what a filing does, so the count is still read.
+        for body, texts in (("Margin 12 and Market 5.", ["12", "5"]), ("The filing lists 44 deals and notes 11 more.", ["44", "11"]),
+                            ("It may 24 times over.", ["24"])):
+            with self.subTest(body):
+                self.assertEqual(numbers.not_measured(body, MEASURED), [])
+                self.assertEqual(self.found(body, MEASURED), texts)
+
+    def test_a_number_as_often_written_without_its_word_is_read_the_same_with_it(self):
+        # "Schedule 14A" and "the 14A" are one thing. Set aside in one and read in the other, a note that drops the word
+        # would be failed by a source that keeps it. So both are read, and a form's name is set aside either way.
+        self.assertEqual(self.found("The 14A was late.", MEASURED, known="Filed on Schedule 14A."), [])
+        self.assertEqual(self.found("Under Rule 144 it sold.", MEASURED, known="A sale under 144."), [])
+        self.assertEqual(self.found("The 20-F is due.", MEASURED, known="Its report on Form 20-F."), [])
+        self.assertEqual(self.found("A staff of 20.", MEASURED, known="Its report on Form 20-F."), ["20"])
+
+    def test_a_day_in_the_evidence_supports_no_number(self):
+        self.assertEqual(self.found("A team of 28.", MEASURED, known="The offer opened on Sept 28."), ["28"])
+        self.assertEqual(self.found("A team of 4.", MEASURED, known="See Note 4."), ["4"])
+        self.assertEqual(self.found("A team of 28 with 4 leads.", EXACT, known="The offer opened on Sept 28. See Note 4."), [])
+
+
+class Wide(unittest.TestCase):
+    """Scale as evidence nobody wrote as facts writes it: after a currency code, in the plural, and once for a range.
+    `MEASURED` reads it and `EXACT` reads every line as before."""
+
+    def read(self, body: str, policy: Policy = MEASURED) -> list[tuple[str, str, str]]:
+        return [(q.kind, q.value, q.text) for q in numbers.quantities(body, policy)]
+
+    def found(self, body: str, known: str, policy: Policy = MEASURED) -> list[str]:
+        return [f.text for f in numbers.number_findings(body, known, policy)]
+
+    def test_a_currency_code_counts_as_a_currency_sign(self):
+        self.assertEqual(self.read("A cash part of EUR 2.4m."), [("number", "2400000", "EUR 2.4m")])
+        self.assertEqual(self.read("A profit of RMB208.31 million."), [("number", "208310000", "RMB208.31 million")])
+        self.assertEqual(self.read("Sales of ¥6.2B and JPY (3.0)B."), [("number", "6200000000", "¥6.2B"), ("number", "3000000000", "JPY (3.0)B")])
+        # A code is one only as a word of its own: the EUR of kEUR and of EUROPE says nothing about the scale.
+        self.assertEqual(self.read("Sales of 12,000 kEUR in EUROPE 3m away."), [("number", "12000", "12,000"), ("number", "3", "3")])
+        self.assertEqual(self.found("A cash part of about EUR 2.4M.", "a cash component of approximately EUR 2.4m"), [])
+        self.assertEqual(self.found("A profit of RMB 208.31m.", "a profit of approximately RMB208.31 million"), [])
+        self.assertEqual(self.found("A profit of RMB 208.31m.", "a profit of approximately RMB209.31 million"), ["RMB 208.31m"])
+
+    def test_a_scale_word_may_be_plural(self):
+        self.assertEqual(self.read("Settled with 27 thousands ordinary shares."), [("number", "27000", "27 thousands")])
+        self.assertEqual(self.found("Settled with 27k shares.", "the issuance of 27 thousands ordinary shares"), [])
+        self.assertEqual(self.found("Settled with 28k shares.", "the issuance of 27 thousands ordinary shares"), ["28k"])
+
+    def test_a_range_states_its_scale_once(self):
+        self.assertEqual(self.read("Guidance of $40-50M."), [("number", "40000000", "$40"), ("number", "50000000", "50M")])
+        self.assertEqual(self.read("A margin of 1.2-1.8%."), [("percent", "1.2", "1.2"), ("percent", "1.8", "1.8%")])
+        self.assertEqual(self.read("A loss of RMB 31-38m."), [("number", "31000000", "RMB 31"), ("number", "38000000", "38m")])
+        self.assertEqual(self.read("Sales of 10 – 12 million units."), [("number", "10000000", "10"), ("number", "12000000", "12 million")])
+        self.assertEqual(self.read("Between $5-$6 billion."), [("number", "5000000000", "$5"), ("number", "6000000000", "$6 billion")])
+        self.assertEqual(self.found("Guidance raised to $40-50M from $30-45M.",
+                                    "to $40 million to $50 million, from $30 million to $45 million"), [])
+        self.assertEqual(self.found("A margin of 1.2-1.8%.", "margins in a range of 1.2% to 1.8%"), [])
+        self.assertEqual(self.found("A margin of 1.3-1.8%.", "margins in a range of 1.2% to 1.8%"), ["1.3"])
+        self.assertEqual(self.found("Guidance of $40-50M.", "guidance of $40 thousand to $50 million"), ["$40"])
+
+    def test_a_minus_or_a_range_with_no_scale_is_read_as_before(self):
+        for body in ("Sales of 500 -3% on the year.", "| 5.3 | -12% |", "In 3-5 years, on pages 12-14.", "Sales of 150,000-160,000 units."):
+            with self.subTest(body):
+                self.assertEqual(numbers.quantities(body, MEASURED), numbers.quantities(body))
+
+    def test_findings_keep_their_place_in_the_text_as_written(self):
+        body = "A loss of RMB (31)-38m, a margin of 1.2-1.8% and EUR 2.4m in cash."
+        found = numbers.number_findings(body, "", MEASURED)
+        self.assertEqual([f.text for f in found], ["RMB (31)", "38m", "1.2", "1.8%", "EUR 2.4m"])
+        for f in found:
+            self.assertEqual(body[f.start:f.end], f.text)
+
+    def test_the_exact_policy_reads_none_of_it(self):
+        for body in ("A cash part of EUR 2.4m.", "A profit of RMB208.31 million.", "Settled with 27 thousands ordinary shares.",
+                     "Guidance of $40-50M.", "A margin of 1.2-1.8%.", "Sales of ¥6.2B."):
+            with self.subTest(body):
+                self.assertNotEqual(numbers.quantities(body, MEASURED), numbers.quantities(body))
+                self.assertEqual(numbers.number_errors("Draft", body, "", "there", EXACT), errors_as_they_were("Draft", body, "", "there"))
+        self.assertFalse(EXACT.wide)
+        self.assertTrue(MEASURED.wide)
+        self.assertEqual(self.read("A cash part of EUR 2.4m.", Policy(wide=True)), [("number", "2400000", "EUR 2.4m")])
+        held = numbers.evidence("a cash component of approximately EUR 2.4m", policy=Policy(wide=True))
+        self.assertEqual(held.numbers, frozenset({"2400000"}))
 
 
 if __name__ == "__main__":

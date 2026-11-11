@@ -5,8 +5,9 @@ sources state, with the same value and scale. Nothing is worked out: 42 s to 9 s
 the text. Both take a `Policy`. The default, `EXACT`, is the rule above. `MEASURED` is for evidence nobody wrote as a
 list of facts, such as a filing whose tables state their unit once in a heading: it accepts a figure the evidence
 gives more exactly or at another scale, and still nothing is worked out. It also sets aside what such evidence writes in
-digits without measuring anything, such as dates, years and act numbers, and reads an accounting negative, (103,567), as
-its number. `not_measured` says what a policy sets aside, and where."""
+digits without measuring anything, such as dates, years and act numbers, reads an accounting negative, (103,567), as
+its number, and reads scale as widely as such evidence writes it: EUR 2.4m, $40-50M, 27 thousands. `not_measured` says
+what a policy sets aside, and where."""
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -23,7 +24,24 @@ NUMBER = re.compile(
     r"(?:\s?(?P<word>(?i:thousand|million|billion|trillion|bn))\b|(?P<letter>K|k|M|MM|B)\b"
     r"|(?(money)\s?(?P<cash>(?i:mm|mil|mn|k|m|b))\b|(?!)))?"
 )
-SCALE = {"thousand": 3, "k": 3, "million": 6, "m": 6, "mm": 6, "mil": 6, "mn": 6, "billion": 9, "b": 9, "bn": 9, "trillion": 12}
+SCALE = {"thousand": 3, "k": 3, "million": 6, "m": 6, "mm": 6, "mil": 6, "mn": 6, "billion": 9, "b": 9, "bn": 9, "trillion": 12,
+         "thousands": 3, "millions": 6, "billions": 9, "trillions": 12}
+# Scale read more widely, for a policy that asks for it. A currency code counts as a currency sign, against the digits
+# or a space before them, so RMB208.31 is read at all and EUR 2.4m is 2.4 million. The yen sign is a currency sign. A
+# scale word may be plural, as in a filing's "27 thousands ordinary shares".
+CURRENCY = r"(?:[$€£¥]|(?<![A-Za-z])(?:RMB|CNY|USD|EUR|GBP|JPY|CHF|HKD|ILS|NIS|CAD|AUD|KRW|INR))"
+_DIGITS = r"\d[\d,]*(?:\.\d+)?|\.\d+"
+_WIDE_SCALE = (r"\s?(?P<word>(?i:thousands?|millions?|billions?|trillions?|bn))\b|(?P<letter>K|k|M|MM|B)\b"
+               r"|(?(money)\s?(?P<cash>(?i:mm|mil|mn|k|m|b))\b|(?!))")
+NUMBER_WIDE = re.compile(rf"(?:(?P<money>{CURRENCY})\s?|(?<![\w.]))(?P<digits>{_DIGITS})(?:{_WIDE_SCALE})?")
+# A range whose scale or percent sign is written once, after its second figure: $40-50M is 40 million to 50 million,
+# 1.2-1.8% is two percentages, and RMB 31-38m is two amounts in millions. The dash stands against both figures or has
+# a space on each side, so the minus of "500 -3%" isn't one.
+_PERCENT_SIGN = r"\s*(?:%|(?i:percent(?:age)?(?:\s+points?)?\b|per\s?cent\b|pct\b|pp\b|p\.p\.))"
+RANGE = re.compile(
+    rf"(?:(?P<money>{CURRENCY})\s?|(?<![\w.]))(?P<a>{_DIGITS})(?:[-–]| [-–] )(?P<second>{CURRENCY}\s?)?(?P<b>{_DIGITS})"
+    rf"(?:(?P<percent>{_PERCENT_SIGN})|{_WIDE_SCALE})"
+)
 # A percentage spelled out is still a percentage, and so is a change in percentage points.
 PERCENT = re.compile(
     r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent(?:age)?(?:\s+points?)?\b|per\s?cent\b|pct\b|pp\b|p\.p\.)", re.I
@@ -57,18 +75,35 @@ NUMBER_WORD = re.compile(
 
 # What a source writes in digits that isn't a measurement. A policy names which of these it sets aside, and each is
 # read as blank space of the same length, in this order, on both sides of a check. A date: 2025-03-31, 31 March 2025,
-# March 31, 2025. A period counted in months before its year: the 9M of "9M 2025" is nine months, not nine million.
-# An identifier: an act numbered by its year, such as 2023/1230, or a CAS number, such as 7732-18-5. A unit label in
-# brackets: "(in thousands of dollars)" says what the figures are in, and its "thousands" counts nothing. A year from
-# 1900 to 2100 standing alone, though not one written as money, a percentage, a multiple or with a scale: $2050, 2000%
-# and 1950 million are amounts.
+# March 31, 2025. A day with no year, or a run of days: June 12, 12 June, Mar 3-4, 2025. The month is spelled as one,
+# since "Margin 12" is no date, and a day isn't an amount: "May 5 million" and "March 3.5%" are read as before. A
+# period counted in months before its year: the 9M of "9M 2025" is nine months, not nine million.
+# An identifier: an act numbered by its year, such as 2023/1230, a CAS number, such as 7732-18-5, a paper numbered
+# within its year, such as COM(2024) 123, or a form named by a number and a letter, such as 20-F. A unit label in
+# brackets: "(in thousands of dollars)" says what the figures are in, and its "thousands" counts nothing. A reference
+# to a place in a document: Note 4, Lists 2-4, item 6. The word is one that labels a place and is seldom a verb, in
+# lowercase only where it never is, and again what follows isn't an amount: "Notes 85,000" and "Section 3 million" are
+# read as before. A word whose number is as often written without it, as a form's or a rule's is, isn't one of them:
+# set aside with the word and read without it, the same number would count on one side of a check and not the other.
+# A year from 1900 to 2100 standing alone, though not one written as money, a percentage, a multiple or with a scale:
+# $2050, 2000% and 1950 million are amounts.
 MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?"
 YEAR = r"(?:19|20)\d{2}"
+_MONTH_NAME = (r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?"
+               r"|Nov(?:ember)?|Dec(?:ember)?)\.?")
+_NO_AMOUNT = r"(?![\dA-Za-z]|[,.]\d|\s?(?:%|[x×]|(?i:thousand|million|billion|trillion|bn|percent|per\s?cent|pct|times|fold)))"
+_LABEL = (r"(?:(?:Item|Note|Section|List|Page|Table|Figure|Exhibit|Annex|Article|Chapter|Part|Appendix|Footnote|Paragraph|Clause)s?"
+          r"|item|section|page|table|exhibit|annex|article|chapter|appendix|footnote|paragraph|clause)")
+_PLACE = rf"\d{{1,3}}[A-Za-z]?{_NO_AMOUNT}"
 NOT_MEASURED: dict[str, re.Pattern[str]] = {
     "date": re.compile(rf"\b{YEAR}-\d{{2}}(?:-\d{{2}})?\b|\b\d{{1,2}} {MONTH} {YEAR}\b|\b{MONTH} \d{{1,2}}, {YEAR}\b"),
+    "day": re.compile(rf"\b{_MONTH_NAME} \d{{1,2}}(?:st|nd|rd|th)?(?:\s?[-–]\s?\d{{1,2}}(?:st|nd|rd|th)?)?(?:, {YEAR}\b|{_NO_AMOUNT})"
+                      rf"|(?<![\w.,$€£])\d{{1,2}} {_MONTH_NAME}(?![A-Za-z])"),
     "period": re.compile(rf"\b\d{{1,2}}M(?= {YEAR}\b)"),
-    "identifier": re.compile(rf"\b{YEAR}/\d{{1,4}}\b|\b\d{{2,7}}-\d{{2}}-\d\b"),
+    "identifier": re.compile(rf"\b{YEAR}/\d{{1,4}}\b|\b\d{{2,7}}-\d{{2}}-\d\b|\b[A-Z]{{1,4}}\({YEAR}\) ?\d{{1,5}}\b"
+                             r"|(?<![\w.,$€£-])\d{1,2}-[A-Z]\b"),
     "unit label": re.compile(r"\((?:in )?(?:thousands?|millions?|billions?)(?: of)?(?: [A-Za-z]+)?\)", re.I),
+    "reference": re.compile(rf"\b{_LABEL} {_PLACE}(?:(?:\s?[-–]\s?|,? and |, ){_PLACE})*"),
     "year": re.compile(r"(?<![\d,.$€£])(?:19\d{2}|20\d{2}|2100)"
                        r"(?![\d%×]|[,.]\d|\s?(?:[KkMBx]|MM|(?i:thousand|million|billion|trillion|bn|times|fold))\b|-fold)"),
 }
@@ -122,20 +157,25 @@ class Policy:
     be supported by any 1,757 the evidence holds, read as thousands and rounded.
 
     `set_aside` names the kinds in `NOT_MEASURED` that aren't read as numbers at all, in the text judged and in its
-    evidence alike. `negatives` reads an accounting negative, (103,567), as the number in its brackets."""
+    evidence alike. `negatives` reads an accounting negative, (103,567), as the number in its brackets. `wide` reads
+    scale the ways `NUMBER_WIDE` and `RANGE` describe, again on both sides: a currency code counts as a currency sign,
+    a scale word may be plural, and the first figure of a range takes the scale or percent sign written after the
+    second."""
     rounded: bool = False
     shifts: tuple[int, ...] = (0,)
     bare_percent: bool = False
     figures: int = 3
     set_aside: tuple[str, ...] = ()
     negatives: bool = False
+    wide: bool = False
 
 
 # The same value at the same scale, with every figure read as written. What every caller gets unless it asks otherwise.
 EXACT = Policy()
 # For evidence a person didn't write as a list of facts, such as a filing whose tables are in thousands. Dates, years
-# and the rest of `NOT_MEASURED` are set aside, and accounting negatives are read.
-MEASURED = Policy(rounded=True, shifts=(0, 3, 6, 9, -3, -6, -9), bare_percent=True, set_aside=tuple(NOT_MEASURED), negatives=True)
+# and the rest of `NOT_MEASURED` are set aside, accounting negatives are read, and scale is read widely.
+MEASURED = Policy(rounded=True, shifts=(0, 3, 6, 9, -3, -6, -9), bare_percent=True, set_aside=tuple(NOT_MEASURED), negatives=True,
+                  wide=True)
 
 
 def not_measured(text: str, policy: Policy = MEASURED) -> list[tuple[str, int, int]]:
@@ -231,27 +271,45 @@ def _amount(digits: str, scale: str = "") -> tuple[Decimal | None, int, int]:
 def quantities(text: str, policy: Policy = EXACT) -> list[Quantity]:
     """Every number a text states, of each kind the checks know, in the order they stand. `numbers`, `percents` and
     `spelled` are views of this: the same patterns, read the same way, with each one's place kept. Under a policy that
-    sets figures aside, the text is read as `not_measured` says, and each quantity keeps its place in the text given."""
+    sets figures aside, the text is read as `not_measured` says, and each quantity keeps its place in the text given.
+    Under one that reads scale widely, a range is read first, each of its figures at the scale written once."""
     read, outer, brackets = _as_measured(text, policy)
+    number = NUMBER_WIDE if policy.wide else NUMBER
 
-    def place(m: re.Match[str], inner: list[int] | None = None) -> tuple[int, int]:
-        """Where a match in what was read stands in the text, through the places of a blanked copy if it was one. A
-        negative's brackets, dropped to read it, are part of it again."""
-        first, last = (m.start(), m.end() - 1) if inner is None else (inner[m.start()], inner[m.end() - 1])
+    def within(first: int, last: int) -> tuple[int, int]:
+        """Where a stretch of what was read, from its first character to its last, stands in the text. A negative's
+        brackets, dropped to read it, are part of it again."""
         start, end = outer[first], outer[last] + 1
         return start - (start - 1 in brackets), end + (end in brackets)
 
+    def place(m: re.Match[str], inner: list[int] | None = None) -> tuple[int, int]:
+        """Where a match in what was read stands in the text, through the places of a blanked copy if it was one."""
+        return within(m.start(), m.end() - 1) if inner is None else within(inner[m.start()], inner[m.end() - 1])
+
     found = []
+    if policy.wide:
+        for m in RANGE.finditer(read):
+            scale = m.group("word") or m.group("letter") or m.group("cash") or ""
+            # The second figure starts at its own currency sign, if it has one.
+            second = m.start("second" if m.group("second") else "b")
+            for digits, first, last in ((m.group("a"), m.start(), m.end("a") - 1), (m.group("b"), second, m.end() - 1)):
+                start, end = within(first, last)
+                if m.group("percent"):
+                    found.append(Quantity("percent", value(digits), text[start:end], start, end, *_amount(digits)))
+                else:
+                    found.append(Quantity("number", value(digits, scale), text[start:end], start, end, *_amount(digits, scale)))
+        # Blanked to the same length, so nothing below reads a range's figures again and every place still holds.
+        read = RANGE.sub(lambda m: " " * len(m.group(0)), read)
     for m in PERCENT.finditer(read):
         start, end = place(m)
         found.append(Quantity("percent", value(m.group(1)), text[start:end], start, end, *_amount(m.group(1))))
     without_percents, places = _blanked(PERCENT, read)
-    for m in NUMBER.finditer(without_percents):
+    for m in number.finditer(without_percents):
         scale = m.group("word") or m.group("letter") or m.group("cash") or ""
         start, end = place(m, places)
         found.append(Quantity("number", value(m.group("digits"), scale), text[start:end], start, end,
                               *_amount(m.group("digits"), scale)))
-    without_numbers, places = _blanked(NUMBER, read)
+    without_numbers, places = _blanked(number, read)
     for m in NUMBER_WORD.finditer(without_numbers):
         start, end = place(m, places)
         found.append(Quantity("spelled", m.group(0).lower(), text[start:end], start, end))
@@ -279,9 +337,9 @@ class Evidence:
 def evidence(known: str, amounts_too: bool = True, policy: Policy = EXACT) -> Evidence:
     """The numbers a known text holds, read the way a draft's are. The exact policy compares them as written and
     never looks at the amounts, so the check leaves those out when that's the policy it was given. What a policy sets
-    aside is set aside here too, so a date in the evidence supports no number. Judge a text by the policy its evidence
-    was read with."""
-    if policy.set_aside or policy.negatives:
+    aside is set aside here too, so a date in the evidence supports no number, and scale is read as widely as the
+    policy reads it. Judge a text by the policy its evidence was read with."""
+    if policy.set_aside or policy.negatives or policy.wide:
         found = quantities(known, policy)
 
         def held(kind: str) -> frozenset[str]:

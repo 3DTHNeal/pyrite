@@ -22,4 +22,6 @@ A tool builds its own gate from these, adding the rules particular to what it wr
 # The checker's own version, apart from any tool's built on it. The minor number goes up whenever a verdict could change
 # under some policy, and the major one when a caller would have to change too, so a seal that records it says which rules
 # gave a pass. 1.0 was the package with findings and policies, and 1.1 adds what a policy sets aside as not measured.
-__version__ = "1.1.0"
+# 1.2 sets aside a day with no year, a reference to a place in a document and two more kinds of identifier, and lets a
+# policy read scale widely: after a currency code, in the plural, and once for a range.
+__version__ = "1.2.0"
