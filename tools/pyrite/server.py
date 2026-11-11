@@ -16,8 +16,8 @@ import threading
 import time
 import tomllib
 import traceback
-from collections.abc import Sequence
-from contextlib import closing
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import closing, contextmanager
 from datetime import date, datetime
 from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -605,6 +605,86 @@ def build_state(conn, cfg) -> dict[str, Any]:
     }
 
 
+class _Build:
+    def __init__(self, changes: int) -> None:
+        self.changes = changes
+        self.done = threading.Event()
+        self.state: dict[str, Any] | None = None
+        self.error: BaseException | None = None
+
+
+class SharedState:
+    """The page's state, worked out once for every request that asks while a build is going.
+
+    The first build after a start reads every posting and takes several seconds, and two at once would each take about
+    twice as long. So a request that comes while one is going waits for it and takes its answer, unless something was
+    changed through the dashboard since that build began: then it gets a build of its own, so a job you just passed
+    never comes back. `warm` starts a build as the server starts, before the page asks.
+    """
+
+    def __init__(self, build: Callable[[], dict[str, Any]]) -> None:
+        self._build = build
+        self._lock = threading.Lock()
+        self._changes = 0  # Changes begun through the dashboard.
+        self._changing = 0  # Changes still going.
+        self._going: _Build | None = None
+
+    @contextmanager
+    def changing(self) -> Iterator[None]:
+        """Around anything that may change what the state says."""
+        with self._lock:
+            self._changes += 1
+            self._changing += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._changing -= 1
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            going = self._going
+            if going is None or going.changes != self._changes:
+                going = None
+                mine = _Build(self._changes)
+                # A build that began while a change was going may have missed it, so nothing else takes its answer.
+                if not self._changing:
+                    self._going = mine
+        if going is not None:
+            going.done.wait()
+            if going.error is not None or going.state is None:
+                raise going.error or RuntimeError("The dashboard's state couldn't be worked out.")
+            return going.state
+        try:
+            mine.state = self._build()
+        except BaseException as err:
+            mine.error = err
+            raise
+        finally:
+            mine.done.set()
+            with self._lock:
+                if self._going is mine:
+                    self._going = None
+        return mine.state
+
+    def warm(self) -> None:
+        """Start a build now, in the background. A problem it finds is said when the page asks, not here."""
+        def build() -> None:
+            try:
+                self.get()
+            except Exception:
+                pass
+        threading.Thread(target=build, name="pyrite-warm", daemon=True).start()
+
+
+def _state_now() -> dict[str, Any]:
+    with closing(connect()) as conn:
+        return build_state(conn, load_config())
+
+
+STATE = SharedState(_state_now)
+
+
 def job_detail(conn, job_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
     last_run = last_full_sweep(conn)
     job = _enrich(get_job(conn, job_id), cfg, date.today().isoformat(), include_description=True,
@@ -835,7 +915,8 @@ class Handler(BaseHTTPRequestHandler):
         self._guarded(self._get)
 
     def do_POST(self):
-        self._guarded(self._post)
+        with STATE.changing():
+            self._guarded(self._post)
 
     def _get(self):
         if not self._host_ok():
@@ -846,11 +927,7 @@ class Handler(BaseHTTPRequestHandler):
                 name, mime = STATIC_FILES[path]
                 return self._send(200, page() if name == "index.html" else (STATIC / name).read_bytes(), mime)
             if path == "/api/state":
-                conn = connect()
-                try:
-                    return self._json(build_state(conn, load_config()))
-                finally:
-                    conn.close()
+                return self._json(STATE.get())
             if path == "/api/settings":
                 return self._json(_settings_page())
             if path == "/api/settings/schedule":
@@ -1316,6 +1393,7 @@ def make_server(port: int) -> DashboardServer:
 def serve(port: int = 8787) -> None:
     connect().close()
     server = make_server(port)
+    STATE.warm()
     print(f"Pyrite: http://127.0.0.1:{port}\nOpen that in your browser. The dashboard runs while this window is open, "
           "and Ctrl+C stops it.", flush=True)
     try:

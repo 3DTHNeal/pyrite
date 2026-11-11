@@ -3,6 +3,8 @@
 
 const $ = (id) => document.getElementById(id);
 let state = null;
+// When this browser kept the state on screen, while that's the copy from last time rather than the server's latest.
+let keptAt = null;
 let openJobId = null;
 // The address before a job's panel took it over, as #job-56, which closing the panel puts back.
 let hashBeforeJob = "";
@@ -358,10 +360,13 @@ function renderStatus(error = "") {
   const problems = $("status-pop").querySelectorAll(".alert").length + (error ? 1 : 0);
   const run = state && state.last_run;
   let text;
-  if (error) text = error;
+  // The kept copy's runs and problems are as they were then, so it says only what it is.
+  const kept = keptAt ? `This is what was here ${ago(keptAt)}.` : "";
+  if (error) text = kept ? `${error} ${kept}` : error;
+  else if (kept) text = `Loading the latest. ${kept}`;
   else if (busy) text = RUNS[busy].busy;
   else text = run ? `Boards checked ${ago(run.finished_at)}` : "Boards not checked yet";
-  if (!error && !busy && problems) text += ` · ${plural(problems, "problem")}`;
+  if (!error && !kept && !busy && problems) text += ` · ${plural(problems, "problem")}`;
   $("status-text").textContent = text;
   $("status-icon").src = `/static/icons/${busy === "sweep" ? "pan" : busy ? "anvil" : problems ? "tarnished" : "pan"}-24.png`;
   $("status").classList.toggle("problem", Boolean(problems) && !busy);
@@ -1428,7 +1433,8 @@ async function startRun(kind) {
 
 function render() {
   $("demo-tag").hidden = !state.demo;
-  offerSetup();
+  // The copy from last time can't say whether setup is still needed, so that waits for the server.
+  if (!keptAt) offerSetup();
   // The to-do count shows in the browser tab, so a background tab says when something needs you.
   document.title = state.orders.length ? `(${state.orders.length}) Pyrite` : "Pyrite";
   renderSweep();
@@ -1443,10 +1449,37 @@ function render() {
   renderSources();
 }
 
+// The last state the server sent, kept in this browser so the next load shows it at once while the server works out the
+// latest, which takes several seconds after a restart. Without storage the page waits for the server, as it always did.
+const LAST_STATE = "pyrite.last-state";
+
+function keepState() {
+  try {
+    localStorage.setItem(LAST_STATE, JSON.stringify({ at: new Date().toISOString(), state }));
+  } catch (err) { /* Full or turned off: the next load waits for the server instead. */ }
+}
+
+function showKept() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(LAST_STATE) || "null");
+    if (!kept || !kept.state || !kept.at) return;
+    state = kept.state;
+    keptAt = kept.at;
+    render();
+  } catch (err) {
+    // A copy an older Pyrite kept may not draw. Then the page waits for the server, as with none.
+    state = null;
+    keptAt = null;
+    try { localStorage.removeItem(LAST_STATE); } catch (e) { /* Nothing more to do. */ }
+  }
+}
+
 async function refresh() {
   try {
     state = await api("/api/state");
+    keptAt = null;
     render();
+    keepState();
   } catch (err) {
     // fetch throws a TypeError when nothing answered. Anything else is the server saying what's wrong.
     const said = err instanceof TypeError ? "Can't reach the server. Is Pyrite still running?" : err.message;
@@ -2693,6 +2726,8 @@ $("setup-form").addEventListener("submit", async (e) => {
     return;
   }
   const said = `Made your workspace at ${done.folder}.`;
+  // The copy kept from the old workspace isn't this one's, so the new one's first load waits for its own.
+  try { localStorage.removeItem(LAST_STATE); } catch (err) { /* Then it shows until the new state comes. */ }
   if (!done.restarting) {
     $("setup-note").textContent = `${said} Restart the dashboard to open it.`;
     return;
@@ -2773,6 +2808,7 @@ setInterval(() => { if (!document.hidden) checkUpdate(); }, 3600000);
 // A job's address opens its panel once the page has loaded what the panel needs, over the first tab.
 const startJob = jobInAddress();
 if (!startJob) showTab(location.hash.slice(1));
+showKept();
 refresh().then(() => (startJob ? followAddress() : null));
 // Pick up what the morning run does while the page sits open, and catch up at once when you come back to the tab.
 setInterval(() => { if (!document.hidden) refresh(); }, 60000);

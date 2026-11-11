@@ -514,6 +514,101 @@ class Security(unittest.TestCase):
         self.assertIn("filename*=UTF-8''%E6%9D%8E%E9%9B%B7_Resume.md", headers["Content-Disposition"])
 
 
+class Noting(threading.Event):
+    """An event that says when something starts waiting on it."""
+
+    def __init__(self):
+        super().__init__()
+        self.waiting = threading.Event()
+
+    def wait(self, timeout=None):
+        self.waiting.set()
+        return super().wait(timeout)
+
+
+class OneBuildAtATime(unittest.TestCase):
+    """The page's state is slow to work out after a start, so a request that comes while a build is going shares it."""
+
+    def setUp(self):
+        self.calls = 0
+        self.started, self.release = threading.Event(), threading.Event()
+        self.fail_with = None
+
+    def build(self):
+        self.calls += 1
+        if self.calls == 1:
+            self.started.set()
+            self.release.wait(5)
+            if self.fail_with:
+                raise self.fail_with
+        return {"build": self.calls}
+
+    def first(self, shared, results):
+        thread = threading.Thread(target=lambda: results.append(self.capture(shared)))
+        thread.start()
+        self.assertTrue(self.started.wait(5))
+        return thread
+
+    @staticmethod
+    def capture(shared):
+        try:
+            return shared.get()
+        except ValueError as err:
+            return err
+
+    def test_a_request_during_a_build_takes_its_answer(self):
+        shared, results = server.SharedState(self.build), []
+        first = self.first(shared, results)
+        shared._going.done = noted = Noting()
+        second = threading.Thread(target=lambda: results.append(self.capture(shared)))
+        second.start()
+        self.assertTrue(noted.waiting.wait(5))
+        self.release.set()
+        first.join(5)
+        second.join(5)
+        self.assertEqual(results, [{"build": 1}, {"build": 1}])
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(shared.get(), {"build": 2})  # Once it's done, the next request builds afresh.
+
+    def test_a_build_that_fails_says_so_to_everyone_waiting(self):
+        self.fail_with = ValueError("search.toml can't be read")
+        shared, results = server.SharedState(self.build), []
+        first = self.first(shared, results)
+        shared._going.done = noted = Noting()
+        second = threading.Thread(target=lambda: results.append(self.capture(shared)))
+        second.start()
+        self.assertTrue(noted.waiting.wait(5))
+        self.release.set()
+        first.join(5)
+        second.join(5)
+        self.assertEqual([str(r) for r in results], ["search.toml can't be read"] * 2)
+
+    def test_a_change_since_the_build_began_gets_a_build_of_its_own(self):
+        shared, results = server.SharedState(self.build), []
+        first = self.first(shared, results)
+        with shared.changing():
+            pass
+        self.assertEqual(shared.get(), {"build": 2})
+        self.release.set()
+        first.join(5)
+
+    def test_a_build_begun_during_a_change_is_never_shared(self):
+        shared, results = server.SharedState(self.build), []
+        with shared.changing():
+            first = self.first(shared, results)
+        self.assertEqual(shared.get(), {"build": 2})
+        self.release.set()
+        first.join(5)
+
+    def test_every_post_counts_as_a_change(self):
+        shared = server.SharedState(self.build)
+        with mock.patch.object(server, "STATE", shared), mock.patch.object(shared, "changing", wraps=shared.changing) as changing:
+            handler = server.Handler.__new__(server.Handler)
+            handler._guarded = lambda handle: None
+            handler.do_POST()
+        changing.assert_called_once()
+
+
 class OpenedWithoutTheServer(unittest.TestCase):
     def test_template_says_where_the_dashboard_is_and_the_served_page_hides_it(self):
         static = Path(server.__file__).parent / "static"
