@@ -104,8 +104,8 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      # The system libraries the browser needs, kept between runs like poppler's. Playwright names them in the command
-      # it would run itself. If that ever reads differently, it installs them its own way.
+      # The system libraries the browser needs, kept between runs like poppler's. Playwright's dry run lists the ones
+      # the runner lacks, one to a line. If that ever reads differently, Playwright installs them its own way.
       - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -113,11 +113,12 @@ jobs:
           key: apt-kept-browser-${{ runner.arch }}-${{ steps.ubuntu.outputs.release }}-${{ steps.playwright.outputs.version }}
       - if: steps.passed.outputs.cache-hit != 'true' && matrix.browser
         run: |
-          packages=$(python -m playwright install-deps --dry-run chromium | tr ' ' '\n' | sed '1,/--no-install-recommends/d' | tr -d "\"'" | tr '\n' ' ')
-          echo "Playwright's packages: $packages"
+          report=$(python -m playwright install-deps --dry-run chromium || true)
+          echo "$report"
+          packages=$(echo "$report" | sed -n 's/^  \([^ ][^ ]*\)$/\1/p' | tr '\n' ' ')
           if [ -n "${packages// /}" ]; then
             APT_KEPT_OPTS=--no-install-recommends bash .github/apt-kept.sh browser $packages
-          else
+          elif ! echo "$report" | grep -q "All system dependencies are installed"; then
             python -m playwright install-deps chromium
           fi
       # With the browser restored from the cache, this downloads nothing.
