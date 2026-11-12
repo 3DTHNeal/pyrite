@@ -118,7 +118,8 @@ def _split(line: str, prefix: str) -> list[str]:
     return [p.strip() for p in line[len(prefix):].split("|")]
 
 
-# A note to yourself in the source, which no document should print.
+# A note to yourself in the source, which no document should print. The same as assay.text.COMMENT, so the text the
+# assay judges is the text printed; a test holds them together.
 COMMENT = re.compile(r"<!--.*?-->", re.S)
 
 

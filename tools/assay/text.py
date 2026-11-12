@@ -7,7 +7,8 @@ EMPHASIS = re.compile(r"\*+|(?<!\w)_+|_+(?!\w)")
 PLACEHOLDER = re.compile(
     r"\[[^\]]*\]|\{\{|\{[^{}\n]{0,40}\}|\bTODO\b|\bTBD\b|\bFIXME\b|\bX{2,}\b|<[A-Za-z_ ]+>"
 )
-# A note to yourself in the source, which the builder leaves out of every document. The same as build_resume.COMMENT.
+# A note to yourself in the source, which Markdown and HTML leave out of what they print. A tool that builds documents
+# should leave out the same, so the text judged is the text printed.
 COMMENT = re.compile(r"<!--.*?-->", re.S)
 # A blank to fill in, such as ___%. Looked for before emphasis markers are taken out, since those are underscores too.
 BLANK = re.compile(r"_{3,}")

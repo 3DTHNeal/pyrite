@@ -105,7 +105,7 @@ It runs with the tests too, and fails if any count moves in either direction, so
 
 ## Using the gate in another tool
 
-The general half of the assay is a package of its own, [`tools/assay`](../tools/assay/__init__.py). It knows nothing about resumes: each function takes the text to judge and the evidence to judge it by, and returns what it found. Number scales, confidential names, denials, links, specialist terms and the sealed record are all there. What's particular to a resume, such as the name line, roles under the right employer, page limits and a letter's requisition number, stays in `checks.py`, which is built on it.
+The general half of the assay is a package of its own, [`tools/assay`](../tools/assay/__init__.py). It knows nothing about resumes: each function takes the text to judge and the evidence to judge it by, and returns what it found. Number scales, confidential names, denials, links, specialist terms and the sealed record are all there. What's particular to a resume, such as the name line, roles under the right employer, page limits and a letter's requisition number, stays in `checks.py`, which is built on it. The package is kept upstream, where another tool uses it too, and copied here whole; `tools/assay/mirror.txt` records which version.
 
 A test, `tools/tests/test_assay_core.py`, keeps it that way. The package may import only itself and a short list of the standard library, so it can't start a program, reach the network or read a database, and it may not mention Pyrite. Another tool that needs truthful text can build its own gate from the same parts and add its own rules beside them.
 
