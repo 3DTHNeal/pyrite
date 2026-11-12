@@ -669,9 +669,7 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
     drafter = drafter_versions(folder)
     sent = sent_copies(folder)
     if not sent:
-        for name, version in drafter.items():
-            if version != DRAFTER_VERSION:
-                warnings.append(f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format.")
+        warnings += _rebuild_advice(drafter)
 
     overlap = keyword_overlap(resume, description, cfg) if description else None
     report = {"ok": not errors, "errors": errors, "warnings": warnings, "overlap": overlap, "drafter": drafter}
@@ -684,6 +682,24 @@ def check_application(folder: Path, cfg: dict[str, Any], company: str, title: st
         # differ from what the company has, which the dashboard then flags as changed after sending.
         report["sent_drafter"] = drafter_versions(folder / SENT_FOLDER)
     return report
+
+
+def _rebuild_advice(drafter: dict[str, str]) -> list[str]:
+    """A warning for each built document an older drafter made, saying to rebuild it."""
+    return [f"{name} was built by drafter {version}; the current drafter is {DRAFTER_VERSION}. Rebuild it to get the current format."
+            for name, version in drafter.items() if version != DRAFTER_VERSION]
+
+
+def as_sent(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A check result for a job you've applied to: advice to rebuild left out, whether or not a sent copy is on record.
+
+    The result was saved while the job was a draft, and an application made before sent copies were kept has none. Once
+    the company has the documents, rebuilding would only make the folder differ from what they have. Which drafter built
+    them stays, as a fact."""
+    if not report:
+        return report
+    advice = set(_rebuild_advice(report.get("drafter") or {}))
+    return {**report, "warnings": [warning for warning in report.get("warnings") or [] if warning not in advice]}
 
 
 # Above this share of the posting's skill terms a resume reads as copied from it, which screeners mark down. The

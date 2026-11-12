@@ -63,6 +63,7 @@ from .cli import finish_job
 from .discover import ghost_after_days, last_full_sweep, waiting_on_gone
 from .sources import find_comp
 from .store import (
+    ACTIVE,
     DEFAULT_FIX_ATTEMPTS,
     IS_EXAMPLE,
     REPLY_DISMISSED,
@@ -126,6 +127,7 @@ RECHECKABLE = ("ready", "needs_fix")
 SEEN = "seen"
 # Jobs that haven't gone out, and so the statuses Pass can be undone back to. Anything further along is Reopen's job.
 NOT_SENT = ("new", "shortlisted", "needs_fix", "ready")
+CLOSED_STATUSES = tuple(status for status in STATUSES if status not in ACTIVE)
 DEFAULT_MAX_PER_COMPANY = 3
 # How alike two titles at one company must be to count as the same job, such as a second requisition of it.
 SAME_TITLE = 0.9
@@ -234,6 +236,8 @@ def _enrich(row, cfg: dict[str, Any], today: str, include_description: bool = Fa
     job["changed_since_check"] = _changed_since_check(job, cfg)
     # Once sent, the documents are a record, not a draft: nothing rebuilds or refreshes them.
     job["frozen"] = bool(job["applied_at"])
+    if job["frozen"]:
+        job["check_result"] = checks.as_sent(job["check_result"])
     changed, acknowledged = sent_changes(row) if job["frozen"] else ([], False)
     job["changed_after_sending"] = [] if acknowledged else changed
     # Changes you've said are fine. They show again, as changed_after_sending, if the folder changes after that.
@@ -308,6 +312,17 @@ def _status_before_pass(conn, job_id: int) -> str | None:
         return None
     before = kinds[1] if len(kinds) > 1 else "new"  # A job found and passed has no status event before the pass.
     return before if before in NOT_SENT else None
+
+
+def _closing_notes(conn) -> dict[int, str]:
+    """For each closed job, the note on the status change that closed it, by job id: why it was passed, rejected or let
+    go, as given then. The fit reason is the case for applying, which says nothing about why it ended."""
+    marks = ", ".join("?" * len(CLOSED_STATUSES))
+    rows = conn.execute(
+        f"""SELECT e.job_id, e.detail FROM events e JOIN jobs j ON j.id = e.job_id
+            WHERE j.status IN ({marks}) AND e.kind = j.status ORDER BY e.id""", CLOSED_STATUSES)
+    # The latest wins, since a job can close, be reopened and close again.
+    return {job_id: detail or "" for job_id, detail in rows}
 
 
 def _deadline_text(job: dict[str, Any]) -> str:
@@ -510,12 +525,14 @@ def build_state(conn, cfg) -> dict[str, Any]:
     seen = {r[0] for r in conn.execute("SELECT DISTINCT job_id FROM events WHERE kind = ?", (SEEN,))}
     reached = store.outreach(conn)
     rework = gaps.rework(conn, jobs, ROOT)
+    closing = _closing_notes(conn)
     for job in jobs:
         _attach_runs(job, replies, refreshes, preps, tries, scams)
         _attach_history(job, history, limit)
         job["seen"] = job["id"] in seen
         job["reached_out"] = job["id"] in reached
         job["rework"] = rework.get(job["id"])
+        job["closing_note"] = closing.get(job["id"], "")
 
     applied =[j for j in jobs if j["applied_at"]]
     heard = [j for j in applied if j["response_at"]]

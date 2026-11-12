@@ -18,7 +18,7 @@ from pathlib import Path
 import support
 from support import CFG, MODEL, Base
 
-from pyrite import checks, claude_code, cli, demo, refresh, server, store
+from pyrite import checks, claude_code, cli, demo, discover, doctor, refresh, server, store
 from pyrite import score as scoring
 
 
@@ -643,6 +643,47 @@ class Icons(Base):
             self.assertEqual((width, height), (32 * frames, 32), strip)
 
 
+class SentWithoutACopy(Base):
+    """An application made before sent copies were kept is still sent. Advice to rebuild it can't be acted on."""
+
+    def test_an_applied_job_is_not_told_to_rebuild(self):
+        old = f"resume.docx was built by drafter 1; the current drafter is {checks.DRAFTER_VERSION}. Rebuild it to get the current format."
+        report = {"ok": True, "errors": [], "warnings": [old, "notes.md is missing."], "overlap": None, "drafter": {"resume.docx": "1"}}
+        job = self.add(check_result=json.dumps(report))
+        store.set_status(self.conn, job, "applied")
+        shown = next(j for j in server.build_state(self.conn, CFG)["jobs"] if j["id"] == job)
+        self.assertEqual(shown["check_result"]["warnings"], ["notes.md is missing."])
+        self.assertEqual(shown["check_result"]["drafter"], {"resume.docx": "1"})
+        # A draft not yet sent still gets the advice.
+        draft = self.add(source_id="2", check_result=json.dumps(report))
+        shown = next(j for j in server.build_state(self.conn, CFG)["jobs"] if j["id"] == draft)
+        self.assertIn(old, shown["check_result"]["warnings"])
+
+    def test_nothing_to_strip_is_left_alone(self):
+        self.assertIsNone(checks.as_sent(None))
+        report = {"ok": False, "errors": ["resume.md is missing."], "warnings": [], "overlap": None}
+        self.assertEqual(checks.as_sent(report), report)
+
+
+class ClosingNotes(Base):
+    def test_the_note_that_closed_a_job_is_shown_not_its_fit_reason(self):
+        job = self.add(fit_reason="Good match on paper.")
+        store.set_status(self.conn, job, "applied")
+        store.set_status(self.conn, job, "rejected", "Went with an internal candidate.")
+        quiet = self.add(source_id="2", fit_reason="Close to home.")
+        store.set_status(self.conn, quiet, "passed")
+        store.set_status(self.conn, quiet, "shortlisted", "Reopened")
+        store.set_status(self.conn, quiet, "passed", "Pay too low.")
+        jobs = {j["id"]: j for j in server.build_state(self.conn, CFG)["jobs"]}
+        self.assertEqual(jobs[job]["closing_note"], "Went with an internal candidate.")
+        # The latest close wins, after a reopen.
+        self.assertEqual(jobs[quiet]["closing_note"], "Pay too low.")
+        open_job = self.add(source_id="3")
+        store.set_status(self.conn, open_job, "shortlisted", "Strong fit")
+        jobs = {j["id"]: j for j in server.build_state(self.conn, CFG)["jobs"]}
+        self.assertEqual(jobs[open_job]["closing_note"], "")
+
+
 class Demo(Base):
     def test_covers_every_column_with_nothing_real_needed(self):
         demo.load(self.conn, CFG)
@@ -672,6 +713,61 @@ class Demo(Base):
                 refresh.start(self.conn, job["id"])
         self.assertIn("demo", str(caught.exception))
         popen.assert_not_called()
+
+    def test_the_field_report_is_newer_than_everything_it_reports(self):
+        # Every event is backdated to when its step came, so the report doesn't open saying it's out of date.
+        demo.load(self.conn, CFG)
+        state = server.build_state(self.conn, CFG)
+        self.assertEqual(state["briefing"]["since"], {})
+        report = state["briefing"]["ts"]
+        self.assertFalse(self.conn.execute("SELECT kind FROM events WHERE ts > ?", (report,)).fetchall())
+
+    def test_each_timeline_agrees_with_its_dates(self):
+        demo.load(self.conn, CFG)
+        for job in self.conn.execute("SELECT * FROM jobs").fetchall():
+            events = {row["kind"]: row["ts"] for row in self.conn.execute("SELECT kind, ts FROM events WHERE job_id = ?", (job["id"],))}
+            with self.subTest(company=job["company"]):
+                self.assertEqual(events["found"], job["first_seen"])
+                if job["applied_at"]:
+                    self.assertEqual(events["applied"], job["applied_at"])
+                    self.assertLess(job["first_seen"], job["applied_at"])
+                if job["status"] != "new":
+                    self.assertEqual(events[job["status"]], job["status_changed_at"])
+
+    def test_both_ready_jobs_have_documents_that_pass(self):
+        demo.load(self.conn, CFG)
+        ready = self.conn.execute("SELECT * FROM jobs WHERE status = 'ready'").fetchall()
+        self.assertEqual({job["company"] for job in ready}, {"Initech Controls", "Stark Dynamics"})
+        for job in ready:
+            with self.subTest(company=job["company"]):
+                files = json.loads(job["files"])
+                self.assertTrue(any("_Resume_" in f and f.endswith(".pdf") for f in files), files)
+                self.assertTrue(any("_Cover_Letter_" in f and f.endswith(".pdf") for f in files), files)
+                report = json.loads(job["check_result"])
+                self.assertTrue(report["ok"], report["errors"])
+                self.assertEqual(report["warnings"], [])
+                self.assertFalse(checks.reads_as_copied(report["overlap"]))
+
+    def test_its_prospects_are_scored_as_the_settings_score_them(self):
+        demo.load(self.conn, CFG)
+        due = discover.rescore_due(self.conn, CFG)
+        self.assertEqual((due["changed"], due["dropped"]), (0, 0))
+        self.assertGreater(due["total"], 0)
+
+    def test_each_closed_job_says_why_it_closed(self):
+        demo.load(self.conn, CFG)
+        closed = {job["company"]: job for job in server.build_state(self.conn, CFG)["jobs"] if job["status"] in server.CLOSED_STATUSES}
+        self.assertIn("safety certification", closed["Soylent Labs"]["closing_note"])
+        self.assertNotEqual(closed["Soylent Labs"]["closing_note"], closed["Soylent Labs"]["fit_reason"])
+        self.assertTrue(closed["Aperture Science"]["closing_note"])
+
+    def test_mail_reads_as_working_where_the_demo_lists_it_working(self):
+        demo.load(self.conn, CFG)
+        self.conn.commit()
+        with mock.patch.object(doctor, "IS_EXAMPLE", True), mock.patch.object(doctor, "DB_PATH", Path(self.tmp.name) / "t.db"):
+            found = doctor.mail_check(CFG)
+        self.assertTrue(found["ok"])
+        self.assertIn("demo", found["what"])
 
     def test_refuses_any_workspace_but_the_example(self):
         # This suite's workspace is a copy, so it stands in for someone's real data here.

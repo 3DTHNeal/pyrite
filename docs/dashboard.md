@@ -13,7 +13,7 @@ port = 8790
 
 A rail down the left names every view: **To do** first, then **Pipeline** with each of its stages under it, **Prospects**, **Closed** and **Industries**, then the **Setup** views, **Profile**, **Facts**, **Sources** and **Settings**. Each shows a count where one helps, such as how many things need you beside To do, and a stage under Pipeline opens the board at its column. To do also has the key numbers on one line beside its name, each with its detail in a tooltip. On a narrow screen the rail becomes a strip of views across the top.
 
-The bar along the top holds one line of status, **Add a posting**, and **Update available** when there is one. The status line says what's running, or when the boards were last read and how many problems there are, such as a failing source or a run that failed. Click it for the whole story and the two run buttons.
+The bar along the top holds one line of status, **Add a posting**, and **Update available** when there is one. The status line says what's running, or when the boards were last read and how many problems there are, such as a failing source or a run that failed. Click it for the whole story and the two run buttons. It names each failing source, up to three, with what went wrong, and **Open Sources** goes to the rest.
 
 The dashboard labels its parts in plain words. The code and these docs sometimes use the prospector's name each started with:
 
@@ -25,7 +25,7 @@ The dashboard labels its parts in plain words. The code and these docs sometimes
 | Pipeline | Claims | Jobs you're working: being tailored, ready, applied and beyond |
 | Ready to send | Nuggets | Drafts that passed the assay and are ready to send |
 | Prospects | | New postings you haven't judged yet |
-| Closed | Tailings | Jobs that are closed out: passed, rejected, ghosted or taken down |
+| Closed | Tailings | Jobs that are closed out: passed, rejected, ghosted or taken down. Each shows when it closed and the note you gave then, and the tab can be searched and filtered by outcome |
 | Sources | Veins | The job boards Pyrite reads, and whether each is working |
 | Check boards now | Pan | Reading the boards and checking mail. The command is `pyrite sweep` |
 | Fact check | Assay | The checker that decides whether a draft is ready |
@@ -108,7 +108,7 @@ Clicking a job anywhere opens its panel at the side. The header has its stage ic
 - **Next step**, a line and a date of your own. The date is what **Follow up** and **Act now** go by, and a rescore keeps a job that has one.
 - **Reaching out**, for the note to the hiring manager ([After you apply](applying.md#after-you-apply)).
 - **Your notes**, free text kept in the database, saved with **Save notes**. A note keeps the job through a rescore too. A note or next step you haven't saved says **Not saved yet**, and stays in its box if you close the panel and come back, until the page is reloaded.
-- **Fit and interview notes**, the job's `notes.md` as tailoring wrote it.
+- **Fit and interview notes**, the job's `notes.md` as tailoring wrote it, with its headings, lists, tables and links drawn as such.
 - **Employer**: the research on how the employer works ([How the employer works](applying.md#how-the-employer-works)).
 - **Why it scored** and **Why its priority is**, the points behind its place in the list.
 - The posting's text, then its **Timeline**: every change of status, run, check and note, newest first.

@@ -13,6 +13,11 @@ let refreshWatch = null;
 let drawerOpener = null;
 // The longest text each box takes, as server.py refuses longer: a note with an update, your notes and the next step.
 const LIMITS = { note: 2000, notes: 5000, nextStep: 300 };
+// The demo starts no runs, so every button that would start one is disabled up front and says why, rather than
+// being pressed and then refused.
+const DEMO_NO_RUNS = "Not in the demo, which starts no runs.";
+const inDemo = () => Boolean(state && state.demo);
+const demoTitle = () => (inDemo() ? DEMO_NO_RUNS : null);
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -74,6 +79,91 @@ const capitalized = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 function clip(text, limit) {
   if (!text || text.length <= limit) return text || "";
   return `${text.slice(0, limit).replace(/\s+\S*$/, "").replace(/[,;:]$/, "")}…`;
+}
+
+// Text with `backticked` words, such as a command to run, shown with those words as code. The rest stays plain text.
+function withCode(text) {
+  return String(text || "").split(/(`[^`\n]+`)/).filter(Boolean)
+    .map((part) => (/^`[^`]+`$/.test(part) ? h("code", {}, part.slice(1, -1)) : part));
+}
+
+// Markdown as Claude writes it in notes.md: headings, lists, tables, quotes and paragraphs, with bold, italic, code and
+// links inside them. It's built from elements and text, never parsed as HTML, so nothing in the file can add markup or
+// script, and a link goes only to an http or https address.
+const MD_INLINE = /(`[^`\n]+`)|\*\*(.+?)\*\*|__(.+?)__|(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])|\[([^\]\n]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"*_])/g;
+
+function mdInline(text) {
+  const nodes = [];
+  let at = 0;
+  for (const m of String(text).matchAll(MD_INLINE)) {
+    if (m.index > at) nodes.push(text.slice(at, m.index));
+    const [whole, code, bold, bold2, em, em2, label, href, bare] = m;
+    if (code) nodes.push(h("code", {}, code.slice(1, -1)));
+    else if (bold || bold2) nodes.push(h("strong", {}, mdInline(bold || bold2)));
+    else if (em || em2) nodes.push(h("em", {}, mdInline(em || em2)));
+    else if (label) nodes.push(safeHref(href) ? h("a", { href, target: "_blank", rel: "noopener noreferrer" }, mdInline(label)) : whole);
+    else if (bare) nodes.push(h("a", { href: bare, target: "_blank", rel: "noopener noreferrer" }, bare));
+    at = m.index + whole.length;
+  }
+  if (at < text.length) nodes.push(text.slice(at));
+  return nodes;
+}
+
+const mdCells = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+const MD_LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+const MD_TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+function markdown(text) {
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  let i = 0;
+  const startsBlock = (n) => !lines[n].trim() || /^(#{1,6}\s|>|```)/.test(lines[n]) || MD_LIST.test(lines[n])
+    || /^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[n]) || (lines[n].includes("|") && MD_TABLE_RULE.test(lines[n + 1] || ""));
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i += 1; continue; }
+    const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+    if (heading) {
+      // The panel already has an h3 over the notes, so the file's levels start one below it.
+      blocks.push(h(`h${Math.min(6, heading[1].length + 3)}`, {}, mdInline(heading[2])));
+      i += 1;
+    } else if (/^```/.test(line)) {
+      const code = [];
+      for (i += 1; i < lines.length && !/^```/.test(lines[i]); i += 1) code.push(lines[i]);
+      blocks.push(h("pre", {}, h("code", {}, code.join("\n"))));
+      i += 1;
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      blocks.push(h("hr"));
+      i += 1;
+    } else if (line.includes("|") && MD_TABLE_RULE.test(lines[i + 1] || "")) {
+      const head = mdCells(line);
+      const rows = [];
+      for (i += 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i += 1) rows.push(mdCells(lines[i]));
+      blocks.push(h("div", { class: "md-table" }, h("table", {},
+        h("thead", {}, h("tr", {}, head.map((cell) => h("th", {}, mdInline(cell))))),
+        h("tbody", {}, rows.map((row) => h("tr", {}, head.map((_, n) => h("td", {}, mdInline(row[n] || "")))))))));
+    } else if (/^>/.test(line)) {
+      const quote = [];
+      for (; i < lines.length && /^>/.test(lines[i]); i += 1) quote.push(lines[i].replace(/^>\s?/, ""));
+      blocks.push(h("blockquote", {}, markdown(quote.join("\n"))));
+    } else if (MD_LIST.test(line)) {
+      const ordered = /^\s*\d/.test(line);
+      const items = [];
+      for (; i < lines.length; i += 1) {
+        const item = lines[i].match(MD_LIST);
+        if (item) items.push(item[3]);
+        // A line indented under an item carries on that item.
+        else if (lines[i].trim() && /^\s+/.test(lines[i]) && items.length) items[items.length - 1] += ` ${lines[i].trim()}`;
+        else break;
+      }
+      blocks.push(h(ordered ? "ol" : "ul", {}, items.map((item) => h("li", {}, mdInline(item)))));
+    } else {
+      const para = [line.trim()];
+      for (i += 1; i < lines.length && !startsBlock(i); i += 1) para.push(lines[i].trim());
+      blocks.push(h("p", {}, mdInline(para.join(" "))));
+    }
+  }
+  return blocks;
 }
 
 // A company or title as a table cell shows it: three lines at most, however long a board made it. The panel has all of it.
@@ -212,6 +302,15 @@ function codePrompt(first, send, cancelled) {
 
 // Mail is checked with the boards and listed with them on the Sources tab, but a failing inbox is named apart.
 const isMail = (source) => /^inbox:/.test(source.source_key || "");
+// How many failing sources the status popover names before it says how many more.
+const FAILING_NAMED = 3;
+// A source as the popover names it: the company, the kind of board, and what went wrong, cut short.
+const sourceLabel = (source) => {
+  const kind = (source.source_key || "").split(":")[0];
+  return `${source.company || source.source_key}${kind ? ` (${capitalized(kind)})` : ""}: ${clip(source.last_error, 120)}`;
+};
+const openSourcesLink = () => h("button", { class: "linkish", type: "button",
+  onclick: () => { toggleStatus(false); showTab("sources"); } }, "Open Sources");
 
 function renderSweep() {
   const run = state.last_run;
@@ -229,8 +328,16 @@ function renderSweep() {
   }
   const nodes = [parts.join(" ")];
   if (run && Date.now() - toDate(run.finished_at).getTime() > 30 * 3.6e6) nodes.push(" ", h("span", { class: "alert" }, "This is out of date, so check the Pyrite Sweep task."));
-  if (failed.length) nodes.push(" ", h("span", { class: "alert" }, `${plural(failed.length, "source")} failing.`));
-  if (mailFailed) nodes.push(" ", h("span", { class: "alert" }, "Mail couldn't be checked: see the Sources tab."));
+  if (failed.length) {
+    // Named here, so a failing board doesn't take a trip to the Sources tab to find. The tab has them all.
+    const named = failed.slice(0, FAILING_NAMED).map(sourceLabel);
+    const more = failed.length > FAILING_NAMED ? `, and ${failed.length - FAILING_NAMED} more` : "";
+    nodes.push(" ", h("span", { class: "alert" }, `${plural(failed.length, "source")} failing: ${named.join("; ")}${more}.`), " ", openSourcesLink());
+  }
+  if (mailFailed) {
+    nodes.push(" ", h("span", { class: "alert" }, "Mail couldn't be checked: see the Sources tab."));
+    if (!failed.length) nodes.push(" ", openSourcesLink());
+  }
   fill($("sweep"), nodes);
 }
 
@@ -389,7 +496,7 @@ function closedLine() {
 const COLUMNS = [
   { title: "Being tailored", statuses: ["shortlisted", "needs_fix"], hint: "Claude writes these on the next run, or now with the button", batch: true },
   { title: "Ready to send", statuses: ["ready"], hint: "Read, then apply on the company's site" },
-  { title: "Applied", statuses: ["applied"], hint: "Waiting to hear" },
+  { title: "Waiting to hear", statuses: ["applied"], hint: "Applied, nothing back yet" },
   { title: "Replied", statuses: ["responded"] },
   { title: "Interviewing", statuses: ["interviewing"] },
   { title: "Offer", statuses: ["offer"] },
@@ -507,7 +614,7 @@ function renderBoard() {
       col.hint ? h("div", { class: "column-hint" }, col.hint) : null,
       col.batch && (jobs.length || busy) ? h("div", { class: "row" }, h("button", {
         id: "run-tailor", class: "btn primary", type: "button", disabled: busy || state.demo || Boolean(notReady("tailor")),
-        title: state.demo ? "Not in the demo, which starts no runs."
+        title: state.demo ? DEMO_NO_RUNS
           : notReady("tailor") || "Have Claude write every draft in this column now, stretch jobs included. Uses your Claude plan.",
         onclick: () => startRun("tailor") }, busy ? RUNS.tailor.busy : RUNS.tailor.idle)) : null,
       h("div", { class: "cards" }, jobs.map((job) => h("button", { class: "card", type: "button", onclick: () => openJob(job.id, jobs.map((j) => j.id)) },
@@ -561,6 +668,15 @@ function saveRadarFilters() {
   }
 }
 
+// The filters that leave postings out, with the word the count line uses for each. Sorting hides nothing.
+const RADAR_NARROWING = [["radar-search", "search"], ["radar-track", "track"], ["radar-place", "location"], ["radar-show", "listing"]];
+
+function showAllProspects() {
+  RADAR_NARROWING.forEach(([id]) => { $(id).value = ""; });
+  saveRadarFilters();
+  renderRadar();
+}
+
 function renderRadar() {
   const tracks = [...new Set(state.jobs.map((j) => j.track).filter(Boolean))].sort();
   const trackSel = $("radar-track");
@@ -571,17 +687,23 @@ function renderRadar() {
 
   const query = $("radar-search").value.trim().toLowerCase();
   const place = $("radar-place").value;
-  const rows = state.jobs.filter((j) => j.status === "new"
-    && (!query || `${j.company} ${j.title} ${j.location || ""}`.toLowerCase().includes(query))
+  const prospects = state.jobs.filter((j) => j.status === "new");
+  const rows = prospects.filter((j) => (!query || `${j.company} ${j.title} ${j.location || ""}`.toLowerCase().includes(query))
     && (!trackSel.value || j.track === trackSel.value)
     && (!place || j.location_kind === place)
     && RADAR_SHOWS[$("radar-show").value](j))
     .sort(RADAR_SORTS[$("radar-sort").value]);
   const shown = rows.slice(0, 300);
   const ids = shown.map((j) => j.id);
-  const unseen = state.jobs.filter((j) => j.status === "new" && !j.seen).length;
-  const count = rows.length > shown.length ? `Showing ${shown.length} of ${plural(rows.length, "posting")}` : plural(rows.length, "posting");
-  $("radar-count").textContent = unseen ? `${count}. ${unseen} not looked at yet.` : count;
+  const unseen = prospects.filter((j) => !j.seen).length;
+  // A remembered filter outlives the visit that set it, so the count says when one is hiding postings, and which.
+  const narrowing = RADAR_NARROWING.filter(([id]) => $(id).value.trim());
+  RADAR_NARROWING.forEach(([id]) => $(id).classList.toggle("filtered", Boolean($(id).value.trim())));
+  const total = rows.length < prospects.length ? `${rows.length} of ${plural(prospects.length, "posting")}` : plural(rows.length, "posting");
+  const count = rows.length > shown.length ? `Showing ${shown.length} of ${total}` : total;
+  const by = narrowing.length ? `, filtered by ${listed(narrowing.map(([, name]) => name))}` : "";
+  fill($("radar-count"), `${count}${by}.${unseen ? ` ${unseen} not looked at yet.` : ""}`,
+    narrowing.length ? [" ", h("button", { class: "btn small", type: "button", onclick: showAllProspects }, "Show all")] : null);
   // Tailor and Pass act straight from the row, so a quick no never needs the panel.
   const quick = (j, label, action, cls) => h("button", { class: cls, type: "button",
     onclick: (e) => {
@@ -624,17 +746,32 @@ function shortPlace(location) {
   return `${places.slice(0, 3).join(" | ")} and ${places.length - 3} more`;
 }
 
+const CLOSED_LABELS = { rejected: "Rejected", ghosted: "Ghosted", withdrawn: "Withdrew", passed: "Passed", closed: "Posting closed" };
+
+// Why a job closed, as noted when it did. A pass with no note of its own falls back to the fit reason, which is often why.
+const closingNote = (job) => job.closing_note || (job.status === "passed" ? job.fit_reason || "" : "");
+
 function renderArchive() {
-  const label = { rejected: "Rejected", ghosted: "Ghosted", withdrawn: "Withdrew", passed: "Passed", closed: "Posting closed" };
-  const rows = state.jobs.filter((j) => label[j.status])
-    .sort((a, b) => (b.status_changed_at || "").localeCompare(a.status_changed_at || ""));
+  const all = state.jobs.filter((j) => CLOSED_LABELS[j.status]);
+  const outcome = $("archive-outcome").value;
+  const query = $("archive-search").value.trim().toLowerCase();
+  const rows = all.filter((j) => (!outcome || j.status === outcome)
+    && (!query || `${j.company} ${j.title} ${closingNote(j)}`.toLowerCase().includes(query)))
+    .sort((a, b) => (b.closed_out_at || b.status_changed_at || "").localeCompare(a.closed_out_at || a.status_changed_at || ""));
+  const ids = rows.map((j) => j.id);
+  $("archive-count").textContent = rows.length < all.length ? `${rows.length} of ${plural(all.length, "job")}.` : `${plural(all.length, "job")}.`;
   fill($("archive"),
-    h("thead", {}, h("tr", {}, ["Outcome", "Company", "Title", "Applied", "Why"].map((c) => h("th", {}, c)))),
-    h("tbody", {}, rows.length ? rows.map((j) => h("tr", { "data-id": j.id, onclick: () => openJob(j.id) },
-      h("td", { class: "nowrap" }, label[j.status]), h("td", {}, clamped(j.company)),
-      h("td", {}, h("button", { class: "linkish clamp", type: "button" }, j.title)),
-      h("td", {}, j.applied_at ? shortDate(j.applied_at) : "No"), h("td", { title: (j.fit_reason || "").length > TABLE_REASON ? j.fit_reason : null }, clip(j.fit_reason, TABLE_REASON))))
-      : h("tr", {}, emptyState("tarnished", "Nothing closed yet.", "td", { colspan: 5 }))));
+    h("thead", {}, h("tr", {}, ["Outcome", "Company", "Title", "Applied", "Closed", "Note"].map((c) => h("th", {}, c)))),
+    h("tbody", {}, rows.length ? rows.map((j) => {
+      const note = closingNote(j);
+      return h("tr", { "data-id": j.id, onclick: () => openJob(j.id, ids) },
+        h("td", { class: "nowrap" }, CLOSED_LABELS[j.status]), h("td", {}, clamped(j.company)),
+        h("td", {}, h("button", { class: "linkish clamp", type: "button" }, j.title)),
+        h("td", { class: "nowrap" }, j.applied_at ? shortDate(j.applied_at) : "No"),
+        h("td", { class: "nowrap" }, shortDate(j.closed_out_at || j.status_changed_at)),
+        h("td", { title: note.length > TABLE_REASON ? note : null }, clip(note, TABLE_REASON)));
+    })
+      : h("tr", {}, emptyState("tarnished", all.length ? "None match." : "Nothing closed yet.", "td", { colspan: 6 }))));
 }
 
 function renderSources() {
@@ -842,7 +979,7 @@ function drawSettingsStatus(status, error) {
     const [tone, label] = found.ok === true ? ["good", "Working"] : found.ok === false ? ["bad", "Needs you"] : ["", "Not set up"];
     fill(box,
       h("p", { class: "what" }, pill(tone, label), h("span", {}, found.what)),
-      found.fix ? h("p", { class: "fix muted" }, found.fix) : null,
+      found.fix ? h("p", { class: "fix muted" }, withCode(found.fix)) : null,
       found.last_ok ? h("p", { class: "muted hint" }, `Mail was last read without trouble ${ago(found.last_ok)}.`) : null,
       again);
   }
@@ -1508,7 +1645,7 @@ function renderRuns() {
       if (!("idleTitle" in button.dataset)) button.dataset.idleTitle = button.title;
       button.disabled = busy || Boolean(state.demo) || Boolean(why);
       button.textContent = busy ? run.busy : run.idle;
-      button.title = state.demo ? "Not in the demo, which starts no runs." : why || button.dataset.idleTitle;
+      button.title = state.demo ? DEMO_NO_RUNS : why || button.dataset.idleTitle;
     }
     if (!task || (kind === "sweep" && sweepShownAbove(task))) continue;
     const ended = task.finished_at || task.started_at;
@@ -1541,7 +1678,7 @@ const RUN_QUESTIONS = {
 // so: that one warning clears and the job's timeline keeps that you said it. Again also starts the same kind of run.
 function profileChangeAnswers(kind, task, tasks) {
   const writing = ["claude", "tailor"].find((other) => tasks[other] && tasks[other].state === "running");
-  const why = state.demo ? "Not in the demo, which starts no runs." : notReady(kind)
+  const why = state.demo ? DEMO_NO_RUNS : notReady(kind)
     || (writing ? `${RUNS[writing].name} is going, and both write drafts, so this waits for it.` : "");
   return h("span", { class: "row run-answers" },
     h("button", { class: "btn small", type: "button", title: "Clear this warning. The job's timeline keeps that you said so.",
@@ -2045,13 +2182,18 @@ function checkBlock(job) {
   if (result.overlap && result.overlap.pct !== null) {
     const missing = result.overlap.missing.length ? ` Not on the resume: ${result.overlap.missing.join(", ")}.` : "";
     const pct = result.overlap.pct;
-    const band = pct > 85 ? " That's high enough to read as copied from the posting, which screeners now mark down: aim for 60 to 80%."
+    // Once sent, the figure is a fact about what the company has, and advice to change it can't be acted on.
+    const band = job.frozen ? ""
+      : pct > 85 ? " That's high enough to read as copied from the posting, which screeners now mark down: aim for 60 to 80%."
       : pct < 40 ? " Below about 40%, a filter on skills may not pick it up." : "";
-    blocks.push(h("p", { class: "muted" }, `The resume uses ${pct}% of the skill terms in this posting.${missing}${band}`));
+    const uses = job.frozen ? "The resume sent uses" : "The resume uses";
+    blocks.push(h("p", { class: "muted" }, `${uses} ${pct}% of the skill terms in this posting.${job.frozen ? "" : missing}${band}`));
   }
-  if (result.drafter && Object.keys(result.drafter).length) {
-    const versions = [...new Set(Object.values(result.drafter))].sort();
-    blocks.push(h("p", { class: "muted" }, `Documents built by drafter ${versions.join(" and ")}.`));
+  const built = result.sent_drafter || result.drafter;
+  if (built && Object.keys(built).length) {
+    const versions = [...new Set(Object.values(built))].sort().join(" and ");
+    blocks.push(h("p", { class: "muted" }, job.frozen ? `Sent with drafter ${versions}. What was sent is the record, so it isn't rebuilt.`
+      : `Documents built by drafter ${versions}.`));
   }
   return blocks;
 }
@@ -2074,7 +2216,7 @@ async function startRefresh(job) {
 
 function refreshButton(job) {
   if (!job.can_refresh) return null;
-  return h("button", { class: "btn", type: "button", disabled: refreshing(job), onclick: () => startRefresh(job) },
+  return h("button", { class: "btn", type: "button", disabled: refreshing(job) || inDemo(), title: demoTitle(), onclick: () => startRefresh(job) },
     refreshing(job) ? "Refreshing resume…" : "Refresh resume");
 }
 
@@ -2105,7 +2247,7 @@ async function startPrep(job) {
 
 function prepButton(job) {
   if (!job.can_prep) return null;
-  return h("button", { class: "btn", type: "button", disabled: prepping(job), onclick: () => startPrep(job) },
+  return h("button", { class: "btn", type: "button", disabled: prepping(job) || inDemo(), title: demoTitle(), onclick: () => startPrep(job) },
     prepping(job) ? "Writing interview prep…" : job.prep_file ? "Redo interview prep" : "Interview prep");
 }
 
@@ -2133,7 +2275,7 @@ function culturePart(job) {
   const report = c && c.report;
   const running = researching(job);
   const error = h("p", { class: "error", role: "alert" });
-  const start = c ? h("button", { class: "btn", type: "button", disabled: running, onclick: async () => {
+  const start = c ? h("button", { class: "btn", type: "button", disabled: running || inDemo(), title: demoTitle(), onclick: async () => {
     start.disabled = true;
     try {
       await api(`/api/job/${job.id}/culture`, {});
@@ -2311,7 +2453,7 @@ async function openJob(id, list) {
     h("div", {}, h("h3", {}, "Your notes"), h("div", { class: "stack" }, notesEl, h("div", { class: "row" },
       h("button", { class: "btn", type: "button", onclick: () => tryAct(job.id, { action: "note", notes: notesEl.value }, undefined, ["notes"]) }, "Save notes"),
       notesStatus))),
-    job.notes_md ? h("div", {}, h("h3", {}, "Fit and interview notes"), h("div", { class: "prose" }, job.notes_md)) : null,
+    job.notes_md ? h("div", {}, h("h3", {}, "Fit and interview notes"), h("div", { class: "prose markdown" }, markdown(job.notes_md))) : null,
     culturePart(job),
     job.score_reasons.length ? h("div", {}, h("h3", {}, `Why it scored ${job.score}`), h("p", { class: "muted" }, job.score_reasons.join(" · "))) : null,
     job.freshness_reasons.length ? h("div", {}, h("h3", {}, `Why its priority is ${job.rank}`), h("p", { class: "muted" }, [`Score ${job.score}`, ...job.freshness_reasons].join(" · "))) : null,
@@ -2497,7 +2639,7 @@ function outlookPart(industry) {
   const running = o.state === "running";
   const report = o.report;
   const error = h("p", { class: "error", role: "alert" });
-  const start = h("button", { class: "btn", type: "button", disabled: running, onclick: async () => {
+  const start = h("button", { class: "btn", type: "button", disabled: running || inDemo(), title: demoTitle(), onclick: async () => {
     start.disabled = true;
     try {
       await api("/api/industries/outlook", { name: industry.name });
@@ -2648,6 +2790,7 @@ async function followAddress() {
 window.addEventListener("hashchange", followAddress);
 window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpen || drafts.size || profilePending) e.preventDefault(); });
 $("radar-search").addEventListener("input", renderRadar);
+["archive-search", "archive-outcome"].forEach((id) => $(id).addEventListener("input", renderArchive));
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
