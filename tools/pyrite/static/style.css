@@ -183,6 +183,19 @@ div.order:hover { background: transparent; }
 .kind-send { --tone: var(--good); }
 .kind-check-again, .kind-closing-soon { --tone: var(--bad); }
 .order-list .order-batch { justify-content: flex-end; }
+/* Several items of one kind sit under one heading that names the kind once and says what they share. */
+.order-list .order-group { display: block; }
+.group-head { display: flex; align-items: flex-start; gap: 8px; }
+.group-toggle { grid-template-columns: 124px minmax(0, 1fr) 14px; }
+.group-count { margin-left: 6px; padding-left: 6px; border-left: 1px solid color-mix(in srgb, var(--tone) 30%, transparent); }
+.group-toggle .what { font-weight: 500; color: var(--ink-2); }
+.order-group.folded .group-toggle .what { font-weight: 600; color: var(--ink); }
+.group-chevron { width: 8px; height: 8px; margin-top: 7px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); }
+.order-group.folded .group-chevron { transform: rotate(-45deg); }
+.group-items { list-style: none; margin: 0 0 6px; padding: 0 0 0 136px; display: grid; gap: 2px; }
+.group-items .order { grid-template-columns: minmax(0, 1fr); padding: 6px 10px; }
+.group-items li { position: relative; }
+.group-items li::before { content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; border-left: 2px solid var(--line); }
 .stale-report { color: var(--ink-3); }
 .stale-report summary { cursor: pointer; font-size: 13px; }
 .stale-report p { margin-top: 6px; color: var(--ink-2); }
@@ -330,6 +343,31 @@ textarea { width: 100%; resize: vertical; }
 /* A radio or checkbox with its words beside it, not stretched across the line as a text box is. */
 .dialog label.choice { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; }
 .dialog label.choice input { width: auto; margin-top: 3px; }
+
+/* Go to: one box over the page, near the top so its list has room to grow downward. */
+.palette-open { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink-2); }
+.palette-open svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.palette-open kbd, .palette-help kbd { font: 600 11px/1.4 var(--mono); padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--ink-3); background: var(--surface-2); }
+.dialog.palette { padding: 0; margin: 12vh auto auto; width: min(620px, calc(100vw - 32px)); }
+.palette-box { padding: 12px; }
+.palette-box input { width: 100%; font-size: 16px; padding: 9px 12px; }
+.palette-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(420px, 55vh); overflow-y: auto; }
+.palette-hit { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.palette-hit[aria-selected="true"] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--brass); }
+.palette-kind { font: 650 11px/1.5 var(--mono); letter-spacing: .02em; color: var(--ink-3); }
+.palette-kind.kind-job { color: var(--info); }
+.palette-kind.kind-action { color: var(--accent-ink); }
+.palette-label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-where { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.palette-none { padding: 10px; color: var(--ink-2); }
+.palette-help { margin: 8px 2px 0; font-size: 12px; }
+/* Where the top bar is short of room, Go to is its icon, with the name and key in its tooltip, so the status line keeps
+   its words. */
+@media (max-width: 1100px) { .palette-open kbd, .palette-word { display: none; } .palette-open { padding: 6px 9px; } }
+@media (max-width: 640px) {
+  .palette-hit { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .palette-kind { display: none; }
+}
 .setup-start { border: 0; padding: 0; margin: 12px 0 0; }
 .setup-start legend { padding: 0; font-weight: 600; font-size: 13px; }
 .setup-start label.choice { margin-top: 6px; }
@@ -357,10 +395,13 @@ textarea { width: 100%; resize: vertical; }
 @media (max-width: 640px) {
   main { padding: 14px 16px 48px; }
   .order { grid-template-columns: 76px minmax(0, 1fr); }
+  .group-toggle { grid-template-columns: 76px minmax(0, 1fr) 14px; }
+  .group-items { padding-left: 24px; }
   #radar-search, #archive-search { width: 100%; }
 }
 
-.demo-tag { font-size: 13px; font-weight: 600; color: var(--bad); }
+/* The demo's label wraps to make room, rather than the status line being cut short. */
+.demo-tag { flex: 1 1 160px; font-size: 13px; font-weight: 600; color: var(--bad); }
 .demo-tag[hidden] { display: none; }
 
 /* Settings. Its sections are named in a menu under its heading, and the one you're on is underlined in brass. */

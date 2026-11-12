@@ -417,8 +417,9 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
             orders.append({"rank": 2, "kind": "Posting down", "job_id": job["id"], "text": name,
                            "detail": _gone_text(job, ghost_days)})
         elif job["quiet"]:
-            orders.append({"rank": 3, "kind": "Gone quiet", "job_id": job["id"], "text": name,
-                           "detail": f"No reply in {job['days_since_applied']} days. Mark it ghosted, or try one last nudge."})
+            quiet = f"No reply in {job['days_since_applied']} days."
+            orders.append({"rank": 3, "kind": "Gone quiet", "job_id": job["id"], "text": name, "own": quiet,
+                           "detail": f"{quiet} Mark it ghosted, or try one last nudge."})
         elif job["status"] in ("applied", "responded") and job["follow_up_due"]:
             when = f"Applied {_days(job['days_since_applied'])} ago." if job["days_since_applied"] is not None else ""
             orders.append({"rank": 1, "kind": "Follow up", "job_id": job["id"], "text": name,
@@ -427,11 +428,11 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
             reach.append(job)
         elif job["status"] == "needs_fix":
             tries = job.get("fix_attempts", 0)
-            detail = "The draft failed the assay. The next run retries it."
+            detail, own = "The draft failed the assay. The next run retries it.", ""
             if tries >= fix_limit:
-                detail = (f"The draft failed the assay {tries} times, so the daily run has stopped retrying it. "
-                          "Open it to see why, then use Tailor this one first to try again.")
-            orders.append({"rank": 2, "kind": "Blocked", "job_id": job["id"], "text": name, "detail": detail})
+                stopped = "so the daily run has stopped retrying it. Open it to see why, then use Tailor this one first to try again."
+                detail, own = f"The draft failed the assay {tries} times, {stopped}", f"Failed {tries} times, {stopped}"
+            orders.append({"rank": 2, "kind": "Blocked", "job_id": job["id"], "text": name, "detail": detail, "own": own})
     def soon(job):
         """Urgent: closing within SOON days, or a floor date already past."""
         days = job["days_to_deadline"]
@@ -451,7 +452,7 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
         if job["changed_since_check"]:
             # Not ready to send: the pass no longer covers what's on file.
             orders.append({"rank": 1 if soon(job) else 2, "kind": "Check again", "job_id": job["id"], "action": "recheck",
-                           "text": f"{job['company']}: {job['title']}",
+                           "text": f"{job['company']}: {job['title']}", "own": joined(_deadline_text(job), first),
                            "detail": joined(_deadline_text(job), "Its files changed after the assay passed it, so check it again before you send.", first)})
             continue
         detail = (joined(_deadline_text(job), first, _history_text(job)) or shorten(job["fit_reason"] or "", ORDER_REASON)
@@ -465,7 +466,7 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
     for job in closing[:5]:
         decide = "Tailor it now or pass." if job["status"] != "new" else "Decide now: use Tailor this one first, or pass."
         orders.append({"rank": 1 if soon(job) else 2, "kind": "Closing soon", "job_id": job["id"], "text": f"{job['company']}: {job['title']}",
-                       "detail": joined(_deadline_text(job), _history_text(job), decide)})
+                       "own": joined(_deadline_text(job), _history_text(job)), "detail": joined(_deadline_text(job), _history_text(job), decide)})
         listed.add(job["id"])
     fresh = sorted((j for j in jobs if j["status"] == "new" and j["is_new"] and not j.get("pay_too_low") and j["id"] not in listed),
                    key=lambda j: -j["rank"])
@@ -473,15 +474,55 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
         posted = {0: "today", 1: "yesterday"}.get(job["age_days"], f"{job['age_days']} days ago")
         orders.append({"rank": 3, "kind": "New listing", "job_id": job["id"],
                        "text": f"{job['company']}: {job['title']}",
+                       "own": joined(f"Posted {posted}. Score {job['score']}.", _deadline_text(job), _history_text(job)),
                        "detail": joined(f"Posted {posted}, never reposted. Score {job['score']}.", _deadline_text(job), _history_text(job))})
     for job in jobs:
         if job.get("rework"):
             orders.append({"rank": 2, "kind": "Rework", "job_id": job["id"], "action": "gap_seen",
-                           "text": f"{job['company']}: {job['title']}",
+                           "text": f"{job['company']}: {job['title']}", "own": job["rework"],
                            "detail": f"{job['rework']} Refresh resume or Tailor this one first, or Got it to keep it as it is."})
     if reach and reach_out:
         orders.append(_reach_out_order(reach))
     return sorted(orders, key=lambda o: o["rank"])
+
+
+# What every item of a kind has in common, said once over the group when there's more than one. Each item in a group
+# then shows its `own` words, where it has them, so the shared sentence isn't read again on every line.
+INBOX_CAUSES = {
+    "Finish setup": "What this workspace still needs before Pyrite can do its work. Each opens the section that fixes it.",
+    "Possible scam": "Mail or postings with a scam's signs. Don't reply, click or pay until you've checked each one.",
+    "Possible reply": "Mail that may answer one of your applications. Open each to read it and log what it says.",
+    "Act now": "Interviews and offers with a next step that's due.",
+    "Follow up": "Applications due a follow-up note.",
+    "Send": "Drafts that passed the assay. Read each through, then send it.",
+    "Check again": "Their files changed after the assay passed them, so check each again before you send it.",
+    "Closing soon": "Postings that close before the next runs could get to them. Decide on each now: Tailor this one first, or pass.",
+    "Blocked": "Drafts that failed the assay. The next run retries each, up to its limit.",
+    "Posting down": "Postings you applied to that have come down.",
+    "Rework": "Drafts written before you answered a gap they list. Refresh resume or Tailor this one first, or Got it to keep one as it is.",
+    "Gone quiet": "Applications with no reply in a long while. Mark each ghosted, or try one last nudge.",
+    "New listing": "Posted in the last few days and never reposted, best first.",
+}
+
+
+def _inbox(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The to-do list as the page shows it: one group for each kind of item, led by its most urgent, so many items of one
+    kind fold into a single heading. A group's `action` is the one every item in it shares, for a button that does all."""
+    groups: dict[str, dict[str, Any]] = {}
+    for order in orders:
+        group = groups.setdefault(order["kind"], {"kind": order["kind"], "cause": INBOX_CAUSES.get(order["kind"]), "orders": []})
+        group["orders"].append(order)
+    for group in groups.values():
+        actions = {order.get("action") for order in group["orders"]}
+        group["action"] = actions.pop() if len(actions) == 1 else None
+    return list(groups.values())
+
+
+def _places() -> list[dict[str, str]]:
+    """Every Profile and Settings section, with the address that opens it, for the page's Go to box."""
+    found = [{"label": step["label"], "where": f"Profile, {step['group']}", "tab": f"profile/{step['id']}"} for step in profile.STEPS]
+    found += [{"label": section["label"], "where": "Settings", "tab": f"settings/{section['id']}"} for section in options.SECTIONS]
+    return found + [{"label": "Cities and industries", "where": "Settings", "tab": "settings/ranking"}]
 
 
 def _gaps_order(found: dict[str, Any]) -> list[dict[str, Any]]:
@@ -598,14 +639,17 @@ def build_state(conn, cfg) -> dict[str, Any]:
     watched = {f"{kind}:{ident}" for kind, ident, _ in discover._watchlist(cfg)}
     source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")
                    if IS_EXAMPLE or r["source_key"] in watched or r["source_key"].startswith("inbox:")]
+    orders = (_setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg),
+                                           bool(cfg.get("dashboard", {}).get("reach_out", True)))
+              + _gaps_order(gaps.view(conn, ROOT)))
     return {
         "jobs": jobs,
         "stats": stats,
         "funnel": funnel,
         "closed": closed,
-        "orders": _setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg),
-                                               bool(cfg.get("dashboard", {}).get("reach_out", True)))
-                  + _gaps_order(gaps.view(conn, ROOT)),
+        "orders": orders,
+        "inbox": _inbox(orders),
+        "places": _places(),
         "alerts": alerts,
         "sources": source_rows,
         "manual_check": cfg.get("manual_check", []),

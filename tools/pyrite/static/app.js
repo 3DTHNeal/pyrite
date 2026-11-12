@@ -404,28 +404,85 @@ async function gapSeen(id, button) {
   }
 }
 
+// A group you fold or open stays that way in this browser. Storage can be switched off, so a failed read or write is
+// ignored and each group starts as it would.
+const INBOX_STORE = "pyrite.inbox-folds";
+// A group longer than this starts folded, so a busy morning shows each kind of thing once.
+const INBOX_OPEN_UP_TO = 3;
+
+function inboxFolds() {
+  try {
+    return JSON.parse(localStorage.getItem(INBOX_STORE) || "{}") || {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function foldGroup(kind, folded) {
+  const folds = inboxFolds();
+  folds[kind] = folded;
+  try { localStorage.setItem(INBOX_STORE, JSON.stringify(folds)); } catch (err) { /* Then it isn't remembered. */ }
+  renderOrders();
+  // The list is drawn again, so the heading you pressed takes focus back.
+  const toggle = [...document.querySelectorAll("#orders .group-toggle")].find((el) => el.dataset.kind === kind);
+  if (toggle) toggle.focus();
+}
+
+// A copy of the page an older Pyrite kept has no groups, so each item is a group of its own until the server answers.
+const inboxGroups = () => state.inbox || state.orders.map((o) => ({ kind: o.kind, cause: null, action: o.action || null, orders: [o] }));
+
+// The jobs on the list as it's laid out, each once, for J and K to walk in the job panel.
+const inboxJobIds = () => [...new Set(inboxGroups().flatMap((g) => g.orders.map((o) => o.job_id)).filter(Boolean))];
+
+// The jobs a group names, as a folded group sums them up.
+function groupNames(orders) {
+  const names = [...new Set(orders.map((o) => o.text.split(": ")[0]))];
+  if (names.length > 3) return `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+  return names.length < 3 ? names.join(" and ") : `${names[0]}, ${names[1]} and ${names[2]}`;
+}
+
 function renderOrders() {
   renderBriefing();
   const kindClass = (kind) => `kind kind-${kind.toLowerCase().replace(/\s+/g, "-")}`;
-  const recheck = state.demo ? [] : state.orders.filter((o) => o.action === "recheck").map((o) => o.job_id);
-  const sluiceIds = state.orders.map((o) => o.job_id).filter(Boolean);
+  const groups = inboxGroups();
+  const sluiceIds = inboxJobIds();
+  const folds = inboxFolds();
   const checkButton = (ids, label) => h("button", { class: "btn dismiss", type: "button", disabled: Boolean(recheckProgress),
     title: "Rebuilds the documents and runs the assay again. Takes up to a minute each.", onclick: () => recheckAll(ids) }, recheckProgress || label);
-  // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
-  const items = state.orders.map((o) => h("li", {},
-    // A job opens its drawer, and a setup item opens the Profile section or tab that fixes it. One with nowhere to
-    // go is fixed in a file, so it's text, not a button that does nothing.
-    h(o.job_id || o.tab ? "button" : "div", { class: "order", type: o.job_id || o.tab ? "button" : null,
-      title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.split("/")[0].slice(1)} tab` : null,
-      onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : o.tab ? showTab(o.tab, true) : null) },
-      h("span", { class: kindClass(o.kind) }, o.kind),
-      h("span", {}, h("span", { class: "what" }, o.text), h("span", { class: "why" }, o.detail))),
-    o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
-    o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null,
-    o.action === "gap_seen" && !state.demo ? h("button", { class: "btn dismiss", type: "button", title: "Keeps this draft as it is and takes it off the list.",
-      onclick: (e) => gapSeen(o.job_id, e.currentTarget) }, "Got it") : null));
-  const all = recheck.length > 1 ? h("li", { class: "order-batch" }, checkButton(recheck, `Check all ${recheck.length} again`)) : null;
-  fill($("orders"), items.length ? [all, ...items] : emptyState("mark", "Nothing needs you right now.", "li"));
+  // In a group of several, the kind and what they share are said once over them, so each line keeps only its own words.
+  const item = (o, grouped) => {
+    const why = grouped && o.own !== undefined ? o.own : o.detail;
+    return h("li", {},
+      // A job opens its drawer, and a setup item opens the Profile section or tab that fixes it. One with nowhere to
+      // go is fixed in a file, so it's text, not a button that does nothing.
+      h(o.job_id || o.tab ? "button" : "div", { class: "order", type: o.job_id || o.tab ? "button" : null,
+        title: o.tab ? `Opens the ${o.tab[0].toUpperCase()}${o.tab.split("/")[0].slice(1)} tab` : null,
+        onclick: () => (o.job_id ? openJob(o.job_id, sluiceIds) : o.tab ? showTab(o.tab, true) : null) },
+        grouped ? null : h("span", { class: kindClass(o.kind) }, o.kind),
+        // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
+        h("span", {}, h("span", { class: "what" }, o.text), why ? h("span", { class: "why" }, why) : null)),
+      o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
+      o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null,
+      o.action === "gap_seen" && !state.demo ? h("button", { class: "btn dismiss", type: "button", title: "Keeps this draft as it is and takes it off the list.",
+        onclick: (e) => gapSeen(o.job_id, e.currentTarget) }, "Got it") : null);
+  };
+  const items = groups.map((group, index) => {
+    if (group.orders.length === 1) return item(group.orders[0], false);
+    const folded = folds[group.kind] ?? group.orders.length > INBOX_OPEN_UP_TO;
+    const id = `inbox-group-${index}`;
+    const recheck = group.action === "recheck" && !state.demo ? group.orders.map((o) => o.job_id) : [];
+    return h("li", { class: `order-group${folded ? " folded" : ""}` },
+      h("div", { class: "group-head" },
+        h("button", { class: "order group-toggle", type: "button", "aria-expanded": String(!folded), "aria-controls": id, "data-kind": group.kind,
+          title: folded ? "Shows each of them" : "Folds them into this line", onclick: () => foldGroup(group.kind, !folded) },
+          h("span", { class: kindClass(group.kind) }, group.kind, h("span", { class: "group-count" }, String(group.orders.length))),
+          h("span", {}, h("span", { class: "what" }, folded ? groupNames(group.orders) : group.cause || `${group.orders.length} of these`),
+            folded && group.cause ? h("span", { class: "why" }, group.cause) : null),
+          h("span", { class: "group-chevron", "aria-hidden": "true" })),
+        recheck.length ? checkButton(recheck, `Check all ${recheck.length} again`) : null),
+      h("ol", { class: "group-items", id, hidden: folded }, group.orders.map((o) => item(o, true))));
+  });
+  fill($("orders"), items.length ? items : emptyState("mark", "Nothing needs you right now.", "li"));
 }
 
 // The rail's counts, and each pipeline stage under Pipeline with how many jobs are at it now, each counted once. A
@@ -2500,6 +2557,130 @@ function drawerKeys(e) {
   triage(job, key === "p" ? "pass" : "tailor_next", true);
 }
 
+// With no panel open, J and K move down and up the list on show: To do's items, the board's cards, or the rows of
+// Prospects and Closed. Enter then opens the one you're on, as a click would.
+const LIST_ITEMS = {
+  todo: "#orders button.order",
+  pipeline: "#board .card",
+  radar: "#view-radar tr[data-id] .linkish",
+  archive: "#view-archive tr[data-id] .linkish",
+};
+
+function listKeys(e) {
+  const key = e.key.toLowerCase();
+  if ((key !== "j" && key !== "k") || openJobId || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return false;
+  const view = document.querySelector(".view:not([hidden])");
+  const selector = view && LIST_ITEMS[view.id.replace("view-", "")];
+  if (!selector) return false;
+  // Only what can be seen: a folded group's items are skipped.
+  const items = [...document.querySelectorAll(selector)].filter((el) => el.offsetParent !== null);
+  if (!items.length) return false;
+  const at = items.indexOf(document.activeElement);
+  const to = at < 0 ? (key === "j" ? 0 : items.length - 1) : Math.min(Math.max(at + (key === "j" ? 1 : -1), 0), items.length - 1);
+  e.preventDefault();
+  items[to].focus();
+  items[to].scrollIntoView({ block: "nearest" });
+  return true;
+}
+
+// ---- Go to ----
+// Ctrl+K, or ⌘K on a Mac, opens a box that finds a job, a view, a section of Profile or Settings, or one of the top
+// bar's actions by a few letters of its name, and goes there.
+
+const ON_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const PALETTE_SHOWN = 40;
+let paletteHits = [];
+let paletteAt = 0;
+let paletteFrom = null;
+
+const statusName = (status) => {
+  const column = COLUMNS.find((c) => c.statuses.includes(status));
+  if (column) return column.title;
+  return status === "new" ? "Prospect" : capitalized(String(status || "").replaceAll("_", " "));
+};
+
+// Everything the box can go to. A button the top bar can't press now, such as a run that's going, is left out.
+function paletteEntries() {
+  const entries = tabs.map((tab) => ({ kind: "View", label: tab.querySelector(".rail-label").textContent, go: () => showTab(tabTarget(tab)) }));
+  state.funnel.filter((f) => f.stage !== "Prospects").forEach((f, index) => entries.push({
+    kind: "View", label: f.stage, where: `Pipeline, ${plural(f.count, "job")}`, go: () => { showTab("pipeline"); showColumn(index); } }));
+  (state.places || []).forEach((p) => entries.push({ kind: "Section", label: p.label, where: p.where, go: () => showTab(p.tab) }));
+  const actions = [["add-open"], ["run-sweep", "Reads the job boards and checks mail"], ["run-claude", "Judges new postings and tailors the best"],
+    ["update-open"], ["setup-open"]];
+  for (const [id, where] of actions) {
+    const button = $(id);
+    if (button && !button.hidden && !button.disabled) entries.push({ kind: "Action", label: button.textContent.trim(), where, go: () => button.click() });
+  }
+  entries.push({ kind: "Action", label: "Search prospects", where: "Or press /", go: () => { showTab("radar"); $("radar-search").focus(); } });
+  // Jobs most worth your time first, so a short search lands on the one you mean.
+  [...state.jobs].sort((a, b) => (b.rank || 0) - (a.rank || 0)).forEach((job) => entries.push({
+    kind: "Job", label: `${job.company}: ${job.title}`, where: statusName(job.status), also: `${job.status} ${job.location || ""}`,
+    job: job.id, go: () => openJob(job.id) }));
+  return entries;
+}
+
+// Every word typed has to start a word of the entry's name or where it is, in any order: for a job, that's its stage,
+// its status and its place. One that starts the name itself counts for most. With nothing typed, the views, sections
+// and actions show, and jobs wait for a search.
+function paletteMatch(entries, query) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return entries.filter((e) => e.kind !== "Job");
+  const order = { View: 0, Section: 1, Action: 2, Job: 3 };
+  const scored = [];
+  entries.forEach((entry, index) => {
+    const name = entry.label.toLowerCase();
+    const starts = ` ${name} ${entry.where || ""} ${entry.also || ""}`.toLowerCase().replace(/[^a-z0-9\s]+/g, " ");
+    if (!words.every((w) => starts.includes(` ${w}`) || name.includes(w))) return;
+    const points = (name.startsWith(words[0]) ? 4 : 0) + words.filter((w) => ` ${name}`.includes(` ${w}`)).length;
+    scored.push({ entry, points, index });
+  });
+  scored.sort((a, b) => b.points - a.points || order[a.entry.kind] - order[b.entry.kind] || a.index - b.index);
+  return scored.map((s) => s.entry);
+}
+
+function renderPalette() {
+  const query = $("palette-input").value;
+  paletteHits = paletteMatch(paletteEntries(), query).slice(0, PALETTE_SHOWN);
+  paletteAt = Math.min(paletteAt, Math.max(paletteHits.length - 1, 0));
+  fill($("palette-list"), paletteHits.length ? paletteHits.map((entry, index) => h("li", {
+    id: `palette-${index}`, role: "option", class: "palette-hit", "aria-selected": String(index === paletteAt), "data-index": String(index),
+    onclick: () => paletteGo(index) },
+  h("span", { class: `palette-kind kind-${entry.kind.toLowerCase()}` }, entry.kind),
+  h("span", { class: "palette-label" }, entry.label),
+  entry.where ? h("span", { class: "palette-where" }, entry.where) : null))
+    : h("li", { class: "palette-none" }, `Nothing goes by “${query.trim()}”.`));
+  markPalette();
+}
+
+function markPalette() {
+  $("palette-list").querySelectorAll(".palette-hit").forEach((li, index) => li.setAttribute("aria-selected", String(index === paletteAt)));
+  const active = $(`palette-${paletteAt}`);
+  if (active) {
+    $("palette-input").setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  } else $("palette-input").removeAttribute("aria-activedescendant");
+}
+
+function openPalette() {
+  if (!state || document.querySelector("dialog[open]")) return;
+  paletteFrom = document.activeElement;
+  paletteAt = 0;
+  $("palette-input").value = "";
+  renderPalette();
+  $("palette").showModal();
+  $("palette-input").focus();
+}
+
+function paletteGo(index) {
+  const entry = paletteHits[index];
+  if (!entry) return;
+  paletteFrom = null;
+  $("palette").close();
+  // A view or an action belongs to the page behind the job panel, so the panel closes first. A job opens in it.
+  if (openJobId && !entry.job) closeDrawer();
+  entry.go();
+}
+
 // What the job panel covers while it's open.
 function pageBehind() {
   return [document.querySelector(".rail"), document.querySelector(".topbar"), document.querySelector("main")].filter(Boolean);
@@ -2794,8 +2975,16 @@ $("radar-search").addEventListener("input", renderRadar);
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
+  // Go to opens from anywhere, a box you're typing in included, but never over another dialog.
+  if ((ON_MAC ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    if ($("palette").open) $("palette").close();
+    else openPalette();
+    return;
+  }
   // A dialog on top handles its own keys, Escape included.
   if (document.querySelector("dialog[open]")) return;
+  if (listKeys(e)) return;
   if (e.key === "Escape" && openJobId) closeDrawer();
   else if (e.key === "Escape" && !$("status-pop").hidden) {
     toggleStatus(false);
@@ -2806,6 +2995,36 @@ document.addEventListener("keydown", (e) => {
     $("radar-search").focus();
     $("radar-search").select();
   } else drawerKeys(e);
+});
+
+$("palette-open").addEventListener("click", openPalette);
+$("palette-keys").textContent = ON_MAC ? "⌘K" : "Ctrl K";
+$("palette-open").title = `Find a job, a view or an action by name. ${ON_MAC ? "⌘K" : "Ctrl+K"} from anywhere`;
+$("palette-open").setAttribute("aria-keyshortcuts", ON_MAC ? "Meta+K" : "Control+K");
+$("palette-input").addEventListener("input", () => { paletteAt = 0; renderPalette(); });
+$("palette-input").addEventListener("keydown", (e) => {
+  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  if (step && paletteHits.length) {
+    e.preventDefault();
+    paletteAt = (paletteAt + step + paletteHits.length) % paletteHits.length;
+    markPalette();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    paletteGo(paletteAt);
+  }
+});
+// The pointer chooses as the arrow keys do.
+$("palette-list").addEventListener("mousemove", (e) => {
+  const hit = e.target.closest(".palette-hit");
+  if (!hit || Number(hit.dataset.index) === paletteAt) return;
+  paletteAt = Number(hit.dataset.index);
+  markPalette();
+});
+// A click outside the box closes it, as Escape does. Closed without going anywhere, focus goes back where it was.
+$("palette").addEventListener("click", (e) => { if (e.target === $("palette")) $("palette").close(); });
+$("palette").addEventListener("close", () => {
+  if (paletteFrom && paletteFrom.isConnected) paletteFrom.focus();
+  paletteFrom = null;
 });
 
 $("run-sweep").addEventListener("click", () => startRun("sweep"));

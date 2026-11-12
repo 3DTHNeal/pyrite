@@ -163,6 +163,48 @@ class Dashboard(Base):
         self.assertEqual(store.get_job(self.conn, job)["comp"], "$120,000 - $150,000 a year")
 
 
+class Inbox(Base):
+    """The to-do list as the page lays it out: one group for each kind, with what its items share said once."""
+
+    def test_items_of_one_kind_share_a_group_and_each_keeps_its_own_words(self):
+        posted = (date.today() - timedelta(days=1)).isoformat()
+        self.add(source_id="a", title="First", score=80, posted_at=posted)
+        self.add(source_id="b", title="Second", score=70, posted_at=posted)
+        self.add(source_id="c", title="Ready", status="ready", fit_reason="A close match.")
+        state = server.build_state(self.conn, CFG)
+        groups = {group["kind"]: group for group in state["inbox"]}
+        fresh = groups["New listing"]
+        self.assertEqual([o["text"] for o in fresh["orders"]], ["Acme: First", "Acme: Second"])
+        self.assertEqual(fresh["cause"], server.INBOX_CAUSES["New listing"])
+        # The group says "never reposted" once, so each line leaves it out. The full sentence is kept for a lone item.
+        self.assertTrue(all("never reposted" not in o["own"] and "never reposted" in o["detail"] for o in fresh["orders"]))
+        self.assertEqual(len(groups["Send"]["orders"]), 1)
+        # Every item is in exactly one group, in the list's own order of urgency.
+        self.assertEqual([o for group in state["inbox"] for o in group["orders"]], sorted(state["orders"], key=lambda o: [
+            group["kind"] for group in state["inbox"]].index(o["kind"])))
+
+    def test_a_group_takes_an_action_only_when_every_item_shares_it(self):
+        recheck = {"rank": 1, "kind": "Check again", "action": "recheck", "job_id": 1, "text": "Acme: A", "detail": ""}
+        groups = server._inbox([recheck, {**recheck, "job_id": 2}, {"rank": 2, "kind": "Send", "job_id": 3, "text": "Acme: C", "detail": ""}])
+        self.assertEqual([(g["kind"], len(g["orders"]), g["action"]) for g in groups], [("Check again", 2, "recheck"), ("Send", 1, None)])
+        mixed = server._inbox([recheck, {**recheck, "action": None, "job_id": 2}])
+        self.assertIsNone(mixed[0]["action"])
+
+    def test_go_to_names_every_profile_and_settings_section(self):
+        places = {place["tab"] for place in server.build_state(self.conn, CFG)["places"]}
+        self.assertTrue({f"profile/{step['id']}" for step in server.profile.STEPS} <= places)
+        self.assertTrue({f"settings/{section['id']}" for section in server.options.SECTIONS} <= places)
+        self.assertIn("settings/ranking", places)
+
+    def test_the_page_has_what_go_to_and_the_groups_need(self):
+        static = Path(server.__file__).parent / "static"
+        page = (static / "index.html").read_text(encoding="utf-8")
+        for element in ("palette", "palette-open", "palette-input", "palette-list", "palette-keys"):
+            self.assertIn(f'id="{element}"', page)
+        # The settings section the Settings tab adds of its own, which Go to names by the same id.
+        self.assertIn('id: "ranking"', (static / "app.js").read_text(encoding="utf-8"))
+
+
 class Outreach(Base):
     """Reaching out after applying: logged as an event, due on the to-do list a day or so in, and the follow-up keyed to it."""
 
