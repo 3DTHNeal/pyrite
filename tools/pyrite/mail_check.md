@@ -17,7 +17,7 @@ The Gmail tools are deferred, so load the two you may use first, with `ToolSearc
 
 Call `get_message` with `messageFormat` set to `PLAIN_TEXT` only for a message that meets both of these:
 
-- its subject or snippet is about a job, an application, an interview, a recruiter, an offer, hiring or careers, or it names one of the companies listed at the end of this message; and
+- its subject or snippet is about a job, an application, an interview, a recruiter, an offer, hiring or careers, contract or freelance work, or pay by the hour, or someone introduces themselves as a founder, CEO or recruiter, or it names one of the companies listed at the end of this message; and
 - its sender is not at or under any of the known domains listed at the end of this message.
 
 From that message take the first 1,200 characters of its plain text body, the host name of every link in it, and its reply-to address if it has one. Leave `body`, `links` and `reply_to` empty for every other message, and never call `get_thread`.

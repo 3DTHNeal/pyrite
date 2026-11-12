@@ -671,6 +671,54 @@ class ScamRules(unittest.TestCase):
                               body="Message me on Telegram with your date of birth to start.")
         self.assertTrue(any("date of birth" in reason for reason in paired))
 
+    def test_a_company_mailing_from_its_own_name_at_another_ending_is_its_own(self):
+        # Postings on northwind.jobs, but the shop, the business store and sign-in codes mail from northwind.com and .dev.
+        shop = {"Northwind": {"northwind.jobs"}}
+        for address, name, subject in (
+            ("no-reply@business.northwind.com", "Northwind Business", "Exclusive pricing and benefits for your business"),
+            ("auto-confirm@northwind.com", "Northwind.com", "Ordered 1 item: Arts & Crafts"),
+            ("noreply@portal.auth.northwind.dev", "", "Your Northwind verification code"),
+        ):
+            with self.subTest(address=address):
+                self.assertEqual(mailcheck.assess(self.item(from_address=address, from_name=name, subject=subject), shop), [])
+
+    def test_orders_and_returns_naming_a_company_are_none_of_a_scams_business(self):
+        shop = {"Northwind": {"northwind.jobs"}}
+        for subject in ("Your Northwind return was dropped off", "Your return is approved", "Return label for order 113-55"):
+            with self.subTest(subject=subject):
+                self.assertEqual(mailcheck.assess(self.item(
+                    from_address="updates@parcels.example", subject=subject,
+                    snippet="Your refund goes to your Northwind gift card balance."), shop), [])
+
+    def test_signing_for_a_firm_from_its_name_with_a_word_added_is_a_sign(self):
+        snippet = "I run Fabrikam. We find senior engineers for contract work at Contoso, right now on their research team."
+        reasons = self.reasons(from_address="dan@fabrikamhey.example", subject="SWE contract at Contoso", snippet=snippet)
+        self.assertEqual(reasons, ["Names Contoso but was sent from fabrikamhey.example",
+                                   "Signs for Fabrikam but was sent from fabrikamhey.example, which adds \"hey\" to the name"])
+        # The plain name, or the get-, join- or -hq a young firm adds when the plain one was taken, is its own.
+        for domain in ("fabrikam.example", "getfabrikam.example", "joinfabrikam.example", "fabrikam-hq.example"):
+            with self.subTest(domain=domain):
+                self.assertEqual(self.reasons(from_address=f"dan@{domain}", subject="Contract role", snippet=snippet), [])
+        # Signing for it from a personal address is enough alone.
+        alone = self.reasons(from_address="dan.fabrikam@gmx.com", subject="Contract role", snippet="I'm the CEO of Fabrikam.")
+        self.assertIn("Signs for Fabrikam but was sent from a personal gmx.com address", alone)
+
+    def test_the_body_of_a_cold_pitch_adds_flattery_a_rate_and_a_linkedin_vouch(self):
+        body = ("I run Fabrikam. Based on your LinkedIn, I think this could be a good fit. $150 / hr, contract role. "
+                "- Dan, founder @ Fabrikam PS -- you can verify me on LinkedIn.")
+        reasons = self.reasons(from_address="dan@fabrikamhey.example", subject="SWE contract at Contoso", body=body)
+        self.assertIn("Too easy: \"Based on your LinkedIn\"", reasons)
+        self.assertTrue(any(reason.startswith("Points you to LinkedIn") for reason in reasons))
+        # "PS" after the signature isn't part of the firm's name, so the firm is named once.
+        self.assertEqual(sum(reason.startswith("Signs for Fabrikam ") for reason in reasons), 1)
+
+    def test_signing_for_a_known_company_is_judged_as_naming_it(self):
+        reasons = self.reasons(from_address="dan@contoso-talent.example", subject="Job opportunity",
+                               body="I'm the CEO of Contoso and want to talk about a role.")
+        self.assertIn("Sent from contoso-talent.example, which looks like Contoso but isn't its domain", reasons)
+        # A lower-case word after "I run" names no company.
+        self.assertEqual(mailcheck._signed_for("I run errands on Fridays. I run Fabrikam Robotics PS"), ["Fabrikam Robotics"])
+
 
 class MailScan(MailBase):
     def test_a_reply_from_the_company_is_recorded_like_the_imap_path(self):

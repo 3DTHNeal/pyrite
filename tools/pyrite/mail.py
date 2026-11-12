@@ -79,6 +79,28 @@ GENERIC_WORDS = {
     "media", "national", "network", "north", "pacific", "south", "united", "west", "world",
 }
 JOB_WORDS = ("apply", "career", "careers", "hiring", "hr", "job", "jobs", "recruit", "recruiter", "recruiting", "recruitment", "talent", "team")
+# Endings anyone can register for a few cents, which scams favour. A company's own name at one of these isn't its own.
+CHEAP_ENDINGS = {
+    "biz", "buzz", "cfd", "click", "cyou", "fun", "icu", "info", "live", "monster", "online", "rest", "sbs", "shop", "site",
+    "space", "store", "top", "website", "work", "xyz",
+}
+# What a young company puts around its name when the plain one was taken: getacme.com, joinacme.com, acmehq.com.
+NAME_PREFIXES = ("get", "go", "hello", "hey", "hi", "join", "meet", "the", "try", "use", "with")
+NAME_SUFFIXES = ("ai", "app", "apps", "co", "global", "group", "hq", "inc", "io", "lab", "labs", "team", "tech", "us", "usa")
+# A sender signing for a company: "I run Acme", "founder @ Acme", "CEO of Acme Robotics". The title is matched in any case
+# but the name only capitalised, so "I run errands" names nothing, and a later word needs a lower-case letter, so the
+# "PS" after a signature isn't taken for part of the name.
+CLAIM = re.compile(
+    r"(?i:\bI run|\bI(?:'m| am) the (?:CEO|founder|co-?founder|owner|president) (?:of|at)"
+    r"|\b(?:CEO|CTO|COO|founder|co-?founder|owner|president|head of (?:talent|recruiting|people))\s*(?:@|at\b|of\b|,))"
+    r"\s*(?:The )?(?P<name>[A-Z][\w&'-]*(?: [A-Z][a-z][\w&'-]*){0,2})")
+# Cold outreach doesn't always use the words a reply would: contract work, an opportunity, a rate by the hour.
+OUTREACH = re.compile(
+    r"\b(?:contract(?:or)? (?:work|role|position|opportunit\w*|engagement)|freelance (?:work|role|opportunit\w*)"
+    r"|(?:job|work|career|remote|contract) opportunit\w*)\b|\$\s?\d[\d,.]*\s?(?:/|per|an)\s?(?:hr|hour)\b", re.I)
+# A stranger's word for who they are, in place of the company's own site.
+VOUCH_ELSEWHERE = re.compile(
+    r"\b((?:verify|look) me up on linkedin|verify me (?:on|via|through|at) linkedin|(?:check|see) (?:out )?my linkedin)\b", re.I)
 CHAT_LINKS = ("wa.me", "api.whatsapp.com", "chat.whatsapp.com", "t.me", "telegram.me", "signal.me")
 SHORTENERS = ("bit.ly", "cutt.ly", "goo.gl", "is.gd", "rb.gy", "shorturl.at", "t.co", "tiny.cc", "tinyurl.com")
 FORMS = ("docs.google.com", "forms.gle", "forms.office.com", "jotform.com", "typeform.com")
@@ -104,8 +126,9 @@ TASK_PAY = re.compile(
     r"|earn (?:up to )?\$\s?\d[\d,]*\+? (?:per|a|each) (?:day|week))\b", re.I)
 TOO_GOOD = re.compile(
     r"\b(no interview|without (?:an |any )?interview|guaranteed|you(?:'ve| have) been (?:selected|chosen|shortlisted)"
-    r"|congratulations.{0,40}(?:hired|selected|offer)|we (?:found|came across|reviewed) your (?:resume|cv|profile)"
-    r"|\$\s?\d{2,3}(?:\.\d\d)?\s?(?:/|per|an)\s?(?:hr|hour))\b", re.I)
+    r"|congratulations.{0,40}(?:hired|selected|offer)|(?:we|i) (?:found|came across|reviewed|saw) your (?:resume|cv|profile|linkedin)"
+    r"|based on your (?:resume|cv|profile|linkedin))\b"
+    r"|(\$\s?\d{2,3}(?:\.\d\d)?\s?(?:/|per|an)\s?(?:hr|hour))\b", re.I)
 URGENT = re.compile(r"\b(within (?:12|24|48) hours|urgent(?:ly)?|immediately|act now|respond (?:asap|today|now)|time[- ]sensitive)\b", re.I)
 
 
@@ -352,14 +375,44 @@ def known_companies(conn, cfg: dict[str, Any], applied: bool = False) -> dict[st
     return companies
 
 
+def _cheap(site: str) -> bool:
+    return site.rpartition(".")[2] in CHEAP_ENDINGS
+
+
 def _own_domain(site: str, core: str, domains: set[str]) -> bool:
-    """Whether mail from `site` is the company's own. Once its domains are known, only they count: anyone can register
-    contoso.top, so the company's name with another ending is a lookalike, not Contoso."""
-    if domains:
-        return site in domains
+    """Whether mail from `site` is the company's own: a domain known to be theirs, or their plain name at an ending a
+    company uses. Northwind posts on northwind.jobs but mails from northwind.com and northwind.dev, and those are Northwind too.
+    Anyone can register contoso.top for a few cents, so the name at an ending like that is a lookalike, not Contoso."""
+    if site in domains:
+        return True
     label, _, suffix = site.partition(".")
+    return not _cheap(site) and inbox._compact(core) in (label, label + suffix)
+
+
+def _signed_for(text: str) -> list[str]:
+    """The companies the sender signs for in their own words, as in "I run Acme" or "founder @ Acme"."""
+    names: list[str] = []
+    for match in CLAIM.finditer(text):
+        core = inbox._core_name(match.group("name"))
+        if core and core not in names:
+            names.append(core)
+    return names
+
+
+def _padded_name(site: str, core: str) -> str:
+    """What's wrong with `site` as the domain of a company nobody has told Pyrite about, or nothing. Only a domain built
+    on the company's name is judged, since an agency writes from its own. The plain name, or one with the get-, join- or
+    -hq a young company adds, is taken for theirs; the name with some other word stuck on, or at a few-cent ending, is not."""
     compact = inbox._compact(core)
-    return compact in (label, label + suffix)
+    label = site.partition(".")[0].replace("-", "")
+    if len(compact) < 4 or compact not in label:
+        return ""
+    if _cheap(site):
+        return "at an ending anyone can register for a few cents"
+    before, _, after = label.partition(compact)
+    if (before, after) == ("", "") or (not after and before in NAME_PREFIXES) or (not before and after in NAME_SUFFIXES):
+        return ""
+    return f"which adds \"{before or after}\" to the name" if not (before and after) else "which wraps the name in other words"
 
 
 def _looks_like(label: str, core: str) -> bool:
@@ -379,15 +432,27 @@ def _looks_like(label: str, core: str) -> bool:
 def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
     """Why this message looks like a job scam, in plain words. Empty means nothing stood out.
 
-    Only mail about hiring, or mail that names a known company, is looked at. One strong sign is enough
-    to warn; weaker ones need company. A sender at the company's own domain or a known applicant tracking
-    system gets the benefit of the doubt on wording, since the lookalike and free-mail tricks don't apply.
+    Only mail about hiring, or mail that names a known company, is looked at, and an order, a return or an account code
+    from a company you also applied to is none of a scam's business. One strong sign is enough to warn; weaker ones need
+    company. A sender at the company's own domain or a known applicant tracking system gets the benefit of the doubt on
+    wording, since the lookalike and free-mail tricks don't apply.
+
+    A sender's own word for the company they're with counts too: a known company they sign for is judged as if named,
+    and an unknown one by whether the domain is plainly its name. Signing for a company never earns the benefit of the
+    doubt, since anyone can register a domain to match the name they sign with.
     """
     text = f"{item.subject} {item.text}"
     named = [core for core in companies if inbox._names_company(item.name, core) or inbox._names_company(item.subject, core)]
-    hiring = HIRING_SUBJECT.search(text) is not None
-    if not hiring and not named:
+    hiring = HIRING_SUBJECT.search(text) is not None or OUTREACH.search(text) is not None
+    if not hiring and (not named or inbox.SHOP_SUBJECT.search(item.subject) or inbox.RECEIPT_SUBJECT.search(item.subject)):
         return []
+    signed: list[str] = []
+    for core in _signed_for(item.text) if hiring else []:
+        known = next((name for name in companies if inbox._compact(name) == inbox._compact(core)), None)
+        if known is None:
+            signed.append(core)
+        elif known not in named:
+            named.append(known)
     site = registrable(item.domain)
     trusted = inbox._within(item.domain, ATS_DOMAINS + JOB_BOARDS)
     free = _free(item.domain)
@@ -408,6 +473,15 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
             strong.append(f"Says it's from {core} but was sent from a personal {site} address")
         else:
             weak.append(f"Names {core} but was sent from {site}")
+    for core in signed:
+        if trusted:
+            break
+        if foreign:
+            strong.append(f"Signs for {core} but was sent from {item.domain}, a domain spelled with letters from another alphabet")
+        elif free:
+            strong.append(f"Signs for {core} but was sent from a personal {site} address")
+        elif padded := _padded_name(site, core):
+            weak.append(f"Signs for {core} but was sent from {site}, {padded}")
     reply_site = registrable(item.reply_domain) if item.reply_domain else ""
     if reply_site and reply_site != registrable(item.domain) and not inbox._within(item.reply_domain, ATS_DOMAINS):
         (strong if _free(item.reply_domain) else weak).append(f"Replies would go to {item.reply_domain}, not {site}")
@@ -431,10 +505,13 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
     if not verified:
         match = TOO_GOOD.search(text)
         if match:
-            (strong if free else weak).append(f"Too easy: \"{match.group(1)}\"")
+            (strong if free else weak).append(f"Too easy: \"{match.group(0)}\"")
         match = URGENT.search(text)
         if match:
             weak.append(f"Pushes for speed: \"{match.group(1)}\"")
+        match = VOUCH_ELSEWHERE.search(text)
+        if match:
+            weak.append(f"Points you to LinkedIn to check who they are (\"{match.group(1)}\"), not to a company site")
     for host in item.links:
         if inbox._within(host, CHAT_LINKS):
             strong.append(f"Links to {host}, a chat app")
