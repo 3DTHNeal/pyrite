@@ -97,13 +97,30 @@ CLAIM = re.compile(
 # Cold outreach doesn't always use the words a reply would: contract work, an opportunity, a rate by the hour.
 OUTREACH = re.compile(
     r"\b(?:contract(?:or)? (?:work|role|position|opportunit\w*|engagement)|freelance (?:work|role|opportunit\w*)"
-    r"|(?:job|work|career|remote|contract) opportunit\w*)\b|\$\s?\d[\d,.]*\s?(?:/|per|an)\s?(?:hr|hour)\b", re.I)
+    r"|(?:job|work|career|remote|contract) opportunit\w*|technical (?:assessment|interview|screen\w*)"
+    r"|coding (?:test|challenge|exercise|assessment)|take-?home (?:test|assignment|project|exercise))\b|\$\s?\d[\d,.]*\s?(?:/|per|an)\s?(?:hr|hour)\b", re.I)
 # A stranger's word for who they are, in place of the company's own site.
 VOUCH_ELSEWHERE = re.compile(
     r"\b((?:verify|look) me up on linkedin|verify me (?:on|via|through|at) linkedin|(?:check|see) (?:out )?my linkedin)\b", re.I)
 CHAT_LINKS = ("wa.me", "api.whatsapp.com", "chat.whatsapp.com", "t.me", "telegram.me", "signal.me")
-SHORTENERS = ("bit.ly", "cutt.ly", "goo.gl", "is.gd", "rb.gy", "shorturl.at", "t.co", "tiny.cc", "tinyurl.com")
+SHORTENERS = ("bit.do", "bit.ly", "cutt.ly", "goo.gl", "is.gd", "ow.ly", "rb.gy", "rebrand.ly", "s.id", "short.gy", "shorturl.at", "t.co",
+              "t.ly", "tiny.cc", "tinyurl.com", "v.gd")
 FORMS = ("docs.google.com", "forms.gle", "forms.office.com", "jotform.com", "typeform.com")
+# Hosts where anyone can put up a page for free in a minute: a fake careers site or a fake screening page.
+FREE_HOSTS = ("firebaseapp.com", "github.io", "glitch.me", "netlify.app", "notion.site", "onrender.com", "pages.dev", "replit.app",
+              "sites.google.com", "vercel.app", "web.app", "weebly.com", "wixsite.com")
+# Where a fake "coding test" lives. Real companies use these too, so a link here counts only beside a request to run it.
+CODE_HOSTS = ("bitbucket.org", "github.com", "npmjs.com")
+# Hiring systems and job boards whose names scams borrow for their own domains, each with the domain that is really theirs.
+HIRING_BRANDS = {
+    "ashbyhq": "ashbyhq.com", "bamboohr": "bamboohr.com", "glassdoor": "glassdoor.com", "greenhouse": "greenhouse.io",
+    "icims": "icims.com", "indeed": "indeed.com", "jobvite": "jobvite.com", "linkedin": "linkedin.com", "myworkday": "myworkday.com",
+    "smartrecruiters": "smartrecruiters.com", "successfactors": "successfactors.com", "taleo": "taleo.net",
+    "teamtailor": "teamtailor.com", "wellfound": "wellfound.com", "workday": "workday.com", "ziprecruiter": "ziprecruiter.com",
+}
+# Letters and pairs that pass for others at a glance, as in c0ntoso, fabrikarn or hoo1i, each to the one it passes for.
+CONFUSABLE_PAIRS = (("rn", "m"), ("vv", "w"))
+CONFUSABLE_LETTERS = str.maketrans({"0": "o", "1": "l", "3": "e", "5": "s"})
 CHAT_APPS = re.compile(
     r"\b(whats\s?app|telegram|signal app|google chat|google hangouts|skype|(?:text|chat|sms)[- ]only interview"
     r"|interviews? (?:will be |is |are )?(?:held |conducted )?(?:via|over|through|by|on) (?:\w+ ){0,2}(?:chat|text|sms|messaging|messenger)"
@@ -113,6 +130,8 @@ MONEY_OR_ID = re.compile(
     r"\b(gift ?cards?|cashier'?s? check|e-?check|checks? (?:will be |is |are )?(?:mailed|sent|deposited)|deposit (?:the|a|this) check"
     r"|send you a check|money order"
     r"|wire transfer|processing fee|training fee|application fee|registration fee|bitcoin|crypto(?:currency)?|zelle|cash ?app|venmo"
+    r"|(?:background check|certification|placement|onboarding|equipment|activation|membership|starter kit|software license) fee"
+    r"|pay (?:for|to (?:get|receive)) (?:your |the )?(?:starter kit|training|certification|background check|equipment)"
     r"|social security|ssn|bank (?:account|details|information)|routing number"
     r"|(?:buy|purchase|order) (?:\S+ ){0,3}?(?:equipment|software|materials|supplies|laptop|computer)|upfront (?:fee|payment|cost)"
     r"|usdt)\b", re.I)
@@ -123,7 +142,35 @@ ID_OR_REFUND = re.compile(r"\b(passport|date of birth|driver'?s licen[sc]e|reimb
 TASK_PAY = re.compile(
     r"\b(simple (?:online )?tasks|complete (?:\d+ )?(?:tasks|orders|sets) (?:a|per|each) day|app (?:optimi[sz]ation|boosting|rating)"
     r"|(?:rate|review|like) (?:\w+ )?(?:apps|products|videos|hotels) (?:to|and) earn|commission (?:per|for each|on each) (?:task|order)"
-    r"|earn (?:up to )?\$\s?\d[\d,]*\+? (?:per|a|each) (?:day|week))\b", re.I)
+    r"|earn (?:up to )?\$\s?\d[\d,]*\+? (?:per|a|each) (?:day|week)"
+    # Then the hook: pay in to "unlock" what you earned.
+    r"|(?:recharge|top up|deposit (?:in)?to) your (?:task |work |job )?account|unlock (?:your )?(?:earnings|commissions?|withdrawals?)"
+    r"|negative balance|combo (?:tasks?|orders?)|lucky orders?)\b", re.I)
+# Work that is a crime with a job title on it: reshipping stolen goods, or passing money through your bank account.
+MULE = re.compile(
+    r"\b(re-?ship(?:ping|ment|per)?s?|repackag\w*|(?:package|parcel) (?:inspector|forward\w*)|parcel expert"
+    r"|(?:receive|accept) (?:and (?:re-?ship|forward|inspect) )?(?:packages|parcels|shipments) (?:at|to) your (?:home|address)"
+    r"|payment (?:processing )?agent|funds? transfer agent"
+    r"|(?:receive|process|transfer) (?:payments|funds|money|transfers) "
+    r"(?:on (?:our|their|the company'?s) behalf|(?:in)?to your (?:own |personal )?(?:bank )?account)"
+    r"|overpa(?:id|yment)|(?:send|wire|return) (?:back )?the (?:difference|excess|remaining (?:balance|funds)))\b", re.I)
+# Fake interviews that put malware on a developer's machine: a "coding test" to clone and run, or a project to open and trust.
+RUN_CODE = re.compile(
+    r"\b((?:clone|download|pull|run|install|set ?up) (?:and (?:run|install) )?(?:the |this |our |a |my )?(?:attached |following |linked )?"
+    r"(?:repo(?:sitory)?|codebase|project files?|npm package|starter code)"
+    r"|npm (?:install|i|start|run \w+)|(?:yarn|pnpm) (?:install|dev|start)|trust the (?:authors?|folder|workspace))\b", re.I)
+# A screening page that "breaks" and asks for a command pasted in to fix it, or a driver to fix the camera.
+PASTE_COMMAND = re.compile(
+    r"\b((?:copy|paste|run|enter|type)(?: and (?:paste|run))? (?:this|the following|the|a) (?:command|script|code|line)s? "
+    r"(?:in|into) (?:your |the |a )?(?:terminal|powershell|command prompt|cmd|run (?:box|dialog))"
+    r"|press (?:the )?win(?:dows)?(?: key)? ?\+ ?r"
+    r"|(?:update|fix|reinstall|install) (?:your |the )?(?:camera|webcam|microphone|mic|audio|video) drivers?)\b", re.I)
+# A code sent to your phone is the key to your accounts: no employer asks you to pass one on. "Send us the code" alone is
+# what a take-home test says, so the code has to be one that was sent to you.
+SHARE_CODE = re.compile(
+    r"\b((?:send|share|forward|text|tell|give|read) (?:me|us) (?:back )?(?:the|that|your) "
+    r"(?:(?:\d[- ]digit |verification |security |confirmation |one[- ]time |google voice |login )+code"
+    r"|code (?:you (?:just )?(?:got|received)|(?:we|i) (?:just )?(?:sent|texted)(?: you)?|sent to your phone)))\b", re.I)
 TOO_GOOD = re.compile(
     r"\b(no interview|without (?:an |any )?interview|guaranteed|you(?:'ve| have) been (?:selected|chosen|shortlisted)"
     r"|congratulations.{0,40}(?:hired|selected|offer)|(?:we|i) (?:found|came across|reviewed|saw) your (?:resume|cv|profile|linkedin)"
@@ -429,6 +476,63 @@ def _looks_like(label: str, core: str) -> bool:
     return (first in parts and len(parts) > 1) or any(joined in (first + word, word + first) for word in JOB_WORDS)
 
 
+def _skeleton(label: str) -> str:
+    """A name as it reads at a glance: look-alike letters folded together and doubled letters made single, so c0ntosso,
+    fabrikarn and contoso all read the same as their real spelling does."""
+    text = label.lower().replace("-", "")
+    for pair, single in CONFUSABLE_PAIRS:
+        text = text.replace(pair, single)
+    return re.sub(r"(.)\1+", r"\1", text.translate(CONFUSABLE_LETTERS))
+
+
+def _one_slip(a: str, b: str) -> bool:
+    """Whether one letter added, dropped, changed or swapped with its neighbour turns `a` into `b`."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        wrong = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(wrong) == 1 or (len(wrong) == 2 and wrong[1] == wrong[0] + 1 and a[wrong[0]] == b[wrong[1]] and a[wrong[1]] == b[wrong[0]])
+    short, long = sorted((a, b), key=len)
+    return any(long[:i] + long[i + 1:] == short for i in range(len(long)))
+
+
+def _misspells(label: str, core: str, domains: set[str], any_slip: bool) -> bool:
+    """Whether a domain's name is the company's, or one of its domains', misspelt on purpose: the same at a glance, or
+    with `any_slip` one letter off. One letter off is only asked of mail that names the company, since plenty of real
+    companies' names are a letter apart."""
+    label = label.replace("-", "")
+    for name in {inbox._compact(core)} | {domain.partition(".")[0].replace("-", "") for domain in domains}:
+        if len(name) >= 5 and label != name and (_skeleton(label) == _skeleton(name) or (any_slip and _one_slip(label, name))):
+            return True
+    return False
+
+
+def _in_front(host: str, site: str, core: str, domains: set[str]) -> bool:
+    """Whether a host puts a company's domain in front of someone else's, as contoso.com.hr-verify.example does, so a
+    glance at the start of the address reads Contoso. A company's name alone in front, as in contoso.zendesk.com, is
+    how help desks and other services name their customers, so isn't counted."""
+    prefix = f".{host[:-len(site)]}"
+    return any(f".{domain}." in prefix for domain in domains | {f"{inbox._compact(core)}.com"})
+
+
+def _borrows_hiring_brand(site: str) -> str:
+    """The hiring system or job board whose name a sender's domain borrows, as greenhouse-careers.example or lnkedin.com
+    do, or nothing. Their own domains are known, so anything else built on their name is a lookalike."""
+    label = site.partition(".")[0]
+    parts = [part for part in label.split("-") if part]
+    joined = "".join(parts)
+    for brand, domain in HIRING_BRANDS.items():
+        if joined in (brand, brand + "s"):  # Its own name, or a plural that's a word of its own, such as workdays.
+            continue
+        if (brand in parts and len(parts) > 1) or any(joined in (brand + word, word + brand) for word in JOB_WORDS) \
+                or _skeleton(joined) == _skeleton(brand) or (len(brand) >= 6 and _one_slip(joined, brand)):
+            return domain
+    return ""
+
+
+SHOWN_ADDRESS = re.compile(r"[\w.+-]+@((?:[\w-]+\.)+[a-z]{2,})", re.I)
+
+
 def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
     """Why this message looks like a job scam, in plain words. Empty means nothing stood out.
 
@@ -469,6 +573,10 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
             strong.append(f"Says it's from {core} but was sent from {item.domain}, a domain spelled with letters from another alphabet")
         elif _looks_like(site.partition(".")[0], core):
             strong.append(f"Sent from {site}, which looks like {core} but isn't its domain")
+        elif _misspells(site.partition(".")[0], core, companies[core], any_slip=True):
+            strong.append(f"Sent from {site}, which misspells {core} to pass for it")
+        elif _in_front(item.domain, site, core, companies[core]):
+            strong.append(f"Sent from {item.domain}, which puts {core}'s address in front of {site}, someone else's domain")
         elif free:
             strong.append(f"Says it's from {core} but was sent from a personal {site} address")
         else:
@@ -487,6 +595,22 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
         (strong if _free(item.reply_domain) else weak).append(f"Replies would go to {item.reply_domain}, not {site}")
     if hiring and not named and (free or foreign):
         weak.append(f"Hiring mail from a personal {site} address" if free else f"Hiring mail from {item.domain}, a domain in another alphabet")
+    if hiring and not trusted and not free and not any(_own_domain(site, core, domains) for core, domains in companies.items()):
+        # Hiring mail that names no one can still borrow a known company's look in its address.
+        for core, domains in companies.items():
+            if core in named:
+                continue
+            if _misspells(site.partition(".")[0], core, domains, any_slip=False):
+                strong.append(f"Sent from {site}, which reads as {core} at a glance but isn't its domain")
+                break
+            if _in_front(item.domain, site, core, domains):
+                strong.append(f"Sent from {item.domain}, which puts {core}'s address in front of {site}, someone else's domain")
+                break
+        if brand := _borrows_hiring_brand(site):
+            strong.append(f"Sent from {site}, which borrows the name of {brand} but isn't it")
+    shown = SHOWN_ADDRESS.search(item.name)
+    if shown and " via " not in f" {item.name.lower()} " and registrable(shown.group(1).lower()) != registrable(item.domain):
+        strong.append(f"Shows {shown.group(0)} as its name but was sent from {item.domain}")
 
     chat = CHAT_APPS.search(text)
     if chat:
@@ -497,10 +621,26 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
     task = TASK_PAY.search(text)
     if task:
         (weak if verified else strong).append(f"Sounds like a task scam: \"{task.group(1)}\"")
+    mule = MULE.search(text)
+    if mule:
+        (weak if verified else strong).append(f"Mentions {mule.group(1).lower()}: reshipping goods or passing money through your "
+                                              "account for someone else is a crime with a job title on it")
+    match = SHARE_CODE.search(text)
+    if match:
+        (weak if verified else strong).append(f"Asks you to \"{match.group(1)}\": a code sent to your phone opens your accounts")
+    match = PASTE_COMMAND.search(text)
+    if match:
+        (weak if verified else strong).append(f"Asks you to \"{match.group(1)}\", the way fake screening pages install malware")
+    match = RUN_CODE.search(text)
+    if match and not verified:
+        code_link = next((host for host in item.links if inbox._within(host, CODE_HOSTS)), "")
+        (strong if code_link else weak).append(
+            f"Asks you to \"{match.group(1)}\"" + (f" from {code_link}" if code_link else "")
+            + ": fake interviews use a coding test to put malware on developers' machines")
     match = ID_OR_REFUND.search(text)
     if match:
         chat_link = any(inbox._within(host, CHAT_LINKS) for host in item.links)
-        paired = not verified and bool(chat or money or task or chat_link)
+        paired = not verified and bool(chat or money or task or mule or chat_link)
         (strong if paired else weak).append(f"Mentions {match.group(1).lower()}: never pay, deposit a check or share ID for a job")
     if not verified:
         match = TOO_GOOD.search(text)
@@ -519,6 +659,8 @@ def assess(item: Item, companies: dict[str, set[str]]) -> list[str]:
             weak.append(f"Links through {host}, which hides where it goes")
         elif inbox._within(host, FORMS) and not verified:
             weak.append(f"Asks for details on a form at {host}")
+        elif inbox._within(host, FREE_HOSTS) and not verified:
+            weak.append(f"Links to {host}, where anyone can put up a page for free")
 
     return strong + weak if strong or len(weak) >= 2 else []
 
