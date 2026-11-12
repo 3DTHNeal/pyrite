@@ -83,9 +83,10 @@ RECEIPT_SUBJECT = re.compile(
 INTEREST_SUBJECT = re.compile(r"\bthanks? (you )?for your interest\b", re.I)
 # An employer that also sells to the public sends its shop's mail from the same domain. An order is never a reply.
 SHOP_SUBJECT = re.compile(
-    r"\b(your (order|package|delivery|shipment|purchase|receipt|invoice|subscription)|order (confirmation|confirmed|"
+    r"\b(your ([\w.&'-]+ )?(order|package|delivery|shipment|purchase|receipt|invoice|subscription|return)|order (confirmation|confirmed|"
     r"#?\d+)|ordered \d+ items?|(has |have )?(shipped|been delivered|out for delivery|arriving)|delivery update|"
-    r"refund|payment (received|confirmation))\b",
+    r"refund|payment (received|confirmation)|return (request|label|started|approved|received|confirmation|update)|"
+    r"drop(ped)?[- ]?off)\b",
     re.I,
 )
 # Words that make a receipt-like subject a real answer after all, when the message's own text is at hand.
