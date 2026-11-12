@@ -23,5 +23,6 @@ A tool builds its own gate from these, adding the rules particular to what it wr
 # under some policy, and the major one when a caller would have to change too, so a seal that records it says which rules
 # gave a pass. 1.0 was the package with findings and policies, and 1.1 adds what a policy sets aside as not measured.
 # 1.2 sets aside a day with no year, a reference to a place in a document and two more kinds of identifier, and lets a
-# policy read scale widely: after a currency code, in the plural, and once for a range.
-__version__ = "1.2.0"
+# policy read scale widely: after a currency code, in the plural, and once for a range. 1.3 leaves out HTML comments,
+# which print nothing, so a word or number split by one is read whole.
+__version__ = "1.3.0"

@@ -1,7 +1,9 @@
 """The assay package stays general and self-contained, so another tool can use it and it can move to a repository of
-its own. Nothing in it may know about Pyrite, and nothing in it may do more than read the text it's given."""
+its own. Nothing in it may know about Pyrite, and nothing in it may do more than read the text it's given. It's kept
+upstream, and this copy is a mirror of it."""
 import ast
 import contextlib
+import hashlib
 import io
 import re
 import sys
@@ -58,6 +60,31 @@ class StaysSelfContained(unittest.TestCase):
             for word in DOMAIN_WORDS:
                 with self.subTest(file=path.name, word=word):
                     self.assertNotIn(word.lower(), source.lower())
+
+
+class IsAMirror(unittest.TestCase):
+    """tools/assay is kept and changed upstream, and copied here whole by a script there that writes mirror.txt. An edit
+    made here would be lost at the next mirror, so it fails: carry the change upstream, then mirror it back."""
+
+    def recorded(self) -> dict[str, str]:
+        lines = (PACKAGE / "mirror.txt").read_text(encoding="utf-8").splitlines()
+        return dict(line.split(" ", 1) for line in lines if line and not line.startswith("#"))
+
+    def test_the_modules_are_the_ones_mirrored(self):
+        whole = hashlib.sha256()
+        for path in sorted(PACKAGE.glob("*.py"), key=lambda path: path.name):
+            whole.update(path.name.encode() + b"\0" + path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+        self.assertEqual(whole.hexdigest(), self.recorded()["sha256"],
+                         "tools/assay was changed here. It's a mirror: make the change upstream and mirror it again.")
+
+    def test_the_version_is_the_one_mirrored(self):
+        import assay
+        self.assertEqual(self.recorded()["version"], assay.__version__)
+
+    def test_the_resume_builder_leaves_out_what_the_assay_leaves_out(self):
+        import build_resume
+        self.assertEqual(build_resume.COMMENT.pattern, reading.COMMENT.pattern)
+        self.assertEqual(build_resume.COMMENT.flags, reading.COMMENT.flags)
 
 
 class WorksOnItsOwn(unittest.TestCase):

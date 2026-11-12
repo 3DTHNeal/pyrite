@@ -1,0 +1,4 @@
+# tools/assay is a mirror of the assay, which is kept and changed upstream and copied here whole by a script there.
+# A test checks that the modules still match the digest below, so an edit made here fails: carry it upstream instead.
+version 1.3.0
+sha256 660d7ac9088126a04669f7e3ccf9e7f2f572a3dedf7474e06944d68206342118
