@@ -1,5 +1,6 @@
 """How Pyrite runs, for the dashboard's Settings tab: which Claude model judges and writes and how hard it thinks,
-where replies are read from, how much the morning run does, and what the dashboard reminds you of.
+where replies are read from, how much the morning run does, what the dashboard reminds you of, and the pay that a job
+elsewhere is compared with.
 
 Each setting is one key in search.toml, named in SECTIONS with what it may hold. The page draws its forms from that
 list, and a save sets those keys and nothing else, so the rest of the file keeps its layout and comments and no key
@@ -14,7 +15,7 @@ import time
 import tomllib
 from typing import Any
 
-from . import confirm, deadline, doctor, inbox, mail, outlook, profile, settings, store, tomledit
+from . import confirm, deadline, doctor, inbox, localtax, mail, outlook, profile, relocate, settings, store, taxes, tomledit
 
 CLAUDE_DEFAULT = "Claude Code's default"
 # Claude Code is asked whether it's signed in at most this often, since asking starts it.
@@ -58,6 +59,8 @@ SECTIONS: tuple[dict[str, Any], ...] = (
               _model("market.model", "Industry outlooks", "Researches an outlook when you ask for one.", outlook.DEFAULT_MODEL),
               _model("skills.model", "Skill ages", "Used when research = true under [skills].", outlook.DEFAULT_MODEL),
               _model("culture.model", "Employer research", "Researches how an employer works when you ask, from a job's panel.", outlook.DEFAULT_MODEL),
+              _model("relocation.model", "Local tax research", "Looks up the local taxes where you live, from Settings › Relocation.",
+                     outlook.DEFAULT_MODEL),
           )},
      )},
     {"id": "mail", "label": "Mail", "status": "mail",
@@ -115,6 +118,31 @@ SECTIONS: tuple[dict[str, Any], ...] = (
      ),
      "notes": ("The port, and the extra names the dashboard answers to, can only be changed under [dashboard] in "
                "profile/search.toml.",)},
+    {"id": "relocation", "label": "Relocation", "status": None,
+     "intro": "What a job somewhere else would pay after taxes and local prices, against what you earn now where you "
+              "live. It shows on the panel of any job outside your area that names its place.",
+     "panels": (
+         {"title": "Your pay now", "hint": "Base pay only, here and there. A bonus or equity isn't counted on either side.",
+          "fields": (
+              _field("relocation.current_pay", "number", "Current pay", "A year's base pay, before tax, in dollars.",
+                     min=0, max=10_000_000),
+              _field("relocation.filing", "choice", "Filing status",
+                     "Married counts your pay as the household's only wages.",
+                     choices=[list(choice) for choice in relocate.FILING_CHOICES], default="single"),
+          )},
+         {"title": "Housing", "hint": "",
+          "fields": (
+              _field("relocation.housing", "choice", "Where you live now",
+                     "Which view of prices comes first: renting at market if you rent, all prices if you own.",
+                     choices=[list(choice) for choice in relocate.HOUSING_CHOICES], default="rent"),
+              _field("relocation.housing_share", "number", "Share of spending on housing",
+                     "A percent, for the renting-at-market view.", default=relocate.DEFAULT_HOUSING_SHARE,
+                     unset=str(relocate.DEFAULT_HOUSING_SHARE), min=5, max=80),
+          )},
+     ),
+     "notes": ("Home is the metro area, or else the state, under Where you'll work on the Profile tab. Pyrite downloads "
+               "the price levels from the Bureau of Economic Analysis the first time it compares, and keeps them in "
+               "the workspace.",)},
 )
 FIELDS: dict[str, dict[str, Any]] = {field["id"]: field for section in SECTIONS for panel in section["panels"] for field in panel["fields"]}
 
@@ -213,6 +241,85 @@ def save(body: dict[str, Any]) -> dict[str, Any]:
         profile.keep({"config": text}, "Changed on the Settings tab")
         settings._write(store.CONFIG_PATH, updated)
     return view()
+
+
+# The local taxes you pay at home, which Settings › Relocation edits as lists rather than single values.
+LOCAL_KEYS = ("home_local_taxes", "own_local_taxes")
+MAX_OWN_TAXES = 20
+
+
+def _local_version(cfg: dict[str, Any]) -> str:
+    raw = cfg.get("relocation") if isinstance(cfg.get("relocation"), dict) else {}
+    held = {key: (raw or {}).get(key) for key in LOCAL_KEYS}
+    return hashlib.sha256(json.dumps(held, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def local_taxes_view() -> dict[str, Any]:
+    """Your local taxes at home, Pyrite's table to pick from, and the last lookup with Claude, for Settings › Relocation."""
+    cfg = tomllib.loads(settings._read())
+    return {**relocate.local_view(cfg), "version": _local_version(cfg), "editable": not store.IS_EXAMPLE,
+            "research": localtax.status()}
+
+
+def _own_entries(raw: Any) -> list[dict[str, Any]]:
+    """Your own local taxes as the page sent them, as they'll be written, or ValueError naming the one that's wrong."""
+    if not isinstance(raw, list) or len(raw) > MAX_OWN_TAXES:
+        raise ValueError(f"Your own local taxes need to be a list of at most {MAX_OWN_TAXES}.")
+    entries = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("Each of your own local taxes needs a name and a rate.")
+        entry: dict[str, Any] = {"name": " ".join(str(item.get("name") or "").split())}
+        for key in ("rate", "over", "over_married"):
+            value = item.get(key)
+            if value not in (None, ""):
+                entry[key] = value
+        if "over_married" in entry and entry["over_married"] == entry.get("over", 0):
+            del entry["over_married"]  # The same as single's, which is what it is when left out.
+        entry["base"] = item.get("base") or "wages"
+        try:
+            taxes.own_local_tax(entry)
+        except ValueError as err:
+            raise ValueError(f"Your own local tax {err}.") from err
+        entries.append(entry)
+    return entries
+
+
+def save_local_taxes(body: dict[str, Any]) -> dict[str, Any]:
+    """Set home_local_taxes (null takes it out, so the home state's statewide one counts again) and own_local_taxes
+    under [relocation], and leave every other line of search.toml as it was."""
+    if store.IS_EXAMPLE:
+        raise ValueError("This is the demo, so local taxes can't be saved. Point PYRITE_HOME at your own workspace to set yours.")
+    named = body.get("home_local_taxes")
+    if named is not None and (not isinstance(named, list) or any(key not in taxes.LOCAL for key in named)):
+        raise ValueError("That names a local tax Pyrite doesn't know.")
+    named = list(dict.fromkeys(named)) if named is not None else None
+    own = _own_entries(body.get("own_local_taxes") or [])
+    with settings._lock:
+        text = settings._read()
+        current = tomllib.loads(text)
+        if body.get("version") != _local_version(current):
+            raise settings.Conflict("Your local taxes changed after you opened them, so nothing was saved. Reload Settings to see the latest.")
+        updated = (tomledit.delete_value(text, "relocation", "home_local_taxes") if named is None
+                   else tomledit.set_value(text, "relocation", "home_local_taxes", named))
+        updated = (tomledit.set_value(updated, "relocation", "own_local_taxes", own) if own
+                   else tomledit.delete_value(updated, "relocation", "own_local_taxes"))
+        if updated == text:
+            return local_taxes_view()
+        if confirm.file_only("config", text, updated) or confirm.loosening("config", text, updated):
+            raise ValueError("That would loosen a check on what drafts may say, which this tab never does. Nothing was saved.")
+        problems = store.config_problems(tomllib.loads(updated))
+        if problems:
+            raise ValueError(f"{problems[0]} Nothing was saved.")
+        profile.keep({"config": text}, "Changed local taxes on the Settings tab")
+        settings._write(store.CONFIG_PATH, updated)
+    return local_taxes_view()
+
+
+def research_local_taxes(body: dict[str, Any]) -> dict[str, Any]:
+    """Start a lookup of the local taxes where you live, with Claude, in the background."""
+    localtax.start(str(body.get("place") or ""))
+    return local_taxes_view()
 
 
 def claude_status(fresh: bool = False) -> dict[str, Any]:

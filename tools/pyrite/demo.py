@@ -42,7 +42,10 @@ JOBS = [
     ("Massive Dynamic", "Principal Firmware Engineer", "Remote - US", "", "", "new", 0),
     ("Umbrella Instruments", "Senior Firmware Engineer", "Waunakee, WI", "", "", "new", 1),
     ("Oscorp Robotics", "Staff AI Engineer, Inference", "Remote - US", "", "", "new", 1),
+    ("Vandelay Motion", "Staff Motion Control Engineer", "Austin, TX", "", "", "new", 2),
 ]
+# Pay ranges, as boards write them, for the postings that give one. A job elsewhere with one shows Moving for it.
+COMP = {"Vandelay Motion": "$165,000 - $215,000 a year, plus equity"}
 # Each application's folder under example/applications: its drafts and, once past the assay, its built documents.
 FOLDERS = {
     "Acme Robotics": ACME,
@@ -115,15 +118,19 @@ def _add_job(conn, cfg, row, index) -> int:
     )
     # Scored by the scorer, so the Profile tab doesn't find every prospect out of step with the settings.
     verdict = scoring.evaluate(title, location, "", description, cfg, company)
+    source = f"demo:{slug}"
     if not verdict.keep:
+        # One the filters drop, such as a job outside the area, is there because it was added by hand, and is stored
+        # as one, so a rescore judges it the way it was judged here.
         verdict = scoring.evaluate(title, location, "", description, cfg, company, added=True)
+        source = "manual"
     cursor = conn.execute(
         """INSERT INTO jobs (source_key, source_id, company, title, location, location_kind, url, description, first_seen, last_seen,
-               score, score_reasons, track, flags, status, status_changed_at, fit, fit_reason, app_folder, files)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'new', ?, ?, ?, ?, ?)""",
-        (f"demo:{slug}", str(index), company, title, location, verdict.location_kind,
+               score, score_reasons, track, flags, status, status_changed_at, fit, fit_reason, app_folder, files, comp)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'new', ?, ?, ?, ?, ?, ?)""",
+        (source, str(index), company, title, location, verdict.location_kind,
          f"https://careers.{slug}.example/jobs/{1000 + index}", description, found, _stamp(PAN_AGO), verdict.score,
-         json.dumps(verdict.reasons), verdict.track, found, fit, why, folder, json.dumps(files)),
+         json.dumps(verdict.reasons), verdict.track, found, fit, why, folder, json.dumps(files), COMP.get(company, "")),
     )
     job_id = cursor.lastrowid
     log_event(conn, job_id, "found", f"score {verdict.score}")

@@ -51,6 +51,19 @@ decide_days = 5      # a deadline this close puts "tailor it or pass" on the to-
 currency = "USD"
 points = 5           # priority lost for paying under the going rate, and three times that for too low to bother
 
+# What a job outside your area is worth after taxes and local prices, against your pay now where you live, which is
+# the metro (or state) under [market]. A job's panel shows it as Moving for it, and `pyrite relocate` prints it. Base
+# pay only, on both sides. Settings › Relocation on the dashboard sets all of these.
+[relocation]
+current_pay = 150000    # a year's base pay now, before tax
+filing = "single"       # or "married", for a joint return with your pay as the household's only wages
+housing = "rent"        # or "own": which view of prices leads
+housing_share = 30      # percent of spending on housing, for the renting-at-market view
+# Local income taxes you pay at home: Pyrite's own by name (`pyrite relocate --taxes` lists them), and your own as a
+# rate over a threshold, charged on "wages" or on your state "taxable" income.
+# home_local_taxes = []
+# own_local_taxes = [{ name = "Transit district tax", rate = 0.5, base = "wages" }]
+
 # How long the skills a posting asks years of have existed, so "8+ years of AI agents" reads as an ask nobody could
 # meet, not as your gap. Pyrite knows the common ones. With research on, the daily run has Claude look up the rest
 # on the web, keeping only dated answers with a source it found. `pyrite skills` lists what's known.

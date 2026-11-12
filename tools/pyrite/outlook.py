@@ -299,22 +299,7 @@ def vet(answer: str, seen: Iterable[str], headings: tuple[str, ...] = HEADINGS) 
     Anything in the answer of the wrong shape is left out rather than trusted. Sections come in the order of
     `headings`, and any other heading is dropped."""
     data = _json(answer)
-    pages = {bare for bare in map(_bare, seen) if bare}
-    sources: dict[int, dict[str, Any]] = {}
-    unconfirmed = 0
-    for raw in _list(data.get("sources")):
-        if not isinstance(raw, dict) or isinstance(raw.get("id"), bool) or not isinstance(raw.get("id"), int):
-            continue
-        url = _text(raw.get("url"), 600)
-        if not re.match(r"https?://[^\s/]+\.[^\s]+$", url):
-            unconfirmed += 1
-            continue
-        if _bare(url) not in pages:
-            unconfirmed += 1
-            continue
-        published = _text(raw.get("date"), 10)
-        sources[raw["id"]] = {"title": _text(raw.get("title"), 200) or url, "publisher": _text(raw.get("publisher"), 100),
-                              "url": url, "date": published if DATE.fullmatch(published) else ""}
+    sources, unconfirmed = vetted_sources(data, seen)
     numbers: dict[int, int] = {}
     sections, dropped = [], 0
     by_heading = {s["heading"]: s for s in _list(data.get("sections")) if isinstance(s, dict) and isinstance(s.get("heading"), str)}
@@ -336,6 +321,28 @@ def vet(answer: str, seen: Iterable[str], headings: tuple[str, ...] = HEADINGS) 
             sections.append({"heading": heading, "points": points})
     kept = [{"n": n, **sources[i]} for i, n in sorted(numbers.items(), key=lambda pair: pair[1])][:MAX_SOURCES]
     return sections, kept, {"points": dropped, "sources": unconfirmed}
+
+
+def vetted_sources(data: dict[str, Any], seen: Iterable[str]) -> tuple[dict[int, dict[str, Any]], int]:
+    """The sources in an answer whose pages this run came across, by the id the answer gave each, and how many others
+    it listed. The rule is `vet`'s, for any research that cites numbered sources."""
+    pages = {bare for bare in map(_bare, seen) if bare}
+    sources: dict[int, dict[str, Any]] = {}
+    unconfirmed = 0
+    for raw in _list(data.get("sources")):
+        if not isinstance(raw, dict) or isinstance(raw.get("id"), bool) or not isinstance(raw.get("id"), int):
+            continue
+        url = _text(raw.get("url"), 600)
+        if not re.match(r"https?://[^\s/]+\.[^\s]+$", url):
+            unconfirmed += 1
+            continue
+        if _bare(url) not in pages:
+            unconfirmed += 1
+            continue
+        published = _text(raw.get("date"), 10)
+        sources[raw["id"]] = {"title": _text(raw.get("title"), 200) or url, "publisher": _text(raw.get("publisher"), 100),
+                              "url": url, "date": published if DATE.fullmatch(published) else ""}
+    return sources, unconfirmed
 
 
 def ask_web(conn, claude: str, kind: str, text: str, model: str, minutes: int) -> tuple[str, set[str]]:

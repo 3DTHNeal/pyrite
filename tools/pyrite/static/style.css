@@ -440,6 +440,20 @@ textarea { width: 100%; resize: vertical; }
 .industries-tab .grid td:nth-child(2), .industries-tab .grid td.num { white-space: nowrap; }
 .up { color: var(--good); }
 .down { color: var(--bad); }
+/* A job panel's Moving for it: the break-even and the range in home dollars, one column for each view of prices. */
+.relocation .grid th.num { text-align: right; white-space: normal; }
+.relocation .grid td { white-space: nowrap; }
+.relocation ul.info-note { padding-left: 18px; }
+.relocation-taxes { margin-top: 8px; font-size: 13px; }
+.relocation-taxes p { margin: 6px 0 2px; }
+.relocation-taxes ul { margin: 0; padding-left: 18px; }
+/* Settings › Relocation's local taxes: what you pay at home, the table to search, your own, and a lookup with Claude. */
+.local-taxes h3 { font-size: 13px; margin: 16px 0 6px; }
+.local-taxes h3:first-child { margin-top: 0; }
+.local-taxes input[type="search"], .local-taxes .part-actions input { width: 100%; max-width: 340px; }
+.local-list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.local-list li { margin-bottom: 4px; overflow-wrap: anywhere; }
+.local-list .btn { margin-left: 4px; padding: 1px 8px; }
 .outlook-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .outlook-head .muted { font-size: 13px; }
 .outlook h4 { font-size: 13px; margin: 14px 0 4px; }

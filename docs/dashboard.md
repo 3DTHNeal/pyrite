@@ -104,6 +104,7 @@ Clicking a job anywhere opens its panel at the side. The header has its stage ic
 - The assay's result, then **Rewrite or prepare**: **Refresh resume**, **Interview prep** and **Make fill sheet**, where each applies.
 - Tags such as **New** or **Reposted**, then the facts: status, location, pay, track, fit and its reason, and when it was found, posted, reposted, applied and heard back.
 - **What Pyrite read into it**: pay against similar roles, rarity and asks nobody could meet ([Pay, rarity and asks nobody could meet](prospects.md#pay-rarity-and-asks-nobody-could-meet)).
+- **Moving for it**, for a job outside your area: what its pay is worth after taxes and prices there, against your pay now ([Moving for a job](#moving-for-a-job)).
 - **Next step**, a line and a date of your own. The date is what **Follow up** and **Act now** go by, and a rescore keeps a job that has one.
 - **Reaching out**, for the note to the hiring manager ([After you apply](applying.md#after-you-apply)).
 - **Your notes**, free text kept in the database, saved with **Save notes**. A note keeps the job through a rescore too. A note or next step you haven't saved says **Not saved yet**, and stays in its box if you close the panel and come back, until the page is reloaded.
@@ -111,6 +112,61 @@ Clicking a job anywhere opens its panel at the side. The header has its stage ic
 - **Employer**: the research on how the employer works ([How the employer works](applying.md#how-the-employer-works)).
 - **Why it scored** and **Why its priority is**, the points behind its place in the list.
 - The posting's text, then its **Timeline**: every change of status, run, check and note, newest first.
+
+## Moving for a job
+
+A job outside your area that names its place gets **Moving for it** on its panel: what it would take to live there as you do now, and what its pay range is worth back home. Remote jobs and jobs in your own area don't get it, since they don't ask you to move.
+
+It needs your pay now, set under **Settings › Relocation**, and where you live, which is the metro area or state under **Where you'll work** on the Profile tab. Until your pay is set, the panel says so.
+
+It shows two numbers, each in two views of prices:
+
+- **Break-even pay**: the pay there whose take-home, after the difference in prices, buys what your take-home buys now. Paid that, you'd live as you do; paid more, better.
+- **The range in home dollars**: the bottom, middle and top of the posting's range, each taken home there and scaled to prices where you live, with how far each is above or below your take-home now. A posting with no range gets the break-even alone.
+
+The two views of prices:
+
+- **All prices** compares the Bureau of Economic Analysis's all-items price levels, its Regional Price Parities. Housing is about a sixth of that index, as it is for the average household.
+- **Renting at market** weighs housing at your share of spending, 30% unless you set another, since moving means paying today's rent or today's house prices there. Everything else is compared at all prices with housing taken out.
+
+If you rent, Renting at market comes first. If you own, All prices does, with a note: a paid-down mortgage or an old low rate can make your housing cost well under the market, and then moving costs more than either view shows.
+
+Only base pay counts, on both sides. A bonus, equity, a signing bonus and the cost of the move itself aren't counted, whatever the posting says.
+
+Taxes are worked out the same way in both places: federal income tax, Social Security and Medicare, the state's income tax, the state's payroll taxes on employees (disability and paid leave insurance, Oregon's transit tax), and the local income taxes that matter most, such as New York City's, Philadelphia's or a Maryland county's. It assumes wages are your only income and you take the standard deduction. Married means a joint return with your pay as the household's only wages. Each table's year is written beside it in `tools/pyrite/taxes.py`, along with what each state leaves out. It's an estimate to decide whether a job is worth a closer look, not tax advice.
+
+A posting's place is read as a city and state. A city that's one of a metro area's principal cities, as the government lists them, gets that metro's prices, so a job in a suburb named in that list finds its metro. Anywhere else gets the state's average, which runs a little high for a small town. When the posting names more than one place, the first in a metro area is used, and the panel says which.
+
+### Local taxes at home
+
+Your local taxes at home can't be told from a metro area, so you name them, under **Local taxes at home** on **Settings › Relocation**. Until you do, a state's statewide one counts, as in Maryland, Indiana and Pennsylvania. The panel has three ways to find yours:
+
+- **Search Pyrite's table** of the city and county income taxes that matter most, by a city, county or state, and **Add** the ones you pay. A job elsewhere comes under the same table, by the city its posting names.
+- **Add your own**: a name, a rate, the income it starts above, and whether it's charged on your wages or your state taxable income. A school district's or a transit or housing district's tax, whose boundary no city's name follows, goes here. A tax with two rates is two entries: the second is what it adds over its own threshold.
+- **Look up where you live** has Claude search the web for the city, county and district taxes where you live, from the town or county you type. Like employer research, it gets nothing else about you, and every tax it proposes must cite a page the run actually found and read as a rate Pyrite can use. Nothing is saved until you click **Add** beside one, so open its source first. It uses your Claude plan for a few minutes, with the model set under **Models for the smaller jobs**.
+
+In `search.toml` they're two lists under `[relocation]`:
+
+```toml
+[relocation]
+current_pay = 150000
+filing = "single"        # or "married"
+housing = "rent"         # or "own"
+housing_share = 30       # percent of spending
+home_local_taxes = ["nyc"]
+own_local_taxes = [
+  { name = "Transit district tax", rate = 0.5, base = "wages" },
+  { name = "Housing services tax", rate = 1.0, over = 125000, over_married = 200000, base = "taxable" },
+]
+```
+
+From a terminal, `pyrite relocate --taxes` lists Pyrite's table, `pyrite relocate --taxes ohio` the ones matching a word, and `pyrite relocate --research-taxes "City, ST"` runs the lookup and prints each tax it found as a line to paste.
+
+### The command and the price levels
+
+`pyrite relocate <id>` prints the same comparison for a job, and `pyrite relocate --where "City, ST" --pay "$165k-$215k"` for any place and pay.
+
+The price levels don't ship with Pyrite. The first comparison downloads them from BEA, and each metro area's principal cities from the Census Bureau, about 200 KB in all, and keeps them in the workspace's `data/prices/rpp.json`. Without a network the first time, the panel says it couldn't get them, and Pyrite tries again within the hour. BEA publishes a new year each December, so a copy over 60 days old is looked for anew, and kept if the download fails. `pyrite relocate --refresh-prices` downloads them again now.
 
 ## Keys
 
@@ -128,10 +184,11 @@ Clicking a job anywhere opens its panel at the side. The header has its stage ic
 
 | Section | What it sets | In `search.toml` |
 |---|---|---|
-| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks, skill ages and employer research | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]`, `[skills]` and `[culture]` |
+| **Claude** | Which model judges postings and writes drafts, and how hard it thinks. The models for the smaller jobs: reading mail, industry outlooks, skill ages, employer research and local tax research | `[claude]` `model` and `effort`; `model` under `[inbox]`, `[market]`, `[skills]`, `[culture]` and `[relocation]` |
 | **Mail** | Whether replies are read over IMAP or through the Gmail connector, and how many days back | `[inbox]` `source` and `lookback_days` |
 | **Daily run** | When the pan and the daily run start, on Windows. How many postings are judged and resumes written each morning, how many tries a draft gets, and whether a cover letter is written | Task Scheduler, for when. `[run]` `triage_per_day`, `tailor_per_day`, `fix_attempts` and `cover_letters` |
 | **Dashboard** | When the to-do list reminds you to follow up, calls an application ghosted or a deadline close, whether it reminds you to reach out, and whether it asks GitHub for updates | `[run]` `follow_up_days`, `quiet_days` and `decide_days`; `[dashboard]` `reach_out` and `check_updates` |
+| **Relocation** | Your pay now, filing status, whether you rent or own, your share of spending on housing, and your local taxes at home, for [Moving for a job](#moving-for-a-job) | `[relocation]` `current_pay`, `filing`, `housing`, `housing_share`, `home_local_taxes` and `own_local_taxes` |
 | **Cities and industries** | The places and industries to see first. [Preferred cities and industries](prospects.md#preferred-cities-and-industries) covers it | `[promote]` |
 
 Claude and Mail open with a **Connection** panel: whether Claude Code is on this computer and signed in, and where replies are read from, whether the last read worked and when. **Check again** asks Claude Code afresh, which takes a second or two.

@@ -291,6 +291,7 @@ NUMBERS = {
     "freshness": ("new_days", "older_points", "repost_penalty", "redate_penalty", "max_penalty", "redate_tolerance_days",
                   "came_back_after_days", "ghost_age_days", "ghost_repost_count", "ghost_age_if_reposted"),
     "promote": ("city_points", "industry_points", "mentions_needed"),
+    "relocation": ("current_pay", "housing_share"),
 }
 
 
@@ -357,6 +358,8 @@ def config_problems(cfg: dict[str, Any]) -> list[str]:
             problems.append(_not_a_list(f"title under the [[track]] named {name}", "title", track["title"]))
         if "titles" in track and not (isinstance(track["titles"], str) or _is_strings(track["titles"])):
             problems.append(_not_a_list(f"titles under the [[track]] named {name}", "titles", track["titles"]))
+    from . import relocate  # Here, so this module still loads before every other one of Pyrite's, as it always has.
+    problems += relocate.problems(cfg)
     return problems
 
 

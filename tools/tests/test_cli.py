@@ -32,6 +32,7 @@ COMMANDS = (
     ["status", "999", "applied"],
     ["outreach", "999"],
     ["fill", "999"],
+    ["relocate", "999"],
 )
 
 

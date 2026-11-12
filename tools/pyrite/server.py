@@ -46,6 +46,7 @@ from . import (
     prep,
     profile,
     refresh,
+    relocate,
     schedule,
     settings,
     signals,
@@ -744,6 +745,8 @@ def job_detail(conn, job_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
     # What the web says about the employer, shared by every job there, and where to read reviews yourself.
     job["culture"] = culture.status(row["company"]) if culture.company_key(row["company"]) else None
     job["culture_links"] = culture.links(row["company"])
+    # For a job that asks you to move: its pay after taxes and prices there, against yours now where you live.
+    job["relocation"] = relocate.for_job(job, cfg)
     return job
 
 
@@ -949,6 +952,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(_settings_page())
             if path == "/api/settings/schedule":
                 return self._json(schedule.view())
+            if path == "/api/settings/local-taxes":
+                return self._json(options.local_taxes_view())
             if path == "/api/settings/status":
                 fresh = parse_qs(urlparse(self.path).query).get("fresh") == ["1"]
                 return self._json(options.status(load_config(), fresh))
@@ -1359,6 +1364,8 @@ PROFILE_WRITES = {
     "/api/settings": _save_settings,
     "/api/settings/options": _save_options,
     "/api/settings/schedule": _change_schedule,
+    "/api/settings/local-taxes": lambda body: options.save_local_taxes(body),
+    "/api/settings/local-taxes/research": lambda body: options.research_local_taxes(body),
     "/api/facts": _save_facts,
     "/api/profile": _save_profile,
     "/api/profile/put-back": _put_back,

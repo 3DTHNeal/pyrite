@@ -1071,6 +1071,147 @@ function schedulePanel() {
   return h("div", { class: "panel" }, h("h2", {}, "When it runs"), box);
 }
 
+// ---- Local taxes at home, for Relocation ----
+// Pyrite's table of city and county taxes to pick from, your own as a rate over a threshold, and a lookup with Claude
+// that proposes yours with sources. Nothing a lookup finds is saved until you add it.
+
+const localWords = (text) => text.toLowerCase().split(/[\s,]+/).filter(Boolean);
+const matchesLocal = (tax, words) => {
+  const text = [tax.key, tax.name, tax.state_name, tax.where, tax.note].join(" ").toLowerCase();
+  return words.every((word) => text.includes(word) || word.toUpperCase() === tax.state);
+};
+
+function localTaxPanel() {
+  const box = h("div", { class: "local-taxes", "aria-live": "polite" });
+  const error = h("p", { class: "error", role: "alert" });
+  let view = null;
+  let watch = null;
+  const search = h("input", { type: "search", placeholder: "A city, county or state", "aria-label": "Search Pyrite's local taxes" });
+  const place = h("input", { type: "text", placeholder: "Town or county, ST", "aria-label": "Where you live, for the lookup", autocomplete: "off" });
+
+  const send = async (named, own) => {
+    error.textContent = "";
+    try {
+      view = await api("/api/settings/local-taxes", { version: view.version, home_local_taxes: named, own_local_taxes: own });
+      draw();
+    } catch (err) {
+      error.textContent = err.message;
+    }
+  };
+  const named = () => (view.named === null ? [...view.default] : [...view.named]);
+  const own = () => view.own.map(({ said, ...entry }) => entry);
+  const button = (label, onclick, extra = {}) => h("button", { class: "btn small", type: "button", disabled: !view.editable, onclick, ...extra }, label);
+
+  const homeList = () => {
+    const byKey = new Map(view.table.map((tax) => [tax.key, tax]));
+    const rows = [
+      ...named().map((key) => h("li", {}, h("strong", {}, byKey.get(key).name), ` · ${byKey.get(key).rate}`,
+        view.named === null ? h("span", { class: "muted" }, ` · counted anywhere in ${byKey.get(key).state_name} until you choose`) : null, " ",
+        button("Remove", () => send(named().filter((k) => k !== key), own())))),
+      ...view.own.map((entry, at) => h("li", {}, h("strong", {}, entry.name), ` · ${entry.said} · your own `,
+        button("Remove", () => send(named(), own().filter((_, i) => i !== at))))),
+    ];
+    return rows.length ? h("ul", { class: "local-list" }, rows)
+      : h("p", { class: "muted" }, "None. Your pay at home is taxed by the federal government and your state only.");
+  };
+
+  const results = h("ul", { class: "local-list" });
+  const drawResults = () => {
+    const words = localWords(search.value);
+    const found = words.length ? view.table.filter((tax) => matchesLocal(tax, words)) : [];
+    fill(results, words.length && !found.length
+      ? h("li", { class: "muted" }, "Not in Pyrite's table. Add it as your own below, or look it up with Claude.")
+      : found.map((tax) => h("li", {}, h("strong", {}, tax.name), ` · ${tax.state_name} · ${tax.rate} (${tax.year})`,
+        tax.where ? h("span", { class: "muted" }, ` · charged ${tax.where}`) : null, " ",
+        named().includes(tax.key) ? h("span", { class: "muted" }, "Added")
+          : button("Add", () => send([...named(), tax.key], own())))));
+  };
+  search.addEventListener("input", () => view && drawResults());
+
+  const ownForm = () => {
+    const name = h("input", { type: "text", placeholder: "Transit district tax", maxlength: "100" });
+    const rate = h("input", { type: "number", min: "0", max: String(view.max_rate), step: "0.01", placeholder: "1.5" });
+    const over = h("input", { type: "number", min: "0", step: "1", placeholder: "0" });
+    const married = h("input", { type: "number", min: "0", step: "1", placeholder: "Same as single" });
+    const base = h("select", {}, Object.entries(view.bases).map(([value, label]) => h("option", { value }, `Charged on ${label}`)));
+    const number = (input) => (input.value === "" ? null : Number(input.value));
+    return h("div", {},
+      h("div", { class: "option-fields" },
+        h("label", {}, "Name", name), h("label", {}, "Rate, percent", rate),
+        h("label", {}, "Over, in dollars", over, h("span", { class: "muted hint" }, "Where it starts, for a single filer. 0 for the first dollar.")),
+        h("label", {}, "Over, married", married), h("label", {}, "On", base)),
+      h("div", { class: "part-actions" }, button("Add my own", () => send(named(), [...own(),
+        { name: name.value, rate: number(rate), over: number(over), over_married: number(married), base: base.value }]))),
+      h("p", { class: "muted hint" }, "A tax with two rates is two entries: the second is what it adds over its own threshold."));
+  };
+
+  const research = () => {
+    const r = view.research || {};
+    const report = r.report;
+    const running = r.state === "running";
+    const start = button(running ? "Looking…" : "Look up with Claude", async () => {
+      error.textContent = "";
+      try {
+        view = await api("/api/settings/local-taxes/research", { place: place.value });
+        draw();
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    }, { disabled: !view.editable || running });
+    const sources = report ? new Map(report.sources.map((s) => [s.n, s])) : new Map();
+    const cite = (n) => {
+      const source = sources.get(n);
+      const href = source && safeHref(source.url);
+      return href ? h("a", { class: "cite", href, target: "_blank", rel: "noopener noreferrer", title: source.title }, `[${n}]`) : null;
+    };
+    const ownNames = new Set(view.own.map((entry) => entry.name));
+    let line = "Claude searches the web for the city, county and district taxes where you live, and every one it proposes cites its source. It uses your Claude plan for a few minutes.";
+    if (running) line = `Looking up ${r.place}, started ${ago(r.started_at)}. You can leave this page meanwhile.`;
+    else if (r.state === "failed") line = h("span", { class: "alert" }, `The last lookup didn't finish: ${r.detail}`);
+    else if (report) line = `Looked up for ${report.place} ${ago(report.generated_at)}. Open each source before you add one.`;
+    return h("div", {},
+      h("div", { class: "part-actions" }, place, start), h("p", { class: "muted hint" }, line),
+      report && report.none_found ? h("p", {}, `Claude found no local tax on wages or income in ${report.place}.`) : null,
+      report && report.taxes.length ? h("ul", { class: "local-list" }, report.taxes.map((tax) => h("li", {},
+        h("strong", {}, tax.name), ` · ${tax.said}${tax.year ? ` (${tax.year})` : ""}`,
+        tax.who === "workers" ? h("span", { class: "muted" }, " · only on people who work there") : null,
+        tax.note ? h("span", { class: "muted" }, ` · ${tax.note}`) : null, " ", tax.sources.map(cite), " ",
+        ownNames.has(tax.name) ? h("span", { class: "muted" }, "Added")
+          : button("Add", () => send(named(), [...own(), { name: tax.name, rate: tax.rate, over: tax.over ?? null,
+            over_married: tax.over_married ?? null, base: tax.base }]))))) : null,
+      report && report.sources.length ? h("details", { class: "outlook-sources" }, h("summary", {}, `Sources (${report.sources.length})`),
+        h("ol", {}, report.sources.map((s) => h("li", { value: String(s.n) },
+          safeHref(s.url) ? h("a", { href: safeHref(s.url), target: "_blank", rel: "noopener noreferrer" }, s.title) : s.title)))) : null);
+  };
+
+  const draw = () => {
+    clearTimeout(watch);
+    fill(box,
+      view.editable ? null : h("p", { class: "muted" }, "This is the demo, so local taxes can't be saved or looked up here."),
+      h("h3", {}, "Where you live"), homeList(),
+      h("h3", {}, "Search Pyrite's table"), search, results,
+      h("h3", {}, "Add your own"), ownForm(),
+      h("h3", {}, "Look up where you live"), research(),
+      error);
+    drawResults();
+    // A lookup in progress is checked on until it's done, while this panel is still on the page.
+    if (view.research && view.research.state === "running") watch = setTimeout(() => box.isConnected && load(), 5000);
+  };
+  const load = async () => {
+    try {
+      view = await api("/api/settings/local-taxes");
+      draw();
+    } catch (err) {
+      fill(box, h("p", { class: "error" }, err.message));
+    }
+  };
+  fill(box, h("p", { class: "muted" }, "Loading…"));
+  load();
+  return h("div", { class: "panel" }, h("h2", {}, "Local taxes at home"),
+    h("p", { class: "muted hint" }, "City, county and district income taxes you pay where you live, taken from your pay at home in every comparison."),
+    box);
+}
+
 function optionsSection(section) {
   let connection = null;
   if (section.status) {
@@ -1082,6 +1223,7 @@ function optionsSection(section) {
     connection,
     section.id === "run" ? schedulePanel() : null,
     section.panels.map(optionsPanel),
+    section.id === "relocation" ? localTaxPanel() : null,
     (section.notes || []).map((note) => h("p", { class: "muted hint settings-note" }, note)),
   ];
 }
@@ -1927,6 +2069,42 @@ function readBlock(job) {
   return h("div", {}, h("h3", {}, "What Pyrite read into it"), h("ul", { class: "muted" }, lines.map((line) => h("li", {}, line))));
 }
 
+// For a job that asks you to move: what its pay is worth after taxes and prices there, against your pay now at home.
+// relocate.py works it all out. This only lays it out: the break-even pay, then the range in home dollars, in each view.
+const thousands = (n) => `$${Math.round(n / 1000).toLocaleString()}k`;
+const signedPercent = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(Math.round(n * 100))}%`;
+
+function relocationBlock(job) {
+  const r = job.relocation;
+  if (!r) return null;
+  const heading = h("h3", {}, "Moving for it");
+  if (r.problem) return h("div", { class: "relocation" }, heading, h("p", { class: "muted" }, r.problem));
+  const views = r.views;
+  const rows = [h("tr", {}, h("td", {}, "Break-even pay"), views.map((v) => h("td", { class: "num" }, thousands(v.break_even))))];
+  views[0].points.forEach((point, at) => rows.push(h("tr", {},
+    h("td", {}, `${point.label} of range, ${thousands(point.pay)}`),
+    views.map((v) => {
+      const p = v.points[at];
+      return h("td", { class: `num ${p.change >= 0 ? "up" : "down"}` }, `${thousands(p.worth)} (${signedPercent(p.change)})`);
+    }))));
+  const there = r.there;
+  const local = there.local.length ? ` Local taxes there: ${there.local.join(", ")}.` : "";
+  const taxRows = (lines) => h("ul", {}, lines.map((line) => h("li", {}, `${line.label}: ${thousands(line.amount)}`)));
+  return h("div", { class: "relocation" },
+    heading,
+    h("p", {}, r.summary),
+    h("div", { class: "table-wrap" }, h("table", { class: "grid" },
+      h("thead", {}, h("tr", {}, h("th", {}, ""), views.map((v) => h("th", { class: "num" }, v.label)))),
+      h("tbody", {}, rows))),
+    h("p", { class: "info-note" }, `Home is ${r.home.name}, where your ${thousands(r.home.pay)} takes home ${thousands(r.home.net)}. `,
+      `In ${there.name}, prices are ${signedPercent(r.prices.all - 1)} on everything and ${signedPercent(r.prices.housing - 1)} on housing, `,
+      `and the same pay would take home ${thousands(there.same_pay_net)}.${local} The percents compare with your take-home now.`),
+    h("details", { class: "relocation-taxes" }, h("summary", {}, "Taxes on each side"),
+      h("p", { class: "muted" }, `Your ${thousands(r.home.pay)} at home, a year:`), taxRows(r.home.taxes),
+      h("p", { class: "muted" }, `The same pay in ${there.name}:`), taxRows(there.same_pay_taxes)),
+    h("ul", { class: "info-note" }, r.notes.map((note) => h("li", {}, note))));
+}
+
 const fileLabel = (file) => file.split("/").pop().replace(/^.*?(?=Resume|Cover_Letter)/, "").replace(/_/g, " ");
 const fileLink = (file, label = fileLabel(file), cls = "btn") => h("a", { class: cls, href: fileHref(file), target: "_blank", rel: "noopener" }, label);
 // Workday mangles a PDF's line breaks, so it gets the Word file. Everywhere else the PDF looks the same for every reader.
@@ -2266,6 +2444,7 @@ async function openJob(id, list) {
     h("dl", { class: "facts" }, facts.flatMap(([key, value]) => [h("dt", {}, key), h("dd", {}, value)])),
     (job.flags.length ? h("div", { class: "callout" }, `Flagged: ${job.flags.join(", ")}`) : null),
     readBlock(job),
+    relocationBlock(job),
     h("div", {}, h("h3", {}, "Next step"), h("div", { class: "stack" }, nextText,
       h("div", { class: "row" }, nextDate, h("button", { class: "btn", type: "button",
         onclick: () => tryAct(job.id, { action: "next_action", text: nextText.value, date: nextDate.value }, undefined, ["nextText", "nextDate"]) }, "Save"),
