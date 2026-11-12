@@ -13,7 +13,9 @@ port = 8790
 
 A rail down the left names every view: **To do** first, then **Pipeline** with each of its stages under it, **Prospects**, **Closed** and **Industries**, then the **Setup** views, **Profile**, **Facts**, **Sources** and **Settings**. Each shows a count where one helps, such as how many things need you beside To do, and a stage under Pipeline opens the board at its column. To do also has the key numbers on one line beside its name, each with its detail in a tooltip. On a narrow screen the rail becomes a strip of views across the top.
 
-The bar along the top holds one line of status, **Add a posting**, and **Update available** when there is one. The status line says what's running, or when the boards were last read and how many problems there are, such as a failing source or a run that failed. Click it for the whole story and the two run buttons. It names each failing source, up to three, with what went wrong, and **Open Sources** goes to the rest.
+The bar along the top holds one line of status, **Go to**, **Add a posting**, and **Update available** when there is one. The status line says what's running, or when the boards were last read and how many problems there are, such as a failing source or a run that failed. Click it for the whole story and the two run buttons. It names each failing source, up to three, with what went wrong, and **Open Sources** goes to the rest.
+
+**Go to**, a magnifier on a narrower screen, or Ctrl+K (⌘K on a Mac) from anywhere, finds a job, a view, a section of Profile or Settings, or one of the top bar's actions by a few letters of its name, and goes there. Each word you type has to start a word of the name, or of where it is: `firm` finds every firmware job, `cit ind` finds Settings › Cities and industries, and a stage or status such as `applied` finds the jobs at it. Jobs most worth your time come first. With nothing typed, it lists the views, sections and actions. A run that can't start now, such as in the demo, isn't offered.
 
 The dashboard labels its parts in plain words. The code and these docs sometimes use the prospector's name each started with:
 
@@ -90,6 +92,8 @@ Each runs in the background, shows its progress in the status line while the cry
 | **New listing** | The three best postings from the last 7 days that were never reposted |
 | **Reach out** | Applications one to three days old with no note to the hiring manager logged, as one item |
 | **Gaps to answer** | A requirement has come up as a gap in three applications or more |
+
+Two or more items of one kind share a heading: the tag with how many there are, and what they have in common, said once. Each item under it keeps only its own words, such as when its posting closes. Click the heading to fold the group into one line naming its companies, and again to open it. A group of more than three starts folded, and one you fold or open stays that way in this browser. A group of **Check again** items has **Check all again** beside its heading.
 
 The tag colours follow the table above. The field report from the last Claude run sits at the top, and folds away once you've applied or passed on anything since it was written.
 
@@ -172,7 +176,9 @@ The price levels don't ship with Pyrite. The first comparison downloads them fro
 
 | Key | Where | Does |
 |---|---|---|
+| **Ctrl+K**, or **⌘K** on a Mac | Anywhere | Opens **Go to**, or closes it. In it, **↑** and **↓** choose and **Enter** goes |
 | **/** | Anywhere but a text box | Opens Prospects with its search box ready to type in |
+| **J** and **K** | To do, the Pipeline board, Prospects or Closed, with no panel open | Moves down and up the list. **Enter** opens the one you're on. A folded group's items are skipped |
 | **J** and **K** | A job's panel | The next and previous job in the list you opened it from |
 | **T** and **P** | The panel of a job nothing has been written for | Tailor this one first, or pass, then open the next |
 | **Esc** | A panel, or the status line's details | Closes it |

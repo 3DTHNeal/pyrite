@@ -52,6 +52,7 @@
   </div>
   <div class="topbar-actions">
     <button id="update-open" class="btn update" type="button" hidden>Update available</button>
+    <button id="palette-open" class="btn palette-open" type="button" aria-label="Go to" title="Find a job, a view or an action by name. Ctrl+K from anywhere"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3"/><path d="m10.2 10.2 3.6 3.6"/></svg><span class="palette-word">Go to</span> <kbd id="palette-keys">Ctrl K</kbd></button>
     <button id="add-open" class="btn primary" type="button">Add a posting</button>
   </div>
 </header>
@@ -164,6 +165,16 @@
 <aside id="drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-label="Job details" tabindex="-1"></aside>
 <div id="scrim" class="scrim" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<!-- Go to: the box has no padding of its own, so a click on the dialog itself is a click outside it. -->
+<dialog id="palette" class="dialog palette" aria-label="Go to">
+  <div class="palette-box">
+    <input id="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list"
+      aria-label="Go to" placeholder="Go to a job, a view, a section or an action" autocomplete="off" spellcheck="false" maxlength="200">
+    <ul id="palette-list" class="palette-list" role="listbox" aria-label="Matches"></ul>
+    <p class="palette-help muted">↑ and ↓ choose, Enter goes, Esc closes. With no box open, J and K move through the list on show.</p>
+  </div>
+</dialog>
 
 <dialog id="add-dialog" class="dialog">
   <form id="add-form">
