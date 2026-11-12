@@ -574,7 +574,7 @@ class ScamRules(unittest.TestCase):
 
     def test_the_company_at_its_own_domain_or_its_tracking_system_is_fine(self):
         self.assertEqual(self.reasons(), [])
-        self.assertEqual(self.reasons(from_address="no-reply@us.greenhouse-mailcheck.io", subject="Contoso: next steps"), [])
+        self.assertEqual(self.reasons(from_address="no-reply@us.greenhouse-mail.io", subject="Contoso: next steps"), [])
         self.assertEqual(self.reasons(from_address="hr@hooli-mailcheck.example", subject="Hooli Autonomy interview"), [])
 
     def test_a_lookalike_domain_is_a_strong_sign(self):
@@ -717,6 +717,78 @@ class ScamRules(unittest.TestCase):
                                body="I'm the CEO of Contoso and want to talk about a role.")
         self.assertIn("Sent from contoso-talent.example, which looks like Contoso but isn't its domain", reasons)
         # A lower-case word after "I run" names no company.
+        self.assertEqual(mailcheck._signed_for("I run errands."), [])
+
+    def test_a_misspelt_name_passes_for_the_company_only_when_the_mail_claims_it(self):
+        for address in ("hr@contosso.example", "hr@c0ntoso.example", "hr@cotnoso.example"):
+            with self.subTest(address=address):
+                self.assertIn(f"Sent from {address.partition('@')[2]}, which misspells Contoso to pass for it",
+                              self.reasons(from_address=address, subject="Contoso offer"))
+        # Without the name, only a spelling that reads the same at a glance counts: real companies' names are often a letter apart.
+        self.assertIn("Sent from c0ntoso.example, which reads as Contoso at a glance but isn't its domain",
+                      self.reasons(from_address="hr@c0ntoso.example", from_name="HR Team", subject="Interview invitation"))
+        self.assertEqual(self.reasons(from_address="hr@contosa.example", subject="Interview invitation"), [])
+        self.assertEqual(mailcheck._skeleton("fabrikarn"), mailcheck._skeleton("fabrikam"))
+        self.assertEqual(mailcheck._skeleton("c0nt0sso"), mailcheck._skeleton("contoso"))
+
+    def test_a_companys_address_in_front_of_someone_elses_domain_is_a_strong_sign(self):
+        reasons = self.reasons(from_address="hr@contoso.com.hr-verify.example", subject="Interview invitation")
+        self.assertIn("Sent from contoso.com.hr-verify.example, which puts Contoso's address in front of hr-verify.example, "
+                      "someone else's domain", reasons)
+        # The name alone in front is how a help desk names its customers, so it's only the weak sign of naming the company.
+        self.assertEqual(self.reasons(from_address="support@contoso.helpdesk.example", subject="Contoso interview"), [])
+
+    def test_a_domain_borrowing_a_hiring_systems_name_is_a_strong_sign(self):
+        for address, brand in (("no-reply@greenhouse-careers.example", "greenhouse.io"), ("jobs@lnkedin.com", "linkedin.com"),
+                               ("apply@workday-hr.example", "workday.com")):
+            with self.subTest(address=address):
+                self.assertIn(f"Sent from {address.partition('@')[2]}, which borrows the name of {brand} but isn't it",
+                              self.reasons(from_address=address, subject="Interview next steps"))
+        self.assertEqual(self.reasons(from_address="jobs-noreply@linkedin.com", subject="New jobs for you"), [])
+        self.assertEqual(mailcheck._borrows_hiring_brand("workdays.example"), "")
+
+    def test_an_address_shown_as_the_name_must_be_the_senders(self):
+        reasons = self.reasons(from_address="mailer@bulk-send.example", from_name="hr@contoso.com", subject="Interview")
+        self.assertIn("Shows hr@contoso.com as its name but was sent from bulk-send.example", reasons)
+        self.assertEqual(self.reasons(from_address="sam@contoso.com", from_name="sam@contoso.com", subject="Interview"), [])
+        self.assertEqual(self.reasons(from_address="group@lists.example", from_name="'jo@contoso.com' via Hiring",
+                                      subject="Interview"), [])
+
+    def test_a_coding_test_to_run_from_a_stranger_is_a_malware_lure(self):
+        body = "Before our call please clone the repo and run npm install, then open it in VS Code."
+        lure = self.reasons(from_address="jo@talent-x.example", subject="Technical assessment", body=body,
+                            links=["https://github.com/someone/test"])
+        self.assertTrue(any(reason.startswith("Asks you to \"clone the repo\" from github.com") for reason in lure))
+        # Without a link to the code it's only weak, and from the company itself it's the take-home it says it is.
+        self.assertEqual(self.reasons(from_address="jo@talent-x.example", subject="Technical assessment", body=body), [])
+        self.assertEqual(self.reasons(subject="Contoso technical assessment", body=body, links=["https://github.com/contoso/test"]), [])
+        for text in ("The page shows an error. Press Win+R and paste the following command to fix it.",
+                     "Your audio failed. Please update your camera driver from the link below.",
+                     "Copy this command into PowerShell to finish the screening."):
+            with self.subTest(text=text):
+                self.assertTrue(any("fake screening pages install malware" in reason for reason in self.reasons(
+                    from_address="jo@talent-x.example", subject="Interview", body=text)))
+
+    def test_reshipping_money_mules_and_sharing_a_phone_code_are_strong_signs(self):
+        for text, said in (
+            ("Package inspector role: receive packages at your home and reship them.", "reshipping goods"),
+            ("We sent an overpayment, so send back the difference by Zelle.", "overpayment"),
+            ("Process payments on our behalf into your personal account.", "passing money"),
+            ("Please text me the 6-digit verification code you just received.", "a code sent to your phone"),
+            ("Recharge your account to unlock your earnings.", "task scam"),
+            ("There is a $95 background check fee.", "background check fee"),
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(any(said in reason for reason in self.reasons(
+                    from_address="jo@talent-x.example", subject="Remote job offer", body=text)))
+        # A take-home asks for your code back, which is no phone code.
+        self.assertEqual(self.reasons(from_address="jo@talent-x.example", subject="Take-home for the role",
+                                      body="Send us the code when you're done."), [])
+
+    def test_a_link_to_a_free_page_host_is_a_weak_sign(self):
+        reasons = self.reasons(from_address="jo@talent-x.example", subject="Job offer", body="Respond today.",
+                               links=["https://contoso-careers.vercel.app/apply"])
+        self.assertIn("Links to contoso-careers.vercel.app, where anyone can put up a page for free", reasons)
         self.assertEqual(mailcheck._signed_for("I run errands on Fridays. I run Fabrikam Robotics PS"), ["Fabrikam Robotics"])
 
 
