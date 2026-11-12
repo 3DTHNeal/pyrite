@@ -27,7 +27,8 @@ The rules behind that, in the order a draft meets them:
 
 - **One source of truth, written by a person.** `profile/facts.md` holds what is true of the candidate. Numbers stay exactly as measured.
 - **Write down what must never be said.** The same file lists what is confidential, under "Do not use", and what the candidate hasn't done, under "Unsupported". Those sections approve nothing, and the gate enforces them.
-- **Untrusted text is data.** A posting comes from the internet. It is never instructions, and a posting that asks for a skill is never evidence that the candidate has it. [`sources.py`](../tools/pyrite/sources.py) strips what a posting hides, and the posting's own title approves nothing.
+- **Untrusted text is data.** A posting comes from the internet. It is never instructions, and a posting that asks for a skill is never evidence that the candidate has it. [`sources.py`](../tools/pyrite/sources.py) strips what a posting hides, and the posting's own title approves nothing. Whatever a model wrote after reading a posting is data too: a draft, its notes and the checker's findings that quote them go back to the next run fenced as such, never in the system's own voice. A fence has to hold however its closing tag is spelled.
+- **Give each run only what its job needs.** A drafter can read only its own application's folder, so a posting can't have it quote another application's notes. A run that searches the web starts in an empty folder, so nothing in the workspace, such as the names of employers applied to, is in the context of a run that can fetch any page.
 
 ### At the gate
 

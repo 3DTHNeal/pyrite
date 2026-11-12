@@ -11,7 +11,11 @@ Your workspace (the folder `PYRITE_HOME` points to) holds:
 - `data/pyrite.db`: jobs, statuses, timelines, the run log, the time, tokens and estimated cost of each Claude run, and, for possible replies and scam warnings, the sender, subject and date of matching mail.
 - `data/history/`: the earlier text of each profile file you change on the dashboard, so any save can be put back;
 - `data/market/`: the official employment numbers downloaded for the Industries tab, and the research each industry's outlook found;
-- `data/culture/`: what the research on each employer you asked about found.
+- `data/culture/`: what the research on each employer you asked about found;
+- `data/prices/`: the regional price levels and the list of each metro area's principal cities that **Moving for it** compares with, as downloaded;
+- `data/local-taxes.json` and `data/skill-ages.json`: what the local tax and skill-age lookups found.
+
+Your pay now, filing status and housing, which **Moving for it** uses, are settings under `[relocation]` in your workspace's `search.toml`, and go nowhere.
 
 Your browser also keeps a copy of what the dashboard last showed, in its storage for the dashboard's address, so the next load can show it at once while Pyrite works out the latest. Clearing that site's data in the browser removes it.
 
@@ -23,11 +27,14 @@ The dashboard listens on localhost only. Nothing on it is reachable from another
 |---|---|---|
 | Morning pan | Each job board you list | Ordinary requests for public job feeds. The board sees your IP address and Pyrite's user agent. Nothing about you is sent. |
 | Triage, drafting, Refresh resume, interview prep | Anthropic, through Claude Code | The posting, and for drafting, refreshes and prep, your fact bank, run notes, approved terms, model documents and existing drafts. Anthropic's terms and privacy policy apply, under your own account. |
-| Gmail connector | Google and Anthropic, through Claude Code | Claude reads recent mail through your connected Gmail account and returns the sender, subject, date and a short snippet of each. It's told the names of the companies you've applied to or listed under `[inbox.domains]`, so it knows which mail to read further. Pyrite stores only the matches. |
+| Gmail connector | Google and Anthropic, through Claude Code | Claude reads recent mail through your connected Gmail account and returns the sender, subject, date and a short snippet of each, and a little of the text of mail about hiring that comes from somewhere other than a known employer, applicant tracking system or job board, for the scam check. It's told the names of the companies you've applied to or listed under `[inbox.domains]`, so it knows which mail to read further. Pyrite stores only the matches. |
 | IMAP reply detection | Your mail provider | Your credentials, to sign in read-only. Only message headers (sender, subject, date) are requested, never message bodies. |
 | Industries tab, official numbers | The US Bureau of Labor Statistics (data.bls.gov) | Requests for its public employment tables. The area codes asked for show the metro area and state you set under `[market]`. The BLS sees your IP address and Pyrite's user agent. |
 | Industries tab, outlook | Anthropic, through Claude Code, with web search and web fetch | The industry's name and codes, the metro area, state and country you set, the employers you follow in it, and the official numbers. Claude's searches and the pages it opens go to search providers and those sites. |
 | Employer research | Anthropic, through Claude Code, with web search and web fetch | The employer's name, the job's title and the posting's link. Nothing about you. Claude's searches and the pages it opens go to search providers and those sites. The review links on the job's panel open a DuckDuckGo search, or the NLRB's case search, for the employer's name, and only when you click one. |
+| Moving for it, price levels | The US Bureau of Economic Analysis (apps.bea.gov) and the Census Bureau (www2.census.gov) | Requests for their public files, once and then when a copy is over 60 days old. Nothing about you, not even the places compared, is sent. They see your IP address and Pyrite's user agent. |
+| Local taxes at home, lookup | Anthropic, through Claude Code, with web search and web fetch | The town or county you type, and nothing else about you: not your pay. Claude's searches and the pages it opens go to search providers and those sites. |
+| Skill-age research | Anthropic, through Claude Code, with web search and web fetch | The skill names postings ask years of, as the postings wrote them. Nothing about you. Claude's searches and the pages it opens go to search providers and those sites. |
 | Workday autofill | The employer's Workday site | What your answer sheet and tailored documents say, typed into a browser window you watch. Nothing is submitted. |
 | Update available | GitHub, or wherever Pyrite's code folder was cloned from | A `git fetch` of `main`, once an hour while the dashboard is open, and the code itself when you click **Update and restart**. GitHub sees your IP address. Nothing about you is sent. `check_updates = false` under `[dashboard]` turns it off. |
 | Building `.docx` and `.pdf` | LibreOffice or Word on your computer | Nothing leaves your computer. |
