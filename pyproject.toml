@@ -44,7 +44,8 @@ Security = "https://github.com/3DTHNeal/pyrite/security/policy"
 
 [tool.setuptools]
 package-dir = { "" = "tools" }
-# assay is the fact checker's general half, which knows nothing about resumes. See tools/assay/__init__.py.
+# assay is the fact checker's general half, which knows nothing about resumes. It's a mirror of a package kept upstream:
+# see tools/assay/mirror.txt, and tools/assay/__init__.py for what it holds.
 packages = ["pyrite", "assay"]
 
 [tool.setuptools.package-data]
