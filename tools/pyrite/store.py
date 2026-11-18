@@ -266,7 +266,16 @@ CREATE TABLE IF NOT EXISTS mail_alerts (
     subject TEXT DEFAULT '',
     date TEXT,
     reasons TEXT DEFAULT '[]',
-    dismissed_at TEXT
+    dismissed_at TEXT,
+    excerpt TEXT DEFAULT ''
+);
+-- What a possible reply looked like, beside its timeline line: a rejection, a receipt or a response, and the start of
+-- its text made plain. The text is cleared after a while, and never goes to Claude.
+CREATE TABLE IF NOT EXISTS reply_mail (
+    detail TEXT PRIMARY KEY,
+    ts TEXT NOT NULL,
+    kind TEXT DEFAULT '',
+    excerpt TEXT DEFAULT ''
 );
 """
 
@@ -485,10 +494,13 @@ def _migrate(conn) -> None:
     """Bring an older database up to date. Its listing history starts from what it already knows."""
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
+    alert_columns = {row["name"] for row in conn.execute("PRAGMA table_info(mail_alerts)")}
     # The sent copy's fingerprints, and the folder's as they were when you said its changes since were fine. Then a
-    # failed run's problem in a form the dashboard can act on, and when you said it was yours.
+    # failed run's problem in a form the dashboard can act on, and when you said it was yours. Then the start of a
+    # scam warning's text.
     for table, column, have in (("jobs", "sent_files", columns), ("jobs", "sent_ack", columns),
-                                ("tasks", "problem", task_columns), ("tasks", "cleared_at", task_columns)):
+                                ("tasks", "problem", task_columns), ("tasks", "cleared_at", task_columns),
+                                ("mail_alerts", "excerpt", alert_columns)):
         if column not in have:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
@@ -809,6 +821,10 @@ def possible_replies(conn) -> dict[int, dict[str, Any]]:
     for row in rows:
         count = flags.get(row["job_id"], {}).get("count", 0) + 1
         flags[row["job_id"]] = {"detail": row["detail"], "count": count}
+    # The latest message's kind and text, where they were kept. The sender wrote the text, so it's shown as text only.
+    for flag in flags.values():
+        mail = conn.execute("SELECT kind, excerpt FROM reply_mail WHERE detail = ?", (flag["detail"],)).fetchone()
+        flag["kind"], flag["excerpt"] = (mail["kind"] or "", mail["excerpt"] or "") if mail else ("", "")
     return flags
 
 

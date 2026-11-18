@@ -8,7 +8,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from . import checks
+from . import checks, mailtext
 from . import score as scoring
 from .store import REPLY_DETECTED, ROOT, SCORING_SETTINGS, SCORING_VERSION, log_event, set_meta, set_status
 
@@ -99,7 +99,7 @@ def _stamp(days_ago: float) -> str:
 
 
 def _clear(conn) -> None:
-    for table in ("events", "listings", "claude_runs", "tasks", "jobs", "rejected", "source_status", "runs", "briefings"):
+    for table in ("events", "reply_mail", "listings", "claude_runs", "tasks", "jobs", "rejected", "source_status", "runs", "briefings"):
         conn.execute(f"DELETE FROM {table}")
 
 
@@ -177,9 +177,13 @@ def load(conn, cfg: dict[str, Any]) -> str:
         report = checks.check_application(ROOT / folder, cfg, company, job["title"], job["description"])
         conn.execute("UPDATE jobs SET check_result = ? WHERE id = ?", (json.dumps(report), ids[company]))
 
-    log_event(conn, ids["Acme Robotics"], REPLY_DETECTED,
-              f"From Sam Lee <sam@acme-robotics.example> | Subject: Your application | Date: {_stamp(0.3)[:16].replace('T', ' ')} UTC")
+    reply = f"From Sam Lee <sam@acme-robotics.example> | Subject: Your application | Date: {_stamp(0.3)[:16].replace('T', ' ')} UTC"
+    log_event(conn, ids["Acme Robotics"], REPLY_DETECTED, reply)
     conn.execute("UPDATE events SET ts = ? WHERE job_id = ? AND kind = ?", (_stamp(0.3), ids["Acme Robotics"], REPLY_DETECTED))
+    text = ("Hi Alex,\n\nThanks for applying for the robotics software role. I'd like to set up a 30-minute phone screen this week. "
+            "Could you send me a few times that work for you? https://acme-robotics.example/careers/schedule\n\nBest,\nSam")
+    conn.execute("INSERT INTO reply_mail (detail, ts, kind, excerpt) VALUES (?, ?, ?, ?)",
+                 (reply, _stamp(0.3), mailtext.reply_kind("Your application", text), mailtext.excerpt(text)))
 
     now_stamp = _stamp(PAN_AGO)
     for key, company, count, error in SOURCES:

@@ -79,7 +79,7 @@ Each runs in the background, shows its progress in the status line while the cry
 |---|---|
 | **Finish setup** | Something in your workspace is still the example's or blank, the same findings as `pyrite doctor` |
 | **Possible scam** | A posting you haven't sent has a scam's tells, or mail about hiring has them ([Reply detection](mail.md)) |
-| **Possible reply** | Mail that looks like a reply to an application. Only your buttons change its status |
+| **Possible reply** | Mail that looks like a reply to an application, marked as a likely rejection or response, with **Read its text** to see its start. Only your buttons change its status |
 | **Act now** | You're interviewing or have an offer, and the date on its **Next step** has come |
 | **Follow up** | You applied or heard back, and the date on its **Next step** has come, 7 days after applying unless you changed it (`follow_up_days`) |
 | **Send** | A draft passed the assay and its posting is still up. The five best, those closing within two days first |

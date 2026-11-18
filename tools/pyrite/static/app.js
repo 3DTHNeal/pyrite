@@ -462,6 +462,7 @@ function renderOrders() {
         // A scam warning may name no job. Its sender and subject are the mail's own words, kept as text.
         h("span", {}, h("span", { class: "what" }, o.text), why ? h("span", { class: "why" }, why) : null)),
       o.alert_id ? h("button", { class: "btn dismiss", type: "button", onclick: () => dismissAlert(o.alert_id) }, "Dismiss") : null,
+      o.mail_text ? mailFold(o.mail_text) : null,
       o.action === "recheck" && !state.demo ? checkButton([o.job_id], "Check again") : null,
       o.action === "gap_seen" && !state.demo ? h("button", { class: "btn dismiss", type: "button", title: "Keeps this draft as it is and takes it off the list.",
         onclick: (e) => gapSeen(o.job_id, e.currentTarget) }, "Got it") : null);
@@ -2211,16 +2212,37 @@ function navBar(id) {
     h("button", { class: "btn small", type: "button", disabled: at === nav.length - 1, title: "Shortcut: J", onclick: go(nav[at + 1]) }, "Next ›"));
 }
 
+// The start of an email's text. Whoever sent it wrote every word, so it's a text node and nothing else: the server has
+// already made it plain, turned each link into the name of its site and cut the quoted history.
+const MAIL_TEXT_NOTE = "The start of the email, as plain text. Links show only the site they go to, and can't be opened from here.";
+const mailText = (text) => h("blockquote", { class: "mail-text" }, text);
+
+// Folded in the to-do list, so the list stays short until you want to read one.
+function mailFold(text) {
+  return h("details", { class: "mail-fold" }, h("summary", {}, "Read its text"), h("p", { class: "muted mail-note" }, MAIL_TEXT_NOTE), mailText(text));
+}
+
+// What a possible reply looks like, from plain rules on its subject and text. A receipt is left out before it gets here.
+const REPLY_LOOKS = { rejection: "looks like a rejection", response: "looks like a response" };
+
 // The sender and subject come from whoever sent the mail, so they stay plain text.
 function replyBlock(job) {
   const reply = job.possible_reply;
   if (!reply) return null;
   const more = reply.count > 1 ? ` This is the latest of ${reply.count} messages: the timeline has the rest.` : "";
+  const looks = REPLY_LOOKS[reply.kind];
+  const log = (label, kind) => h("button", { class: "btn primary", type: "button",
+    onclick: () => tryAct(job.id, { action: "heard_back", kind }, undefined, ["update"]) }, label);
+  // The one step the text points to, beside Dismiss. The status buttons below still offer every other.
+  const quick = reply.kind === "rejection" && ["applied", "responded", "interviewing"].includes(job.status) ? log("Log the rejection", "rejected")
+    : reply.kind === "response" && job.status === "applied" ? log("Log the reply", "reply") : null;
   return h("div", { class: "callout" },
-    h("strong", {}, "Possible reply"),
+    h("strong", {}, looks ? `Possible reply: ${looks}` : "Possible reply"),
     h("p", { class: "reply-detail" }, reply.detail),
-    h("p", {}, `An automatic match on the sender and company, which changes nothing by itself. Read the email, then update the status below if it's real.${more}`),
-    h("div", { class: "row reply-actions" }, h("button", { class: "btn", type: "button",
+    reply.excerpt ? [h("p", { class: "muted mail-note" }, MAIL_TEXT_NOTE), mailText(reply.excerpt)] : null,
+    h("p", {}, `An automatic match on the sender and company${looks ? ", and a guess at what it says from its words" : ""}, which changes nothing by itself. `
+      + `Read the email, then update the status if it's real.${more}`),
+    h("div", { class: "row reply-actions" }, quick, h("button", { class: "btn", type: "button",
       onclick: () => tryAct(job.id, { action: "dismiss_reply" }) }, "Dismiss")));
 }
 

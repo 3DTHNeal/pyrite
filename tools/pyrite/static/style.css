@@ -311,6 +311,15 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 .callout ul { margin: 4px 0 0; padding-left: 18px; }
 .reply-detail { margin: 4px 0; overflow-wrap: anywhere; font-weight: 600; }
 .reply-actions { margin-top: 6px; }
+/* An email's own text: plain, kept to its line breaks, and scrolled within a short box rather than pushing the page. */
+.mail-text { margin: 6px 0; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
+  font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+.mail-note { margin: 6px 0 0; font-size: 12px; }
+.order-list li:has(> .mail-fold) { flex-wrap: wrap; }
+.mail-fold { flex-basis: 100%; margin: -2px 0 6px 146px; font-size: 13px; }
+.group-items .mail-fold { margin-left: 10px; }
+.mail-fold summary { cursor: pointer; color: var(--ink-2); width: max-content; }
+@media (max-width: 640px) { .mail-fold { margin-left: 10px; } }
 .prose { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; max-height: 340px; overflow-y: auto; background: var(--surface-2); padding: 10px 12px; border-radius: 4px; }
 /* Notes written in Markdown, drawn as headings, lists and tables rather than the characters that mark them. */
 .prose.markdown { white-space: normal; }

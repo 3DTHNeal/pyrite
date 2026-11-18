@@ -4,9 +4,11 @@ This only ever notes that a reply might have come. It records the sender, subjec
 and date on the job's timeline and never changes a status, so a false match can't
 touch the response rate. You confirm on the dashboard.
 
-Mailboxes are opened with EXAMINE and read with BODY.PEEK, and only the headers
-are requested, so message bodies never reach this machine's database. Header text
-is written by whoever sent the mail, so it's cleaned here and shown as text only.
+Mailboxes are opened with EXAMINE and read with BODY.PEEK, so nothing is marked
+read. Headers come first, and only a message that matches one of your applications
+has its text read, so the dashboard can show its start and say whether it looks
+like a rejection, a receipt or a response. Everything a sender wrote is made plain
+text by `mailtext` before it's kept, shown as text only, and cleared after a while.
 """
 import email
 import email.policy
@@ -26,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from . import mailtext
 from .sources import strip_invisible
 from .store import ACTIVE, REPLY_DETECTED, log_event, now
 
@@ -44,6 +47,12 @@ DEFAULT_LOOKBACK_DAYS = 14
 BATCH_SIZE = 200
 MAX_MESSAGES = 5000
 HEADER_FETCH = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE LIST-UNSUBSCRIBE)])"
+# The start of a matched message, with PEEK so it isn't marked read. The plain text usually comes first, and this is
+# plenty for it; a message cut off here still parses, and only its start is kept.
+BODY_FETCH = "(BODY.PEEK[]<0.65536>)"
+# Matched messages whose text is read in one check. A first check of two weeks rarely has more replies than this.
+MAX_BODIES = 40
+UID_IN_RESPONSE = re.compile(rb"\bUID (\d+)")
 
 # Applicant tracking systems send for many employers, so the sender's domain says
 # nothing here. The company has to be named in the display name or subject.
@@ -71,28 +80,13 @@ HIRING_SUBJECT = re.compile(
 )
 # Automatic mail that every application sets off: the receipt, and the candidate account's password and codes.
 # None of it is the company answering. "Thank you for your interest" isn't here, since rejections often say that.
-RECEIPT_SUBJECT = re.compile(
-    r"\b(successfully (applied|submitted)|thanks? (you )?for applying|thanks? (you )?for (submitting )?your application"
-    r"|application (was )?(received|submitted|complete|confirmation)|received your application|got your application"
-    r"|reset (your )?password|password reset|verify your (email|account)|verification code|one[- ]time (pass)?code"
-    r"|(sign[- ]in|security|access) code)\b",
-    re.I,
-)
-# "Thank you for your interest" is a receipt as often as a rejection. It counts as a receipt only when the message's
-# own text is at hand and says neither, since header-only mail can't tell the two apart.
-INTEREST_SUBJECT = re.compile(r"\bthanks? (you )?for your interest\b", re.I)
+RECEIPT_SUBJECT = mailtext.RECEIPT_SUBJECT
 # An employer that also sells to the public sends its shop's mail from the same domain. An order is never a reply.
 SHOP_SUBJECT = re.compile(
     r"\b(your ([\w.&'-]+ )?(order|package|delivery|shipment|purchase|receipt|invoice|subscription|return)|order (confirmation|confirmed|"
     r"#?\d+)|ordered \d+ items?|(has |have )?(shipped|been delivered|out for delivery|arriving)|delivery update|"
     r"refund|payment (received|confirmation)|return (request|label|started|approved|received|confirmation|update)|"
     r"drop(ped)?[- ]?off)\b",
-    re.I,
-)
-# Words that make a receipt-like subject a real answer after all, when the message's own text is at hand.
-ANSWER_TEXT = re.compile(
-    r"\b(unfortunately|regret|not (to )?(move|moving) forward|other candidates|decided to|interview\w*|schedule|"
-    r"next steps?|offer)\b",
     re.I,
 )
 UNSAFE_WHITESPACE = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
@@ -126,10 +120,28 @@ class Message:
     subject: str
     date: datetime
     bulk: bool = False
+    # What the sender wrote, made plain by `mailtext.body_text`: Gmail's preview where it gave one, and the start of
+    # the text where it was read. Both stay empty for mail that only had its headers read.
+    snippet: str = ""
+    body: str = ""
+    # Where an IMAP mailbox keeps it, so its text can be read once it turns out to match.
+    uid: str = ""
 
     @property
     def address(self) -> str:
         return f"{self.local}@{self.domain}"
+
+    @property
+    def text(self) -> str:
+        return f"{self.snippet}\n{self.body}".strip()
+
+    def kind(self) -> str:
+        """Whether it looks like a rejection, a receipt or a response, or "" if there's too little to tell."""
+        return mailtext.reply_kind(self.subject, self.text)
+
+    def excerpt(self) -> str:
+        """The start of its text as the dashboard shows it."""
+        return mailtext.excerpt(self.body or self.snippet)
 
     def detail(self) -> str:
         sender = f"{self.name} <{self.address}>" if self.name else self.address
@@ -333,8 +345,43 @@ def read_messages(client, since: datetime, own_address: str) -> list[Message]:
             if isinstance(part, tuple):
                 message = parse_headers(part[1])
                 if message and message.address != own_address:
+                    uid = UID_IN_RESPONSE.search(part[0] if isinstance(part[0], bytes) else b"")
+                    message.uid = uid.group(1).decode() if uid else ""
                     messages.append(message)
     return messages
+
+
+def text_of(raw: bytes) -> str:
+    """The plain text of a raw message, or its HTML made plain where it has no plain part. "" when neither can be read,
+    as with one cut off in the middle of its encoding."""
+    try:
+        parsed = email.message_from_bytes(raw, policy=email.policy.default)
+        part = parsed.get_body(preferencelist=("plain", "html"))
+        if part is None:
+            return ""
+        content = part.get_content()
+        html = part.get_content_subtype() == "html"
+    except (ValueError, TypeError, AttributeError, IndexError, LookupError, UnicodeError, AssertionError):
+        return ""
+    return mailtext.body_text(content, html=html) if isinstance(content, str) else ""
+
+
+def read_bodies(client, messages: list[Message]) -> None:
+    """Read the start of each message's text, one at a time so each answer is known to be its own."""
+    for message in [message for message in messages if message.uid][:MAX_BODIES]:
+        typ, data = client.uid("FETCH", message.uid, BODY_FETCH)
+        if typ != "OK":
+            raise imaplib.IMAP4.error("Reading a message's text failed.")
+        raw = next((part[1] for part in data or () if isinstance(part, tuple) and isinstance(part[1], bytes)), b"")
+        message.body = text_of(raw)
+
+
+def may_answer(message: Message, jobs: list[sqlite3.Row], cfg: dict[str, Any]) -> bool:
+    """Whether a message matches an application closely enough to be worth reading: never an order from the employer's
+    shop, and never one from before you last updated the job."""
+    if SHOP_SUBJECT.search(message.subject) and not HIRING_SUBJECT.search(message.subject):
+        return False
+    return any(message.date >= _cutoff(job) and is_match(job, message, employer_domains(job, cfg)) for job in jobs)
 
 
 def _read_mailbox(creds: Credentials, jobs: list[sqlite3.Row], cfg: dict[str, Any], client_factory) -> tuple[list[Message], str]:
@@ -361,7 +408,9 @@ def _read_mailbox(creds: Credentials, jobs: list[sqlite3.Row], cfg: dict[str, An
         oldest_allowed = datetime.now(UTC) - timedelta(days=days)
         # SINCE ignores time zones, so start a day early and let _cutoff decide.
         since = max(oldest_allowed, min(_cutoff(job) for job in jobs)) - timedelta(days=1)
-        return read_messages(client, since, creds.user.lower()), folder
+        messages = read_messages(client, since, creds.user.lower())
+        read_bodies(client, [message for message in messages if may_answer(message, jobs, cfg)])
+        return messages, folder
     finally:
         try:
             client.logout()
@@ -371,16 +420,12 @@ def _read_mailbox(creds: Credentials, jobs: list[sqlite3.Row], cfg: dict[str, An
 
 def is_receipt(message: Message) -> bool:
     """Automatic mail an application sets off, which isn't the company answering. When the message's own text is at
-    hand, as it is through Gmail, a receipt-like subject over a rejection or an interview invitation still counts.
-    Mail from the employer's shop, such as an order or a delivery, is left out with them."""
+    hand, a receipt-like subject over a rejection or an interview invitation still counts, and a plain subject over
+    "we've received your application" doesn't. Mail from the employer's shop, such as an order or a delivery, is left
+    out with them."""
     if SHOP_SUBJECT.search(message.subject) and not HIRING_SUBJECT.search(message.subject):
         return True
-    text = getattr(message, "text", "") or ""
-    if INTEREST_SUBJECT.search(message.subject):
-        return bool(text.strip()) and not ANSWER_TEXT.search(text)
-    if not RECEIPT_SUBJECT.search(message.subject):
-        return False
-    return not ANSWER_TEXT.search(text)
+    return message.kind() == mailtext.RECEIPT
 
 
 def _words(text: str) -> str:
@@ -405,7 +450,11 @@ def record_matches(conn, jobs: list[sqlite3.Row], messages: Sequence[Message], c
 
     Receipts are left out. When a message matches several applications at one company and its subject names some of
     their titles, only those get it. A subject that names another job at that company, such as one already closed,
-    goes to none of them. Otherwise there's no telling which it's about, so they all do."""
+    goes to none of them. Otherwise there's no telling which it's about, so they all do.
+
+    Beside each match goes what kind of reply it looks like and the start of its text, kept under the timeline line
+    it belongs to, never in it, so the timeline stays the sender's headers alone."""
+    forget_old_text(conn)
     found = []
     domains = {job["id"]: employer_domains(job, cfg) for job in jobs}
     cutoffs = {job["id"]: _cutoff(job) for job in jobs}
@@ -420,13 +469,23 @@ def record_matches(conn, jobs: list[sqlite3.Row], messages: Sequence[Message], c
         if matched and not named and _names_another_job(conn, matched, message.subject):
             continue
         detail = message.detail()
+        kind = message.kind()
         for job in named or matched:
             if detail in seen[job["id"]]:
                 continue
             seen[job["id"]].add(detail)
             log_event(conn, job["id"], REPLY_DETECTED, detail)
-            found.append({"job_id": job["id"], "company": job["company"], "sender": message.address})
+            conn.execute("INSERT OR REPLACE INTO reply_mail (detail, ts, kind, excerpt) VALUES (?, ?, ?, ?)",
+                         (detail, now(), kind, message.excerpt()))
+            found.append({"job_id": job["id"], "company": job["company"], "sender": message.address, "kind": kind})
     return found
+
+
+def forget_old_text(conn) -> None:
+    """Clear the text kept from mail read more than `mailtext.KEEP_DAYS` ago. What kind of reply it looked like stays."""
+    cutoff = (datetime.now(UTC) - timedelta(days=mailtext.KEEP_DAYS)).isoformat(timespec="seconds")
+    conn.execute("UPDATE reply_mail SET excerpt = '' WHERE ts < ? AND excerpt != ''", (cutoff,))
+    conn.execute("UPDATE mail_alerts SET excerpt = '' WHERE ts < ? AND excerpt != ''", (cutoff,))
 
 
 def _record_status(conn, error: str = "", count: int = 0, source_key: str = SOURCE_KEY, company: str = "Email replies") -> None:

@@ -120,6 +120,8 @@ def page() -> bytes:
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 HEARD_BACK = {"reply": "responded", "interview": "interviewing", "offer": "offer", "rejected": "rejected"}
+# What a possible reply looks like, from `mailtext.reply_kind`, as the to-do list says it. A receipt is never listed.
+REPLY_LOOKS = {"rejection": "Looks like a rejection", "response": "Looks like a response"}
 # What the dashboard's own buttons set. Ready and needs_fix come only from the fact checker.
 USER_STATUSES = ("applied", "passed", "ghosted", "withdrawn")
 RECHECKABLE = ("ready", "needs_fix")
@@ -400,7 +402,8 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
         # The sender and subject were written by whoever sent the mail, so the page shows them as text only.
         orders.append({"rank": 0, "kind": "Possible scam", "job_id": alert["job_id"], "alert_id": alert["id"],
                        "text": f"{alert['sender']}: {alert['subject'] or '(no subject)'}",
-                       "detail": "; ".join(alert["reasons"]) + ". Don't reply, click or pay. Dismiss this if it's genuine."})
+                       "detail": "; ".join(alert["reasons"]) + ". Don't reply, click or pay. Dismiss this if it's genuine.",
+                       "mail_text": alert.get("excerpt") or ""})
     for job in jobs:
         name = f"{job['company']}: {job['title']}"
         if job["scam_signs"] and job["status"] in NOT_SENT:
@@ -408,8 +411,11 @@ def _orders(jobs: list[dict[str, Any]], fix_limit: int = DEFAULT_FIX_ATTEMPTS, a
                            "detail": "The posting itself: " + "; ".join(job["scam_signs"]).lower()
                            + ". Real employers don't. Check it on the company's own site before you apply, or pass on it."})
         if job["possible_reply"]:
+            reply = job["possible_reply"]
+            looks = REPLY_LOOKS.get(reply.get("kind", ""), "")
             orders.append({"rank": 0, "kind": "Possible reply", "job_id": job["id"], "text": name,
-                           "detail": job["possible_reply"]["detail"]})
+                           "detail": f"{looks}. {reply['detail']}" if looks else reply["detail"],
+                           "reply_kind": reply.get("kind", ""), "mail_text": reply.get("excerpt", "")})
         if job["status"] in ("interviewing", "offer") and job["follow_up_due"]:
             orders.append({"rank": 0, "kind": "Act now", "job_id": job["id"], "text": name,
                            "detail": job["next_action"] or "Next step is due"})
