@@ -582,6 +582,7 @@ function judgedPills(job, hints = true) {
     if (sign.tone !== "muted" || hints) pills.push(pill(sign.tone, sign.label, sign.detail));
   }
   if (job.rare) pills.push(pill("info", "Rare near you", `${capitalized(job.rare_reason)}. There may not be another soon.`));
+  if (job.turned_down) pills.push(pill("warn", "Turned you down before", `This employer turned you down ${job.turned_down_reason}. It has already said no to this resume once.`));
   const impossible = (job.skill_asks || []).filter((ask) => ask.impossible);
   if (impossible.length) {
     pills.push(pill("info", "Asks the impossible", `${impossible.map((ask) => ask.said).join("\n")}\n\nNot your gap: nobody has that much. Whoever screens it is looking for the skill.`));
@@ -2120,6 +2121,7 @@ function readBlock(job) {
   const lines = [];
   for (const sign of job.pay_signs || []) lines.push(`${sign.label}: ${sign.detail}`);
   if (job.rare) lines.push(`Rare near you: ${job.rare_reason}.`);
+  if (job.turned_down) lines.push(`Turned you down before: this employer turned you down ${job.turned_down_reason}.`);
   for (const ask of job.skill_asks || []) lines.push(`${ask.said} The posting says: "${ask.words}"`);
   for (const blocker of job.impossible_blockers || []) lines.push(`Left off Before you apply, since nobody could meet it: ${blocker}`);
   if (!lines.length) return null;

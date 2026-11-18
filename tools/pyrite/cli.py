@@ -18,7 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from . import __version__, checks, claude_code, demo, discover, fill, score, signals, store, words, workspace
+from . import __version__, checks, claude_code, demo, discover, fill, outcomes, score, signals, store, words, workspace
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
 
 # The tests and anything else that read these from here still find them.
@@ -201,10 +201,12 @@ def queue(conn, cfg: dict[str, Any], limit: int | None = None) -> dict[str, Any]
 @_with_db
 def cmd_queue(args, conn):
     """What the daily run should work on, best first."""
-    found = queue(conn, load_config(), args.limit)
+    cfg = load_config()
+    found = queue(conn, cfg, args.limit)
     keep = ("id", "company", "title", "location", "location_kind", "score", "rank", "promoted", "age_days", "reposts", "redates",
             "is_new", "ghost_risk", "ghost_reason", "unconfirmed", "scam_signs", "track", "flags", "fit", "priority", "status", "comp", "url",
-            "deadline", "days_to_deadline", "decide_soon", "pay_low", "pay_high", "pay_too_low", "pay_signs", "rare", "rare_reason", "impossible_asks")
+            "deadline", "days_to_deadline", "decide_soon", "pay_low", "pay_high", "pay_too_low", "pay_signs", "rare", "rare_reason", "impossible_asks",
+            "turned_down", "turned_down_reason")
     trim = lambda job: {k: job[k] for k in keep}
     last = found["last"]
     data = {
@@ -215,6 +217,8 @@ def cmd_queue(args, conn):
         "stopped_retrying": found["stuck"],
         "to_triage": [trim(j) for j in found["to_triage"]],
         "to_tailor": [trim(j) for j in found["to_tailor"]],
+        # What came back from earlier applications, with the gaps each one's notes named, for weighing what's in to_triage.
+        "what_came_back": outcomes.history(conn, store.ROOT, date.today(), outcomes.settings(cfg)[1]),
     }
     if _as_json(args):
         _print_json(data)
