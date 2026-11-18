@@ -11,19 +11,24 @@ and how rare a role like it is where you live. All plain code, worked out afresh
   Remote roles are never rare by this measure: they compete with the whole country, not your area. It waits until
   Pyrite has been watching long enough to know, and it only knows the boards you watch and the postings your filters
   kept, so it's a nudge to priority, not a verdict.
+- Outside your area: a job kept only because its industry is one you'd move for ranks below local and remote ones of
+  the same kind, by `elsewhere_penalty` under [freshness], until triage calls it a strong fit. Moving is a lot to ask,
+  so only a near-perfect role is worth seeing beside the ones near home.
+- Turned down here before (outcomes.py): an employer that turned you down before an interview lately already said no
+  to the resume once.
 
-Pay and rarity add to a job's priority, beside its age and your [promote] cities and industries. None of it changes
-the filter score, which still decides what's kept and tailored.
+Pay, rarity, place and past rejections add to a job's priority, beside its age and your [promote] cities and
+industries. None of it changes the filter score, which still decides what's kept and tailored.
 """
 import copy
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from . import deadline, pay, score, skillage
+from . import deadline, outcomes, pay, score, skillage
 from .sources import find_comp
 
 # The dashboard reads every job's pay twice on each refresh, from text that rarely changes. Cached here rather than on
@@ -34,6 +39,7 @@ RARE_DAYS = 90
 RARE_WATCHED_DAYS = 30
 DEFAULT_RARE_MAX = 2
 DEFAULT_RARE_POINTS = 5
+DEFAULT_ELSEWHERE_PENALTY = 30
 
 
 @dataclass
@@ -46,6 +52,8 @@ class Context:
     decide_days: int
     # Whether `peers` was read from every tracked job, so a job judged against it is among them and is left out.
     counted: bool = False
+    # The days each employer turned you down before an interview lately, by outcomes.company_key.
+    turned_down: dict[str, list[date]] = field(default_factory=dict)
 
 
 def decide_days(cfg: dict[str, Any]) -> int:
@@ -63,11 +71,14 @@ def context(conn, cfg: dict[str, Any], today: date) -> Context:
     local = Counter(row["track"] for row in rows if row["location_kind"] == "local" and row["track"] and _recent(row["first_seen"], today))
     first = conn.execute("SELECT MIN(started_at) FROM runs").fetchone()[0]
     watched = (today - date.fromisoformat(first[:10])).days if first else None
-    return Context(today, pay.peers(rows, pay.settings(cfg)["currency"]), local, watched, decide_days(cfg), counted=True)
+    turned_down = outcomes.turned_down(conn, today, outcomes.settings(cfg)[1])
+    return Context(today, pay.peers(rows, pay.settings(cfg)["currency"]), local, watched, decide_days(cfg), counted=True,
+                   turned_down=turned_down)
 
 
 def alone(cfg: dict[str, Any], today: date) -> Context:
-    """A context that knows nothing of the other jobs, so pay isn't judged against anything and nothing is rare."""
+    """A context that knows nothing of the other jobs, so pay isn't judged against anything, nothing is rare and no
+    employer has turned you down."""
     return Context(today, {}, Counter(), None, decide_days(cfg))
 
 
@@ -95,6 +106,17 @@ def rarity(job: dict[str, Any], cfg: dict[str, Any], ctx: Context) -> dict[str, 
     return {"rare": True, "rare_reason": reason, "rare_points": points}
 
 
+def elsewhere(job: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """What being outside your area costs a job kept for its industry. Nothing once triage has called it a strong fit,
+    and nothing for one you added yourself, since you chose it."""
+    if job.get("location_kind") != score.ELSEWHERE or job.get("source_key") == "manual":
+        return {"elsewhere_points": 0, "elsewhere_reason": ""}
+    if job.get("fit") == "strong":
+        return {"elsewhere_points": 0, "elsewhere_reason": "Outside your area, but a strong fit +0"}
+    penalty = int((cfg.get("freshness") or {}).get("elsewhere_penalty", DEFAULT_ELSEWHERE_PENALTY))
+    return {"elsewhere_points": -penalty, "elsewhere_reason": f"Outside your area -{penalty}" if penalty else ""}
+
+
 def read(job: dict[str, Any], cfg: dict[str, Any], ctx: Context, folder: Path | None) -> dict[str, Any]:
     """Everything this module knows about one job, and the priority points and reasons it adds."""
     description = job.get("description") or ""
@@ -108,10 +130,17 @@ def read(job: dict[str, Any], cfg: dict[str, Any], ctx: Context, folder: Path | 
     comp = comp_for(job)
     money = pay.judge(comp, job.get("track") or "", pay.level(job.get("title") or "", cfg), cfg, ctx.peers, ctx.counted)
     rare = rarity(job, cfg, ctx)
+    far = elsewhere(job, cfg)
+    refused = outcomes.employer(job, cfg, ctx.turned_down, ctx.today)
     reasons = list(money["pay_reasons"])
     if rare["rare"]:
         reasons.append(f"Rare near you, {rare['rare_reason']} {rare['rare_points']:+d}")
-    return {**found, **skills, **money, **rare, "comp": comp, "signal_points": money["pay_points"] + rare["rare_points"],
+    if far["elsewhere_reason"]:
+        reasons.append(far["elsewhere_reason"])
+    if refused["turned_down"]:
+        reasons.append(f"Turned down here before, {refused['turned_down_reason']} {refused['turned_down_points']:+d}")
+    points = money["pay_points"] + rare["rare_points"] + far["elsewhere_points"] + refused["turned_down_points"]
+    return {**found, **skills, **money, **rare, **far, **refused, "comp": comp, "signal_points": points,
             "signal_reasons": reasons}
 
 
@@ -124,7 +153,8 @@ def apply(job: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
 
 
 def markings(job: dict[str, Any]) -> list[str]:
-    """Lines for a triage run about the deadline, pay and rarity, in Pyrite's words. The skills' ages have their own section."""
+    """Lines for a triage run about the deadline, pay, rarity, place and past rejections, in Pyrite's words. The skills'
+    ages have their own section."""
     lines = []
     if job.get("deadline"):
         when = deadline.label(job["deadline"])
@@ -137,4 +167,8 @@ def markings(job: dict[str, Any]) -> list[str]:
         lines.append(f"- Pay: {sign['label']}. {sign['detail']}")
     if job.get("rare"):
         lines.append(f"- Rare near the candidate: {job['rare_reason']}")
+    if job.get("location_kind") == score.ELSEWHERE and job.get("source_key") != "manual":
+        lines.append("- Outside the candidate's area: kept only because its industry is one the candidate would move for")
+    if job.get("turned_down"):
+        lines.append(f"- This employer turned the candidate down {job['turned_down_reason']}")
     return lines

@@ -28,6 +28,12 @@ Pyrite's own markings for the listing, under "Pyrite's markings" just before the
 
 The markings can also give the deadline, what the pay says against what postings for the same kind of role pay, and whether a role like it is rare near them. A deadline only a few days off is no reason to lower the verdict. Pay that's well above similar roles often means the job is a level above its title: weigh that. Under "How old the skills it asks for are", Pyrite gives how long each young skill it asks years of has existed. An ask for more years than a skill has existed isn't a gap: nobody meets it, so judge the candidate's experience against the skill's whole life instead.
 
+A listing marked as outside the candidate's area was kept only because its industry is one they'd move for. Moving is a lot to ask, so the role has to be close to perfect for them: give it strong only if it is, and skip it otherwise, unless `run-notes.md` says they'd move for less.
+
+## What came back before
+
+"What came back from earlier applications", when the message has it, lists the candidate's recent applications that were turned down before any interview, and those that led to a reply or an interview, each with the gaps its notes named. A rejection before an interview most likely came from a screen on a stated requirement, so the gaps its notes named are the likeliest reasons. If this posting's stated minimum repeats one of them, expect the same screen: lower the verdict and name the gap in your reason. An interview despite a gap shows that gap didn't stop a screen. One rejection is a hint, not proof, since a role can go to someone else for many reasons. A marking that this employer turned the candidate down before an interview means they have already said no to this resume once: weigh it, and say so if it decides the verdict.
+
 ## Answer
 
 Reply with one line of JSON and nothing else:

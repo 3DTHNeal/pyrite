@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from . import checks, claude_code, confirm, culture, discover, signals, skillage
+from . import checks, claude_code, confirm, culture, discover, outcomes, signals, skillage
 from .claude_code import ClaudeFailed, find_claude
 from .cli import BOARD_FIELDS, apply_triage, ensure_folder, finish_job, queue
 from .store import ROOT, get_job, log_event, now, shorten
@@ -93,11 +93,12 @@ def markings(marks: dict[str, Any] | None) -> str:
             f"- Possible ghost: {ghost}\n- Scam signs: {scam}\n{more}" + skillage.prompt_section(marks))
 
 
-def triage_prompt(job, marks: dict[str, Any] | None = None) -> str:
+def triage_prompt(job, marks: dict[str, Any] | None = None, history: str = "") -> str:
+    """`history` is what came back from earlier applications, as outcomes.prompt_section words it."""
     board = {key: job[key] for key in BOARD_FIELDS}
     # Triage runs with no tools, so a posting can't steer it into reading anything: the two files it judges by come with it.
     return (TRIAGE_INSTRUCTIONS.read_text(encoding="utf-8") + claude_code.profile_section(ROOT, claude_code.PROFILE_FILES[:2])
-            + markings(marks) + claude_code.job_line(job) + "\n"
+            + history + markings(marks) + claude_code.job_line(job) + "\n"
             + claude_code.posting_block(board, job["description"]) + "\n")
 
 
@@ -134,15 +135,16 @@ def _ask(conn, job_id: int, kind: str, cmd: list[str], text: str, deadline: floa
         raise
 
 
-def judge(conn, job_id: int, claude: str, deadline: float, marks: dict[str, Any] | None = None, cfg: dict[str, Any] | None = None) -> str | None:
+def judge(conn, job_id: int, claude: str, deadline: float, marks: dict[str, Any] | None = None, cfg: dict[str, Any] | None = None,
+          history: str = "") -> str | None:
     """Have Claude judge one posting, and record the verdict here. Returns the fit, or None if it couldn't be judged.
 
     `marks` is the posting as the queue ranked it, whose ghost and scam markings go to Claude with it. `cfg` is
-    search.toml, for the model and effort it names."""
+    search.toml, for the model and effort it names. `history` is what came back from earlier applications."""
     job = get_job(conn, job_id)
     if job["status"] != "new" or not job["description"].strip():
         return None  # Moved on meanwhile, or nothing to read. An empty posting is left for you.
-    reply = _ask(conn, job_id, "triage", claude_code.command(claude, [], cfg), triage_prompt(job, marks), deadline)
+    reply = _ask(conn, job_id, "triage", claude_code.command(claude, [], cfg), triage_prompt(job, marks, history), deadline)
     verdict = parse_verdict(reply)
     if not verdict or get_job(conn, job_id)["status"] != "new":
         return None
@@ -332,13 +334,15 @@ def run(conn, cfg: dict[str, Any], report=lambda text: None, claude: str | None 
     waiting = queue(conn, cfg)["to_triage"]
     if skillage.enabled(cfg):
         waiting = _research_skills(conn, cfg, waiting, claude, report) or waiting
+    # Read once for the whole run: the answers don't change while it judges.
+    history = outcomes.prompt_section(outcomes.history(conn, ROOT, date.today(), outcomes.settings(cfg)[1]))
     for index, job in enumerate(waiting, start=1):
         if time.monotonic() > deadline:
             unjudged += 1
             continue
         report(f"Judging posting {index} of {len(waiting)}: {job['company']}")
         try:
-            fit = judge(conn, job["id"], claude, deadline, job, cfg)
+            fit = judge(conn, job["id"], claude, deadline, job, cfg, history)
         except NotSignedIn:
             raise
         except ClaudeFailed:

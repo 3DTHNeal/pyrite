@@ -42,6 +42,7 @@ from . import (
     mail,
     market,
     options,
+    outcomes,
     outlook,
     prep,
     profile,
@@ -273,11 +274,6 @@ def _scam_alerts(alerts: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
     return by_job
 
 
-def _company_key(name: str) -> str:
-    name = re.sub(r"\b(inc|incorporated|corp|corporation|llc|ltd|co|company)\b\.?", " ", (name or "").lower())
-    return " ".join(re.findall(r"[a-z0-9]+", name))
-
-
 def _title_key(title: str) -> str:
     words = re.findall(r"[a-z0-9]+", (title or "").lower())
     return " ".join("senior" if w == "sr" else w for w in words)
@@ -287,13 +283,13 @@ def _applied_by_company(conn) -> dict[str, list[dict[str, Any]]]:
     """Every application sent so far, grouped by employer, oldest first."""
     history: dict[str, list[dict[str, Any]]] = {}
     for row in conn.execute("SELECT id, company, title, applied_at FROM jobs WHERE applied_at IS NOT NULL ORDER BY applied_at"):
-        history.setdefault(_company_key(row["company"]), []).append(dict(row))
+        history.setdefault(outcomes.company_key(row["company"]), []).append(dict(row))
     return history
 
 
 def _attach_history(job: dict[str, Any], history: dict[str, Any], limit: int) -> None:
     """How many times you've applied to this employer, and whether one of them was this same job under another listing."""
-    sent = [a for a in history.get(_company_key(job["company"]), []) if a["id"] != job["id"]]
+    sent = [a for a in history.get(outcomes.company_key(job["company"]), []) if a["id"] != job["id"]]
     job["applied_here"] = len(sent)
     job["company_limit"] = limit
     same = None

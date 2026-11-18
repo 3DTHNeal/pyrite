@@ -80,7 +80,7 @@ metro = "Madison, WI"
 # country = "United States"
 # model = "claude-sonnet-5-5"  # which model researches the industry outlooks
 
-# Priority = filter score + age points + promotion points + pay and rarity points - repost penalty. It only decides
+# Priority = filter score + age points + promotion points + pay and rarity points - repost, place and rejection penalties. It only decides
 # the order you and the daily run see things in. The filter score still decides what's kept and tailored.
 [freshness]
 new_days = 7                 # posted this recently and never reposted counts as New
@@ -99,6 +99,13 @@ ghost_age_if_reposted = 45   # a shorter limit once it has been reposted or re-d
 # another soon. Remote roles never are. It waits until Pyrite has been watching for 30 days.
 rare_points = 5
 rare_max = 2
+# A job outside your area, kept only for an industry marked `anywhere`, loses this much until triage calls it a strong
+# fit, so it shows beside local and remote roles only when it's close to perfect. A preferred city still adds its points.
+elsewhere_penalty = 30
+# An employer that turned you down before an interview, in the last turned_down_days, costs its other openings this
+# much for each such rejection, counting two at most. Triage also hears what gaps those applications' notes named.
+turned_down_penalty = 10
+turned_down_days = 180
 
 # Cities and industries to see first. These add to Priority only, so they take effect the
 # next time the dashboard refreshes, with no rescore. They can't rescue a posting the filters
