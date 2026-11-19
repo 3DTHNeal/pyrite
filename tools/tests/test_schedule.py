@@ -8,7 +8,7 @@ import unittest.mock as mock
 from datetime import UTC, datetime
 from pathlib import Path
 
-import support  # noqa: F401  Points PYRITE_HOME at a copy of the example before Pyrite loads.
+import support  # Points PYRITE_HOME at a copy of the example before Pyrite loads.
 
 from pyrite import schedule, server, store
 
@@ -133,6 +133,85 @@ class Schedule(unittest.TestCase):
     def test_the_dashboard_answers_for_it(self):
         self.assertIs(server.PROFILE_WRITES["/api/settings/schedule"], server._change_schedule)
         self.assertEqual(server._change_schedule({"run": "pan", "action": "remove"})["runs"][0]["id"], "pan")
+
+    def test_a_change_forgets_what_the_profile_tab_last_heard(self):
+        schedule._own.update(at=0.0, tasks={"pan": None, "run": None})
+        self.addCleanup(schedule._own.clear)
+        schedule.change({"run": "pan", "action": "set", "time": "05:15"})
+        self.assertEqual(schedule._own, {})
+
+
+# One of Pyrite's tasks as `schtasks /Query /XML` prints it. A trigger has an Enabled of its own, above the task's.
+TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>{at}</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <Enabled>{enabled}</Enabled>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>pythonw.exe</Command></Exec></Actions>
+</Task>
+"""
+
+
+class OwnTasks(unittest.TestCase):
+    """What the Profile tab's Schedule and mail card asks each time it's drawn: Pyrite's own two tasks, by name. The
+    suite stands in for the answer everywhere else, so these call the function it kept."""
+
+    def setUp(self):
+        self.found: dict[str, bytes] = {}
+        self.asked: list[str] = []
+        schedule._own.clear()
+        self.addCleanup(schedule._own.clear)
+        for patcher in (mock.patch.object(schedule, "WINDOWS", True),
+                        mock.patch.object(schedule.subprocess, "run", side_effect=self.schtasks)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def schtasks(self, cmd, **kw):
+        """A stand-in for schtasks.exe: the XML of a task it has, or its refusal for one it hasn't."""
+        self.assertEqual((cmd[:3], cmd[4:]), (["schtasks.exe", "/Query", "/TN"], ["/XML"]))
+        self.assertIn("timeout", kw)
+        self.asked.append(cmd[3])
+        out = self.found.get(cmd[3])
+        return subprocess.CompletedProcess(cmd, 1 if out is None else 0, stdout=out or b"",
+                                           stderr=b"ERROR: The system cannot find the file specified.")
+
+    def test_each_run_is_asked_for_by_name_in_the_top_folder(self):
+        self.found["\\Pyrite pan"] = TASK_XML.format(at="2026-11-05T05:15:00", enabled="true").encode()
+        self.assertEqual(support.OWN_TASKS(), {"pan": {"time": "05:15", "disabled": False}, "run": None})
+        self.assertEqual(self.asked, ["\\Pyrite pan", "\\Pyrite daily run"])
+
+    def test_a_task_turned_off_says_so_whatever_its_trigger_says(self):
+        # Also as UTF-16, which is what the XML's first line says it is.
+        self.found["\\Pyrite daily run"] = TASK_XML.format(at="2026-11-05T07:00:00", enabled="false").encode("utf-16")
+        self.assertEqual(support.OWN_TASKS()["run"], {"time": "07:00", "disabled": True})
+
+    def test_an_answer_is_kept_for_a_minute(self):
+        self.assertEqual(support.OWN_TASKS(), {"pan": None, "run": None})
+        self.found["\\Pyrite pan"] = TASK_XML.format(at="2026-11-05T05:15:00", enabled="true").encode()
+        self.assertEqual(support.OWN_TASKS(), {"pan": None, "run": None})
+        self.assertEqual(len(self.asked), 2)
+        schedule._own["at"] -= schedule.OWN_TASKS_SECONDS + 1
+        self.assertIsNotNone(support.OWN_TASKS()["pan"])
+        self.assertEqual(len(self.asked), 4)
+
+    def test_with_nothing_to_ask_it_says_it_cant_tell(self):
+        with mock.patch.object(schedule.subprocess, "run", side_effect=FileNotFoundError("schtasks.exe")):
+            self.assertIsNone(support.OWN_TASKS())
+        schedule._own.clear()
+        with mock.patch.object(schedule.subprocess, "run", side_effect=subprocess.TimeoutExpired("schtasks.exe", 15)):
+            self.assertIsNone(support.OWN_TASKS())
+        schedule._own.clear()
+        with mock.patch.object(schedule, "WINDOWS", False):
+            self.assertIsNone(support.OWN_TASKS())
+        self.assertEqual(self.asked, [])
 
 
 class ElsewhereThanWindows(unittest.TestCase):

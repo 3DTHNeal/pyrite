@@ -87,7 +87,7 @@ os.environ["PYRITE_HOME"] = str(WORKSPACE)  # Before anything loads: this decide
 
 sys.path.insert(0, str(CODE_ROOT / "tools"))
 
-from pyrite import checks, claude_code, cli, daily, doctor, prep, refresh, server, sources, store, tasks  # noqa: E402
+from pyrite import checks, claude_code, cli, daily, doctor, prep, refresh, schedule, server, sources, store, tasks  # noqa: E402
 
 # This suite's workspace is an unedited copy of the example, which a real workspace mustn't be: the dashboard would put
 # "Finish setup" items at the top of every to-do list, and the Claude runs would refuse to start. Here the copy stands in
@@ -99,6 +99,10 @@ tasks._facts_still_example = lambda: False
 # Whether this computer has Word or LibreOffice isn't the suite's business either, so a missing one needs no one here.
 PROGRAM_TODOS = doctor.program_todos
 doctor.program_todos = lambda: []
+# Nor is what this computer's Task Scheduler holds, which the Profile tab's Schedule and mail card asks about each time
+# it's drawn. Here both runs are set up, as in a finished workspace, and no test reaches Task Scheduler.
+OWN_TASKS = schedule.own_tasks
+schedule.own_tasks = lambda: {"pan": {"time": "05:15", "disabled": False}, "run": {"time": "07:00", "disabled": False}}
 
 CFG = store.load_config()
 MODEL = store.ROOT / "applications" / "2026-11-acme-principal-robotics-software-engineer"

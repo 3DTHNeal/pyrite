@@ -38,6 +38,8 @@ effort = "high"  # low, medium, high, xhigh or max
 
 Two scores under `[run]` in `search.toml` bound what Claude sees. A posting the pan scores under `min_score` isn't stored at all, so it never reaches Prospects. A judged posting is tailored only if it scores `tailor_min_score` or more, unless you picked it. Neither is on the Settings tab, since both change what's kept.
 
+Both limits count on points for skills. A title that matches a role type is worth 25, a senior word 5 or 10, a place 10 if it's remote or 15 if it's local, and the skills under `keywords` in `[scoring]` up to 40. A blank workspace has no skill points yet, so its two limits start at 25: raise them once you've added yours under **Advanced** in Roles you want. `pyrite doctor` and **Needs you** on the Profile tab say when a limit is out of reach of every posting with your settings as they are, and when a plain match falls under `min_score` because nothing else adds points.
+
 **Judging.** The run reads up to `triage_per_day` new postings and gives each a fit verdict, with one sentence of why, which shows as **Fit** on the job's panel and on its card:
 
 | Verdict | Means | What happens |

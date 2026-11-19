@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import backup, doctor, factsdoc, gaps, score, settings, store, workspace
+from . import backup, doctor, factsdoc, gaps, schedule, score, settings, store, workspace
 
 # What may be written, by key. The paths are fixed here and never come from a request.
 FILES = {
@@ -258,9 +258,21 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
     # A new workspace's resume.md is there from the start, but only as the blank form, which isn't a master yet.
     blank = has_master and heading in doctor.still_blank(store.ROOT)
     has_master = has_master and not blank
-    master = ("Resume and letter written" if texts["letter"].strip() else "Resume written, no letter yet") \
-        if heading == FILES["resume"] else f"Headings checked against {heading}"
-    master = master if has_master else "Still the blank form" if blank else "No master resume yet"
+    # Its headings come from Work history, so a resume can have its whole form and not a word under it yet. Every draft
+    # starts from the master, and from the letter too unless letters are turned off, so neither counts until it's written.
+    empty = has_master and doctor.unwritten((store.ROOT / heading).read_text(encoding="utf-8"))
+    no_letter = doctor.letters_wanted(cfg) and doctor.unwritten(texts["letter"])
+    if not has_master:
+        master = "Still the blank form" if blank else "No master resume yet"
+    elif empty:
+        master = "Headings only, nothing under them yet"
+    elif heading != FILES["resume"]:
+        master = f"Headings checked against {heading}"
+    elif no_letter:
+        master = "Resume written, no letter yet"
+    else:
+        master = "Resume and letter written" if doctor.letters_wanted(cfg) else "Resume written"
+    has_master = has_master and not empty and not (no_letter and heading == FILES["resume"])
     tracks = [str(track.get("name", "")) for track in cfg.get("track", []) if isinstance(track, dict)]
     location = cfg.get("location", {})
     # Places are plain names. Patterns are written by hand, and one may be a whole state, so they're counted apart.
@@ -275,7 +287,6 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
     watched, by_hand = _watched(cfg), len(cfg.get("manual_check", []))
     promote = cfg.get("promote", {})
     cities, industries = len(promote.get("cities", [])), len(promote.get("industry", []))
-    run, mail = cfg.get("run", {}), cfg.get("inbox", {}).get("source", "imap")
     return {
         "basics": (bool(name and contact), ", ".join(part for part in (name or "No name yet", place) if part)),
         "history": (bool(employers), f"{_plural(roles, 'role')} at {_plural(len(employers), 'employer')}" if employers
@@ -291,10 +302,33 @@ def _summaries(texts: dict[str, str], cfg: dict[str, Any], employers, sections: 
         "companies": (bool(watched or by_hand), f"{watched} watched, {by_hand} by hand"),
         "priorities": (bool(cities or industries), f"{_plural(cities, 'city', 'cities')}, {_plural(industries, 'industry', 'industries')}"),
         "tools": _tools_summary(),
-        "schedule": (True, f"Up to {_plural(int(run.get('tailor_per_day', 0) or 0), 'draft')} a day, replies from "
-                           f"{'Gmail' if mail == 'gmail' else 'mail (IMAP)'}"),
+        "schedule": _schedule_summary(cfg),
         "workspace": _workspace_summary(),
     }
+
+
+def _schedule_summary(cfg: dict[str, Any]) -> tuple[bool, str]:
+    """Whether the pan and the daily run start by themselves, as far as this computer can say, and where replies are
+    read from. It's set once both runs are scheduled: reply detection is optional, so it's named and never counted."""
+    if store.IS_EXAMPLE:
+        return True, "The demo starts no runs by itself"
+    mail = doctor.mail_check(cfg)
+    source = "Gmail" if cfg.get("inbox", {}).get("source", "imap") == "gmail" else "mail (IMAP)"
+    replies = "reply detection not set up" if mail["ok"] is None else \
+        f"replies from {source}" if mail["ok"] else "reply detection's last check failed"
+    tasks = schedule.own_tasks()
+    if tasks is None:
+        # No Task Scheduler to ask, or it didn't answer. Other systems start the runs themselves, where Pyrite can't look.
+        where = "Scheduling is done outside Pyrite here" if not schedule.WINDOWS else "Settings › Daily run has the schedule"
+        return False, f"{where}, {replies}"
+    named = {"pan": "pan", "run": "daily run"}
+    going = [f"{named[run]} {task['time'] or 'scheduled'}{' (turned off)' if task['disabled'] else ''}"
+             for run, task in tasks.items() if task]
+    missing = [named[run] for run, task in tasks.items() if not task]
+    if not going:
+        return False, f"Nothing starts by itself yet, {replies}"
+    runs = ", ".join(going) + (f", no {missing[0]} yet" if missing else "")
+    return not missing and not any(task["disabled"] for task in tasks.values() if task), f"{runs[0].upper()}{runs[1:]}, {replies}"
 
 
 def _tools_summary() -> tuple[bool, str]:

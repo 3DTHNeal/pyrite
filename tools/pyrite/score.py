@@ -16,6 +16,12 @@ from . import quality
 # every load. A change to search.toml needs nothing here either: `settings_key` notices it.
 VERSION = 4
 
+# What each part of a filter score is worth. `reach` works out from these what a posting can score at all.
+TITLE_POINTS = 25
+LEVEL_POINTS = {"top": 10, "mid": 5}
+PLACE_POINTS = {"local": 15, "remote": 10, "unknown": 3}
+KEYWORD_CAP = 40
+
 FOREIGN = re.compile(
     r"\b(canada|canadian|toronto|vancouver,?\s*(bc|british)|montreal|ontario|(?<!new\s)mexico|brazil|argentina|colombia|"
     r"uk|u\.k\.|united kingdom|england|london|ireland|dublin|germany|munich|berlin|france|paris|spain|madrid|"
@@ -404,7 +410,7 @@ def match_track(title: str, cfg: dict[str, Any], job: dict[str, Any] | None = No
         return None
     seniority = level(title, cfg)
     top, mid = seniority == "top", seniority == "mid"
-    level_points = 10 if top else 5 if mid else 0
+    level_points = LEVEL_POINTS.get(seniority, 0)
     for track in cfg.get("track", []):  # A blank search.toml has none yet.
         if _any(title_patterns(track), title):
             if track.get("needs_level") and not (top or mid):
@@ -490,15 +496,15 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
     matched = match_track(title, cfg, {"company": company, "description": description})
     if not matched and not added:
         return Verdict(False, "title")
-    track, level_points = matched or ("", {"top": 10, "mid": 5}.get(level(title, cfg), 0))
+    track, level_points = matched or ("", LEVEL_POINTS.get(level(title, cfg), 0))
 
     kind = classify_location(location, workplace, cfg)
     anywhere = kept_anywhere(company, title, location, cfg) if kind == "out" else []
     if kind == "out" and not anywhere and not added:
         return Verdict(False, "location", track=track)
 
-    reasons = [f"{track} title +25"] if track else ["no track for this title +0"]
-    score = 25 if track else 0
+    reasons = [f"{track} title +{TITLE_POINTS}"] if track else ["no track for this title +0"]
+    score = TITLE_POINTS if track else 0
     if level_points:
         score += level_points
         reasons.append(f"seniority +{level_points}")
@@ -509,7 +515,7 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
         kind = ELSEWHERE
         reasons.append(f"outside your area, kept for {', '.join(anywhere)} +0" if anywhere else "outside your area +0")
     else:
-        location_points = {"local": 15, "remote": 10, "unknown": 3}[kind]
+        location_points = PLACE_POINTS[kind]
         score += location_points
         reasons.append(f"{kind} +{location_points}")
 
@@ -521,7 +527,7 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
         if found:
             keyword_points += weight
             hits.append(_matched_words(found))
-    keyword_points = min(keyword_points, 40)
+    keyword_points = min(keyword_points, KEYWORD_CAP)
     score += keyword_points
     if hits:
         reasons.append(f"skills +{keyword_points}: " + ", ".join(hits[:8]))
@@ -537,6 +543,26 @@ def evaluate(title: str, location: str, workplace: str, description: str, cfg: d
     if score < cfg["run"]["min_score"] and not added:
         return Verdict(False, "score", score=score, track=track, location_kind=kind)
     return Verdict(True, "", score, track, kind, reasons, flags)
+
+
+def reach(cfg: dict[str, Any]) -> tuple[int, int]:
+    """The least and the most a posting with a title and place you asked for can score, before any flag takes points
+    off, as (a plain match, the best match).
+
+    A plain match has no skill in it, no senior word unless every role type needs one, and the place worth fewest
+    points among those you take. The best has a top-level title, your best place and every skill. `doctor` holds
+    these against min_score and tailor_min_score, since a limit nothing can reach stops a search without saying so.
+    """
+    scoring, location = cfg.get("scoring") or {}, cfg.get("location") or {}
+    places = [PLACE_POINTS["local"]] if any(location.get(key) for key in ("places", "local", "local_exact")) else []
+    places += [PLACE_POINTS["remote"]] if location.get("accept_remote", True) else []
+    places = places or [PLACE_POINTS["unknown"]]
+    levels = [LEVEL_POINTS[kind] for kind in ("top", "mid") if scoring.get(f"level_{kind}")]
+    tracks = [track for track in cfg.get("track") or [] if isinstance(track, dict)]
+    needs_level = bool(tracks) and all(track.get("needs_level") for track in tracks)
+    skills = sum(weight for _pattern, weight in scoring.get("keywords") or [] if weight > 0)
+    return (TITLE_POINTS + min(places) + (min(levels) if needs_level and levels else 0),
+            TITLE_POINTS + max(places) + max(levels, default=0) + min(KEYWORD_CAP, skills))
 
 
 def settings_key(cfg: dict[str, Any]) -> str:

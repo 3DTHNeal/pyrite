@@ -8,7 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from . import store, tomledit
+from . import score, store, tomledit
 
 # The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
 # of its own unless told not to.
@@ -40,7 +40,7 @@ SETTING_UP = "data/setting-up.json"
 BLANK = Path(__file__).parent / "blank"
 BLANK_NAME = "Your Name"
 # Settings in the example's search.toml that describe the fictional candidate, emptied in a blank one. The rest are
-# how Pyrite works, such as the run's limits and the titles every search leaves out, and are kept as they are.
+# how Pyrite works, such as how much a run does each morning, and are kept as they are.
 # `places` isn't in the example, so it's added: plain place names are what someone starting out wants to write.
 BLANK_EMPTIED = (
     ("location", "local"), ("location", "local_exact"), ("location", "places"), ("promote", "cities"), ("scoring", "keywords"),
@@ -48,6 +48,16 @@ BLANK_EMPTIED = (
     ("workday", "queries"), ("dashboard", "allowed_hosts"),
 )
 BLANK_DROPPED = (("market", "state"), ("market", "metro"))
+# Settings a blank search.toml starts with a value of its own for. The example leaves out the titles one engineering
+# search doesn't want, among them designers, analysts, nurses and recruiters, which would drop someone else's own
+# profession. A blank one starts with the few that hold for nearly any search, and Roles you want adds the rest.
+BLANK_SET = (
+    ("scoring", "exclude_titles", ["interns?", "internship", "co-?op", r"apprentice\w*"]),
+)
+# The least a blank search.toml keeps a posting at, and writes a draft at. The example's limits count on points for
+# skills, which a blank one has none of yet: a title and place that match score no more than 50 between them, so its 55
+# for a draft could never be reached, and its 40 dropped a remote posting with exactly the title asked for.
+BLANK_MIN_SCORE = score.TITLE_POINTS
 # Tables whose every key is the example's: whose mail comes from where, and the companies it watches.
 BLANK_CLEARED = ("inbox.domains", "watch.greenhouse", "watch.lever", "watch.ashby", "watch.workday")
 # Lists of tables, each replaced by a comment showing the form of one.
@@ -56,9 +66,21 @@ BLANK_TABLES = {
     "track": "# [[track]]\n# name = \"Data engineering\"\n# titles = [\"data engineer\", \"analytics engineer\"]\n"
              "# needs_level = true\n",
 }
-# Comment lines in the example that would describe the fictional candidate, and what a blank search.toml says instead.
-# None leaves the line out. Each is checked to be in the example, as INIT_EXAMPLE_HEADER is.
+# Lines in the example that would describe the fictional candidate, and what a blank search.toml says instead: mostly
+# comments, and the settings whose own comment has to change with them. None leaves the line out. Each is checked to
+# be in the example, as INIT_EXAMPLE_HEADER is.
 BLANK_COMMENTS = (
+    ("min_score = 40       # below this a posting isn't stored at all",
+     f"min_score = {BLANK_MIN_SCORE}       # below this a posting isn't stored at all"),
+    ("tailor_min_score = 55",
+     f"tailor_min_score = {BLANK_MIN_SCORE}  # below this the daily run writes no draft, unless you pick the job yourself\n"
+     f"# With no points for skills yet, a posting scores {score.TITLE_POINTS} for a title that matches a role type, up to "
+     f"{max(score.LEVEL_POINTS.values())} more for a\n"
+     f"# senior word and up to {max(score.PLACE_POINTS.values())} for its place. Both limits start at {BLANK_MIN_SCORE}, "
+     "so every match is kept and can be drafted.\n"
+     f"# Once keywords under [scoring] has points for your skills, which add up to {score.KEYWORD_CAP}, raise them."),
+    ("current_pay = 150000    # a year's base pay now, before tax",
+     "# current_pay = 150000  # a year's base pay now, before tax. Moving for it asks for yours until it's set"),
     ("# What Pyrite looks for. This is the fictional candidate's search: yours lives in",
      "# What Pyrite looks for. The settings that describe you start empty: fill them in, and `pyrite doctor`"),
     ("# your own workspace. Run `pyrite discover --fresh` after changing filters so previously",
@@ -118,15 +140,18 @@ def _setting(cfg: dict[str, Any], table: str) -> dict[str, Any]:
 
 
 def blank_config(text: str, name: str) -> str:
-    """The example's search.toml with every setting that describes the fictional candidate emptied, and the name set.
-    Each change goes through tomledit, which proves it changed nothing else and keeps every comment explaining a
-    setting, so a blank search.toml stays in step with the example's as that changes."""
+    """The example's search.toml with every setting that describes the fictional candidate emptied or started afresh,
+    and the name set. Most changes go through tomledit, which proves each changed nothing else and keeps every comment
+    explaining a setting, so a blank search.toml stays in step with the example's as that changes. The few settings
+    whose comment changes too are whole lines in BLANK_COMMENTS, each checked to be in the example."""
     for table, block in BLANK_TABLES.items():
         text = tomledit.replace_table(text, table, block)
     for table, key in BLANK_EMPTIED:
         text = tomledit.set_value(text, table, key, [])
     for table, key in BLANK_DROPPED:
         text = tomledit.delete_value(text, table, key)
+    for table, key, value in BLANK_SET:
+        text = tomledit.set_value(text, table, key, value, literal=True)
     for table in BLANK_CLEARED:
         for key in list(_setting(tomllib.loads(text), table)):
             text = tomledit.delete_value(text, table, key)

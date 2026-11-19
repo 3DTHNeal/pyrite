@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -217,4 +218,47 @@ def change(body: dict[str, Any]) -> dict[str, Any]:
         _powershell(UNREGISTER, env)
     else:
         raise ValueError("Say whether to set the run up or remove it.")
+    _own.clear()  # What own_tasks last heard is out of date now.
     return view()
+
+
+# How long own_tasks keeps an answer. The Profile tab asks each time it opens, and while a new workspace is being set
+# up the rail asks with every refresh.
+OWN_TASKS_SECONDS = 60
+_own: dict[str, Any] = {}
+# A task's own switch, which is under Settings in its XML. Each trigger has an Enabled of its own, further up.
+_SWITCH = re.compile(r"<Settings>.*?<Enabled>\s*(true|false)\s*</Enabled>", re.S | re.I)
+_START = re.compile(r"<StartBoundary>\s*([^<\s]+)\s*</StartBoundary>", re.I)
+
+
+def _own_task(name: str) -> dict[str, Any] | None:
+    """One task in Task Scheduler's top folder, by name: its time of day and whether it's turned off, or None when
+    there's none by that name. Raises OSError or TimeoutExpired when schtasks can't be asked."""
+    done = subprocess.run(["schtasks.exe", "/Query", "/TN", f"\\{name}", "/XML"], capture_output=True, timeout=15,
+                          creationflags=NO_WINDOW, stdin=subprocess.DEVNULL)
+    if done.returncode:
+        return None
+    # The XML's first line says UTF-16, but schtasks writes it a byte to a character, in the console's encoding. Both
+    # are read, in case a version writes what it says. Only the tags are looked at, and those are ASCII either way.
+    xml = done.stdout.decode("utf-16" if b"\x00" in done.stdout else "utf-8", "replace")
+    start, switch = _START.search(xml), _SWITCH.search(xml)
+    return {"time": _time(start[1]) if start else None, "disabled": bool(switch and switch[1].lower() == "false")}
+
+
+def own_tasks() -> dict[str, dict[str, Any] | None] | None:
+    """Pyrite's own two tasks, asked for by name: for each run, None when it isn't set up, else its time of day and
+    whether it's turned off. None when there's no Task Scheduler to ask, or it couldn't be asked.
+
+    `view` has PowerShell list every task, to find ones made by hand too, which takes two or three seconds. This asks
+    schtasks about one task at a time, which takes a small part of that, so the Profile tab can say whether the runs
+    are scheduled each time it opens. An answer is kept for a minute, and forgotten when `change` changes a task."""
+    if not WINDOWS:
+        return None
+    if _own and time.monotonic() - _own["at"] < OWN_TASKS_SECONDS:
+        return _own["tasks"]
+    try:
+        tasks: dict[str, dict[str, Any] | None] | None = {run["id"]: _own_task(run["name"]) for run in RUNS}
+    except (OSError, subprocess.TimeoutExpired):
+        tasks = None
+    _own.update(at=time.monotonic(), tasks=tasks)
+    return tasks
