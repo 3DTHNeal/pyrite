@@ -443,6 +443,50 @@ class Hub(Profile):
         (self.root / "profile" / "search.toml").write_bytes(config.encode())
         self.assertEqual(self.section("masters")["summary"], "Headings checked against applications/model/resume.md")
 
+    def test_a_master_with_only_its_headings_isnt_set(self):
+        # Work history writes the headings, so the form can be whole with nothing under it, and every draft starts there.
+        def masters():
+            found = self.section("masters")
+            return found["status"], found["summary"]
+        resume, letter = self.root / "profile" / "resume.md", self.root / "profile" / "cover-letter.md"
+        written = resume.read_text(encoding="utf-8")
+        resume.write_text("\n".join(row for row in written.splitlines() if row.startswith(("#", "@", "="))) + "\n", encoding="utf-8")
+        self.assertEqual(masters(), ("not_set", "Headings only, nothing under them yet"))
+        resume.write_text(written, encoding="utf-8")
+        letter.write_text("\n".join(letter.read_text(encoding="utf-8").splitlines()[:2]) + "\n", encoding="utf-8")
+        self.assertEqual(masters(), ("not_set", "Resume written, no letter yet"))
+        # With letters turned off, the resume is all a draft starts from.
+        config = tomledit.set_value(profile.read("config"), "run", "cover_letters", False)
+        (self.root / "profile" / "search.toml").write_bytes(config.encode())
+        self.assertEqual(masters(), ("set", "Resume written"))
+
+    def test_schedule_and_mail_says_what_this_computer_has(self):
+        def card(tasks, mail=None):
+            with mock.patch.object(profile.schedule, "own_tasks", return_value=tasks), \
+                    mock.patch.object(profile.doctor, "mail_check", return_value={"ok": mail, "what": "", "fix": ""}):
+                found = self.section("schedule")
+            return found["status"], found["summary"]
+        pan, run = {"time": "05:15", "disabled": False}, {"time": "07:00", "disabled": False}
+        self.assertEqual(card({"pan": None, "run": None}), ("not_set", "Nothing starts by itself yet, reply detection not set up"))
+        self.assertEqual(card({"pan": pan, "run": None}, True), ("not_set", "Pan 05:15, no daily run yet, replies from mail (IMAP)"))
+        self.assertEqual(card({"pan": None, "run": run}), ("not_set", "Daily run 07:00, no pan yet, reply detection not set up"))
+        self.assertEqual(card({"pan": pan, "run": run}, True), ("set", "Pan 05:15, daily run 07:00, replies from mail (IMAP)"))
+        # Reply detection is optional, so it's named and never counted: both runs make the section set without it.
+        self.assertEqual(card({"pan": pan, "run": run}), ("set", "Pan 05:15, daily run 07:00, reply detection not set up"))
+        # A run that's turned off doesn't start, and one whose time can't be read is still there.
+        self.assertEqual(card({"pan": pan, "run": {"time": None, "disabled": True}}, False),
+                         ("not_set", "Pan 05:15, daily run scheduled (turned off), reply detection's last check failed"))
+        # With no Task Scheduler to ask, it says where the schedule is and doesn't call it set.
+        with mock.patch.object(profile.schedule, "WINDOWS", False):
+            self.assertEqual(card(None), ("not_set", "Scheduling is done outside Pyrite here, reply detection not set up"))
+        with mock.patch.object(profile.schedule, "WINDOWS", True):
+            self.assertEqual(card(None), ("not_set", "Settings › Daily run has the schedule, reply detection not set up"))
+        config = tomledit.set_value(profile.read("config"), "inbox", "source", "gmail")
+        (self.root / "profile" / "search.toml").write_bytes(config.encode())
+        self.assertEqual(card({"pan": pan, "run": run}, True)[1], "Pan 05:15, daily run 07:00, replies from Gmail")
+        with mock.patch.object(store, "IS_EXAMPLE", True):
+            self.assertEqual(card(None), ("set", "The demo starts no runs by itself"))
+
     def test_a_save_names_its_section_and_the_hub_says_when(self):
         profile.write({"terms": profile.read("terms") + "Rust\n"}, profile.versions(), "Skills: 1 change", "skills")
         profile.write({"facts": profile.read("facts") + "- One more\n"}, profile.versions(), "Typed by hand", "not-a-section")

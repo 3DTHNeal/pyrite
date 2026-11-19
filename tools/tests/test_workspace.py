@@ -429,11 +429,85 @@ class NewWorkspace(unittest.TestCase):
                       "no '### Employer | dates' heading, so no resume drafted from it can pass the assay.", todos)
         # The resume has no contact line now, so the letter's is the first one and matches itself.
         self.assertFalse([what for what in todos if what.startswith("profile/cover-letter.md")])
-        resume.write_text("# Alex Rivera\n@ Madison, WI · alex@example.com\n## Experience\n### Acme | 2020\n## Education\n", encoding="utf-8")
+        resume.write_text("# Alex Rivera\n@ Madison, WI · alex@example.com\n## Experience\n### Acme | 2020\n- Shipped it.\n"
+                          "## Education\n", encoding="utf-8")
         todos = self.todos()
         self.assertFalse([what for what in todos if what.startswith("profile/resume.md")])
         self.assertIn("profile/cover-letter.md has a contact line that differs from the resume's, so no letter drafted from it "
                       "can pass the assay.", todos)
+
+    def test_a_master_in_the_right_form_with_nothing_written_in_it_is_named(self):
+        # Work history writes the headings, so a resume can have its whole form, pass the fact check and say nothing.
+        resume, letter = self.root / "profile" / "resume.md", self.root / "profile" / "cover-letter.md"
+        top = "# Alex Rivera\n= Engineer\n@ Madison, WI · alex@example.com\n"
+        form = top + "\n## Summary\n\n## Experience\n### Acme | 2020 – Present\n#### Engineer | Madison, WI | 2020 – Present\n\n## Education\n"
+        resume.write_text(form + "<!-- Bullets go under each role. -->\n", encoding="utf-8")
+        letter.write_text("# Alex Rivera\n@ Madison, WI · alex@example.com\n", encoding="utf-8")
+        todos = WORKSPACE_TODOS(self.root, self.cfg())
+        empty = next(todo for todo in todos if todo["what"].startswith("profile/resume.md"))
+        self.assertEqual((empty["what"], empty["step"], empty.get("severity")),
+                         ("profile/resume.md has its headings and nothing under them, so every draft starts from an empty "
+                          "resume.", "masters", None))
+        bare = next(todo for todo in todos if todo["what"].startswith("profile/cover-letter.md"))
+        self.assertIn("has no letter after the contact line", bare["what"])
+        self.assertEqual(bare["step"], "masters")
+        # A letter isn't needed where none is written.
+        cfg = self.cfg()
+        cfg["run"]["cover_letters"] = False
+        self.assertFalse([what for what in self.todos(cfg) if what.startswith("profile/cover-letter.md")])
+        # One line of your own under a heading, or after the contact line, is enough.
+        resume.write_text(form.replace("Present\n\n## Education", "Present\n- Shipped it.\n\n## Education"), encoding="utf-8")
+        letter.write_text("# Alex Rivera\n@ Madison, WI · alex@example.com\n\nDear team,\n", encoding="utf-8")
+        self.assertFalse([what for what in self.todos() if what.startswith(("profile/resume.md", "profile/cover-letter.md"))])
+        for text, empty in ((form, True), (form + "~ Leadership\n", True), (form + "- **Who:**\n", True),
+                            (form + "A sentence.\n", False), ("", True)):
+            self.assertEqual(doctor.unwritten(text), empty, text[-30:])
+
+    def test_a_limit_no_posting_can_reach_is_named(self):
+        # The example's limits count on points for skills. With none, nothing reaches the score a draft is written at,
+        # and a remote posting with exactly the title asked for is dropped.
+        self.assertFalse([what for what in self.todos() if "can score" in what or "scores" in what])
+        cfg = self.cfg()
+        cfg["scoring"]["keywords"] = []
+        self.assertEqual(score.reach(cfg), (35, 50))
+        todos = [todo for todo in WORKSPACE_TODOS(self.root, cfg) if todo.get("step") == "roles" and "score" in todo["what"]]
+        self.assertEqual([todo["what"] for todo in todos], [
+            "No posting can score 55, the least the daily run writes a draft for (tailor_min_score): with your settings the "
+            "most one can score is 50. So no draft is written unless you pick the job yourself.",
+            "A posting with a title and place you asked for scores 35 when nothing else adds points, under the 40 a pan "
+            "keeps (min_score). So a pan drops it."])
+        self.assertIn("lower tailor_min_score under [run]", todos[0]["fix"])
+        self.assertIn("worth 25, a senior word 5 or 10, a place 10 if it's remote or 15 if it's local", todos[1]["fix"])
+        # Limits a title and place can reach are left alone, with skills or without.
+        cfg["run"].update(min_score=25, tailor_min_score=35)
+        self.assertFalse([todo for todo in WORKSPACE_TODOS(self.root, cfg) if "score" in todo["what"]])
+        # One that nothing reaches at all stops every pan, so it comes first.
+        cfg["run"].update(min_score=60, tailor_min_score=70)
+        bad = [todo for todo in WORKSPACE_TODOS(self.root, cfg) if "can score" in todo["what"]]
+        self.assertEqual([(todo["severity"], todo["what"]) for todo in bad],
+                         [("bad", "No posting can score 60, the least a pan keeps (min_score): with your settings the most "
+                                  "one can score is 50. So a pan keeps none.")])
+        # No role types yet, or a limit that isn't a number, is named as that and not as this.
+        cfg["run"]["min_score"] = "sixty"
+        self.assertFalse([todo for todo in WORKSPACE_TODOS(self.root, cfg) if "can score" in todo["what"]])
+        cfg["run"]["min_score"], cfg["track"] = 60, []
+        self.assertFalse([todo for todo in WORKSPACE_TODOS(self.root, cfg) if "can score" in todo["what"]])
+
+    def test_what_a_posting_can_score_follows_the_places_and_levels_you_take(self):
+        cfg = self.cfg()
+        self.assertEqual(score.reach(cfg), (35, 90))  # Remote at the least, and local with a top title and every skill.
+        cfg["location"].update(accept_remote=False)
+        self.assertEqual(score.reach(cfg)[0], 40)  # Local only.
+        cfg["location"].update(local=[], local_exact=[], places=[], accept_remote=True)
+        self.assertEqual(score.reach(cfg), (35, 85))  # Remote only.
+        cfg["location"]["accept_remote"] = False
+        self.assertEqual(score.reach(cfg)[0], 28)  # Neither, so only a place nobody could read.
+        cfg["location"]["accept_remote"] = True
+        for track in cfg["track"]:
+            track["needs_level"] = True
+        self.assertEqual(score.reach(cfg)[0], 40)  # Every role type needs a senior word, which is worth 5 at the least.
+        cfg["scoring"].update(level_top=[], level_mid=[], keywords=[["python", 6], ["oncall", -5]])
+        self.assertEqual(score.reach(cfg), (35, 41))  # A skill that takes points off doesn't add to the most.
 
     def test_a_master_still_the_examples_is_named_once_not_twice(self):
         self.assertFalse([what for what in self.todos() if "can pass the assay" in what])
@@ -816,13 +890,40 @@ class Init(unittest.TestCase):
             example[table][key] = []
         for table, key in workspace.BLANK_DROPPED:
             del example[table][key]
+        for table, key, value in workspace.BLANK_SET:
+            self.assertNotEqual(example[table][key], value, (table, key))
+            example[table][key] = value
         for table in workspace.BLANK_CLEARED:
             outer, inner = table.split(".")
             example[outer][inner] = {}
         del example["track"], example["promote"]["industry"]
         example["candidate"]["name"] = "Sam Doe"
+        # The limits start where a title and place that match reach them, and the pay is the person's own to give.
+        example["run"]["min_score"] = example["run"]["tailor_min_score"] = workspace.BLANK_MIN_SCORE
+        del example["relocation"]["current_pay"]
         self.assertEqual(cfg, example)
-        self.assertIn("# [[track]]", (profile / "search.toml").read_text(encoding="utf-8"))  # The form is shown where they go.
+        text = (profile / "search.toml").read_text(encoding="utf-8")
+        self.assertIn("# [[track]]", text)  # The form is shown where they go.
+        self.assertIn("# current_pay = ", text)  # And the pay's, for Settings › Relocation to fill in where it is.
+
+    def test_a_blank_search_keeps_a_plain_match_and_can_draft_it(self):
+        # A blank search.toml has no points for skills, so the example's limits would drop a remote posting with exactly
+        # the title asked for, and no posting at all could reach the score a draft is written at.
+        self.init("--name", "Sam Doe", "--blank")
+        cfg = self.cfg()
+        cfg["track"] = [{"name": "Design", "titles": ["product designer"]}, {"name": "Data", "titles": ["data analyst"]}]
+        for title in ("Product Designer", "Data Analyst"):  # Neither is a title a blank search leaves out.
+            verdict = score.evaluate(title, "Remote - US", "", "We ship.", cfg, "Initech")
+            self.assertEqual((verdict.keep, verdict.score), (True, 35), title)
+            self.assertGreaterEqual(verdict.score, cfg["run"]["tailor_min_score"])
+        self.assertFalse(score.evaluate("Product Design Intern", "Remote - US", "", "We ship.", cfg, "Initech").keep)
+        self.assertFalse([todo["what"] for todo in WORKSPACE_TODOS(self.folder, cfg) if "score" in todo["what"]])
+        # Settings › Relocation writes the pay where the example of it is.
+        from pyrite import relocate, tomledit
+        text = (self.folder / "profile" / "search.toml").read_text(encoding="utf-8")
+        self.assertIsNone(relocate.settings(cfg)["current_pay"])
+        saved = tomledit.set_value(text, "relocation", "current_pay", 90000)
+        self.assertIn("\ncurrent_pay = 90000  # a year's base pay now, before tax.", saved)
 
     def test_doctor_reports_what_a_blank_workspace_leaves_empty(self):
         self.init("--name", "Sam Doe", "--blank")

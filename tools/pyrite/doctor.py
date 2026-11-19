@@ -276,10 +276,50 @@ def workspace_todos(root: Path, cfg: dict[str, Any] | None) -> list[dict[str, An
         todos.append({"what": problem, "fix": "Until it's fixed, a pan stops before reading any job board. A literal character "
                                               "such as ( or + needs a backslash before it.", "severity": "bad",
                       "step": PATTERN_STEPS[table]})
+    todos += _score_todos(cfg)
     todos += _master_todos(root, cfg)
     todos += _unguarded_todos(root, cfg)
     todos += _unenforced_todos(root, cfg)
     todos += _seed_todos(root)
+    return todos
+
+
+def _score_todos(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """The limits under [run] that no posting, or no plain one, can reach with the settings as they are. Each stops a
+    search without saying so: under min_score a posting isn't stored, and under tailor_min_score no draft is written
+    for it. A search.toml with no points for skills yet is where it happens, since the example's limits count on them."""
+    run = cfg.get("run", {})
+    limits = [run.get("min_score"), run.get("tailor_min_score")]
+    if not cfg.get("track") or not all(isinstance(limit, int) and not isinstance(limit, bool) for limit in limits):
+        return []  # No role types yet keeps nothing, and a limit that isn't a number stops a pan: each is named already.
+    try:
+        plain, best = score.reach(cfg)
+    except (TypeError, ValueError):
+        return []  # A setting of the wrong kind, which is named as such.
+    keep, write = limits
+    parts = (f"A title that matches a role type is worth {score.TITLE_POINTS}, a senior word "
+             f"{' or '.join(str(points) for points in sorted(score.LEVEL_POINTS.values()))}, a place "
+             f"{score.PLACE_POINTS['remote']} if it's remote or {score.PLACE_POINTS['local']} if it's local, and skills "
+             f"up to {score.KEYWORD_CAP}.")
+
+    def fix(limit: str) -> str:
+        return (f"{parts} Add points for the skills you look for, under Advanced in Roles you want on the Profile tab, "
+                f"or lower {limit} under [run] in profile/search.toml.")
+
+    if best < keep:
+        return [{"what": f"No posting can score {keep}, the least a pan keeps (min_score): with your settings the most "
+                         f"one can score is {best}. So a pan keeps none.",
+                 "fix": fix("min_score"), "step": "roles", "severity": "bad"}]
+    todos = []
+    if best < write:
+        todos.append({"what": f"No posting can score {write}, the least the daily run writes a draft for "
+                              f"(tailor_min_score): with your settings the most one can score is {best}. So no draft is "
+                              "written unless you pick the job yourself.",
+                      "fix": fix("tailor_min_score"), "step": "roles"})
+    if plain < keep and not cfg.get("scoring", {}).get("keywords"):
+        todos.append({"what": f"A posting with a title and place you asked for scores {plain} when nothing else adds "
+                              f"points, under the {keep} a pan keeps (min_score). So a pan drops it.",
+                      "fix": fix("min_score"), "step": "roles"})
     return todos
 
 
@@ -320,9 +360,23 @@ def master_problems(text: str, kind: str, name: str = "", contact: str | None = 
     return problems
 
 
+def unwritten(text: str) -> bool:
+    """Whether a master resume or letter holds only its form so far: the name, the contact line, a headline and
+    headings, with nothing written under them. It reads as a master and passes the fact check, since an empty document
+    claims nothing, and every draft would start from it."""
+    rows = (row.strip() for row in uncommented(text).splitlines())
+    return not any(row and not row.startswith(("#", "@", "=", "~")) and not EMPTY_LINE.fullmatch(row) for row in rows)
+
+
+def letters_wanted(cfg: dict[str, Any]) -> bool:
+    """Whether a cover letter is written with each resume, which it is unless [run] cover_letters turns it off."""
+    return cfg.get("run", {}).get("cover_letters", True) is not False
+
+
 def _master_todos(root: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """The master resume and letter, checked for the form the assay reads. A master in another form gets past a
-    look at the files and then fails every draft made from it, which is the wrong place to find out."""
+    """The master resume and letter, checked for the form the assay reads, and then for anything written in them. A
+    master in another form gets past a look at the files and then fails every draft made from it, which is the wrong
+    place to find out. One in the right form with nothing under its headings passes, and starts every draft empty."""
     guard = cfg.get("guard", {})
     name = cfg.get("candidate", {}).get("name", "")
     # The assay's contact line is the first one in the approved sources, in the order search.toml lists them.
@@ -338,6 +392,16 @@ def _master_todos(root: Path, cfg: dict[str, Any]) -> list[dict[str, Any]]:
         if problems:
             todos.append({"what": f"{rel} has {_and(problems)}, so no {kind} drafted from it can pass the assay.",
                           "fix": f"Every {kind} is checked against it. {FORMAT_DOCS}", "step": "masters", "severity": "bad"})
+        elif kind == "resume" and unwritten(text):
+            todos.append({"what": f"{rel} has its headings and nothing under them, so every draft starts from an empty resume.",
+                          "fix": "Write the summary and each role's bullets under Master resume on the Profile tab, or have "
+                                 "`pyrite import-resume <file>` draft it from the .docx, PDF or .txt one you have.",
+                          "step": "masters"})
+        elif kind == "letter" and unwritten(text) and letters_wanted(cfg):
+            todos.append({"what": f"{rel} has no letter after the contact line, so every cover letter starts from nothing.",
+                          "fix": "Write it under Master resume on the Profile tab. With cover_letters = false under [run] "
+                                 "in profile/search.toml, no letter is written and this isn't needed.",
+                          "step": "masters"})
     return todos
 
 
