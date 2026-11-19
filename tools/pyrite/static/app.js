@@ -867,31 +867,62 @@ function renderRadar() {
       button.disabled = true;
       triage(j, action, false).finally(() => { button.disabled = false; });
     } }, label);
+  // What hid it comes first, since that's what the filtered-out list is for.
+  const signals = (j, cls) => h("span", { class: cls }, why.get(j.id).map((w) => pill("warn", w.label, w.detail)), urgentPills(j), freshnessPills(j));
   fill($("radar"),
     h("thead", {}, h("tr", {},
       h("th", { class: "num", title: "Score plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost" }, "Priority"),
       h("th", { class: "num", title: "Filter score, out of 100" }, "Score"),
-      ["Company", "Title", "Location", "Track", "Pay", "Posted", "Signals"].map((c) => h("th", {}, c)),
+      ["Company", "Title", "Location"].map((c) => h("th", {}, c)),
+      h("th", { class: "col-track" }, "Track"),
+      h("th", {}, "Pay"),
+      h("th", { class: "col-posted" }, "Posted"),
+      h("th", { class: "col-signals" }, "Signals"),
       h("th", {}, h("span", { class: "visually-hidden" }, "Actions")))),
-    h("tbody", {}, shown.length ? shown.map((j) => h("tr", { "data-id": j.id, class: j.seen ? "" : "unseen", onclick: () => openJob(j.id, ids) },
-      h("td", { class: "num" }, j.rank),
-      h("td", { class: "num muted" }, j.score),
-      h("td", {}, clamped(j.company)),
-      h("td", {}, h("button", { class: "linkish clamp", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title)),
-      h("td", {}, h("span", { class: "place", title: j.location || "" }, shortPlace(j.location))),
-      h("td", {}, j.track),
-      payCell(j.comp),
-      h("td", { class: "nowrap", title: shortDate(j.first_posted_at || j.posted_at) }, daysAgo(j.age_days) || "Unknown"),
-      // What hid it comes first, since that's what the filtered-out list is for.
-      h("td", {}, h("span", { class: "signals" }, why.get(j.id).map((w) => pill("warn", w.label, w.detail)), urgentPills(j), freshnessPills(j))),
-      h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small"))))
+    h("tbody", {}, shown.length ? shown.map((j) => {
+      const posted = daysAgo(j.age_days);
+      const postedOn = shortDate(j.first_posted_at || j.posted_at);
+      return h("tr", { "data-id": j.id, class: j.seen ? "" : "unseen", onclick: () => openJob(j.id, ids) },
+        h("td", { class: "num" }, j.rank),
+        h("td", { class: "num muted" }, j.score),
+        h("td", {}, clamped(j.company)),
+        // In a narrow frame the track, the signals and the age fold in under the title, so the pinned buttons never
+        // cover them. Only one copy of each shows at a time.
+        h("td", {}, h("button", { class: "linkish clamp", type: "button", title: j.seen ? null : "You haven't opened this one yet" }, j.title),
+          h("span", { class: "fold-track muted" }, j.track),
+          h("span", { class: "fold-posted muted", title: postedOn }, posted ? `Posted ${posted}` : "Posting date unknown"),
+          signals(j, "signals fold-signals")),
+        h("td", {}, h("span", { class: "place", title: j.location || "" }, shortPlace(j.location))),
+        h("td", { class: "col-track" }, j.track),
+        payCell(j.comp),
+        h("td", { class: "col-posted nowrap", title: postedOn }, posted || "Unknown"),
+        h("td", { class: "col-signals" }, signals(j, "signals")),
+        h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small")));
+    })
       : h("tr", {}, emptyState("pan", out.length ? "Your filters hide every posting here." : "No prospects match.", "td", { colspan: 10 }))));
+  fitRadar();
+}
+
+// Tailor and Pass are pinned to the frame's right edge, so a table too wide for its frame would run its last columns
+// under them. Instead it folds columns in under each title, Track first, then Signals, then Posted, until it fits. It
+// measures rather than going by the window's width, since the fonts on hand and the postings decide what fits. Past
+// the last fold, as on a phone, the table scrolls sideways under the buttons.
+const RADAR_FOLDS = ["track-folded", "signals-folded", "posted-folded"];
+function fitRadar() {
+  const table = $("radar");
+  const frame = table.parentElement;
+  if (!frame.clientWidth) return;  // Hidden, so fitted once it's shown.
+  table.classList.remove(...RADAR_FOLDS);
+  for (const fold of RADAR_FOLDS) {
+    if (frame.scrollWidth <= frame.clientWidth) break;
+    table.classList.add(fold);
+  }
 }
 
 // Compact where it can be read, and as the posting wrote it in the tooltip either way.
 function payCell(comp) {
   const pay = shortPay(comp);
-  return h("td", { class: pay !== (comp || "").trim() ? "nowrap" : null, title: comp || null }, pay);
+  return h("td", { class: pay !== (comp || "").trim() ? "pay nowrap" : "pay", title: comp || null }, pay);
 }
 
 // A posting can list dozens of places. Show the first few and keep the rest in the tooltip.
@@ -3095,6 +3126,14 @@ $("radar-search").addEventListener("input", renderRadar);
 ["archive-search", "archive-outcome"].forEach((id) => $(id).addEventListener("input", renderArchive));
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
 $("radar-limits-clear").addEventListener("click", clearRadarLimits);
+// Fitted again when its frame changes width: the window resized, or the view shown after being hidden. A change of
+// height alone, such as a fold making rows taller, needs nothing.
+let radarFrameWidth = 0;
+new ResizeObserver(([entry]) => {
+  if (entry.contentRect.width === radarFrameWidth) return;
+  radarFrameWidth = entry.contentRect.width;
+  fitRadar();
+}).observe($("radar").parentElement);
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
   // Go to opens from anywhere, a box you're typing in included, but never over another dialog.
