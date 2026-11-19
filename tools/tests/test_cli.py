@@ -1,5 +1,6 @@
 """The command line's own answers: a job number that isn't there is named in one line, whichever command asked, and
 the commands a person runs say what they found in words on a terminal and in JSON everywhere else."""
+import argparse
 import contextlib
 import io
 import json
@@ -355,6 +356,37 @@ class Arguments(unittest.TestCase):
             cli.main(["demo", "--port", "70000"])
         load.assert_not_called()
         self.assertEqual(cli.build_parser().parse_args(["serve", "--port", "8790"]).port, 8790)
+
+
+class Help(unittest.TestCase):
+    def test_every_listed_command_has_a_description(self):
+        parser = cli.build_parser()
+        sub = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+        for name in cli._commands(sub):
+            with self.subTest(command=name):
+                description = sub.choices[name].description
+                self.assertTrue(description)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    cli.main(["help", name])
+                self.assertIn(" ".join(description.split()), " ".join(out.getvalue().split()))
+
+    def test_manual_commands_point_to_their_guide(self):
+        guides = {
+            "run": "docs/schedule.md",
+            "sweep": "docs/schedule.md",
+            "doctor": "docs/setup.md",
+            "folder": "docs/documents.md",
+            "finish": "docs/documents.md",
+            "seed": "docs/setup.md",
+            "check": "README.md",
+        }
+        for name, guide in guides.items():
+            with self.subTest(command=name):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    cli.main(["help", name])
+                self.assertIn(guide, out.getvalue())
 
 
 class Database(unittest.TestCase):
