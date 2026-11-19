@@ -578,6 +578,13 @@ class ToolsAndWorkspace(Profile):
             doctor.tool_checks({}, {"ok": False, "what": "not signed in", "fix": "log in"})
         asked.assert_not_called()
 
+    def test_reply_detection_copy_does_not_claim_it_moves_jobs(self):
+        # Reply detection only points out mail; a match never changes a job's
+        # status (docs/mail.md). The Tools check must not tell people otherwise.
+        for_text = doctor.TOOLS_ABOUT["mail"]["for"]
+        self.assertNotIn("moves each job on", for_text)
+        self.assertIn("You log what it was with the job's buttons", for_text)
+
     def test_a_missing_program_every_draft_needs_opens_tools_check(self):
         with self.programs(pdf=False):
             todos = support.PROGRAM_TODOS()

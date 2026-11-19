@@ -471,7 +471,8 @@ TOOLS_ABOUT: dict[str, dict[str, Any]] = {
                "without": "Everything else: finding and scoring jobs, the fact check, building drafts you write, and "
                           "tracking applications."},
     "mail": {"name": "Reply detection", "required": False, "settings": "settings/mail",
-             "for": "Notices replies, interviews and rejections in your mail, and moves each job on.",
+             "for": "Points out mail that looks like a reply, an interview or a rejection, on the job and the to-do "
+                    "list. You log what it was with the job's buttons.",
              "without": "You mark replies yourself with each job's buttons."},
 }
 
