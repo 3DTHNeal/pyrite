@@ -900,6 +900,23 @@ function renderRadar() {
         h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small")));
     })
       : h("tr", {}, emptyState("pan", out.length ? "Your filters hide every posting here." : "No prospects match.", "td", { colspan: 10 }))));
+  fitRadar();
+}
+
+// Tailor and Pass are pinned to the frame's right edge, so a table too wide for its frame would run its last columns
+// under them. Instead it folds columns in under each title, Track first, then Signals, then Posted, until it fits. It
+// measures rather than going by the window's width, since the fonts on hand and the postings decide what fits. Past
+// the last fold, as on a phone, the table scrolls sideways under the buttons.
+const RADAR_FOLDS = ["track-folded", "signals-folded", "posted-folded"];
+function fitRadar() {
+  const table = $("radar");
+  const frame = table.parentElement;
+  if (!frame.clientWidth) return;  // Hidden, so fitted once it's shown.
+  table.classList.remove(...RADAR_FOLDS);
+  for (const fold of RADAR_FOLDS) {
+    if (frame.scrollWidth <= frame.clientWidth) break;
+    table.classList.add(fold);
+  }
 }
 
 // Compact where it can be read, and as the posting wrote it in the tooltip either way.
@@ -3109,6 +3126,14 @@ $("radar-search").addEventListener("input", renderRadar);
 ["archive-search", "archive-outcome"].forEach((id) => $(id).addEventListener("input", renderArchive));
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
 $("radar-limits-clear").addEventListener("click", clearRadarLimits);
+// Fitted again when its frame changes width: the window resized, or the view shown after being hidden. A change of
+// height alone, such as a fold making rows taller, needs nothing.
+let radarFrameWidth = 0;
+new ResizeObserver(([entry]) => {
+  if (entry.contentRect.width === radarFrameWidth) return;
+  radarFrameWidth = entry.contentRect.width;
+  fitRadar();
+}).observe($("radar").parentElement);
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
   // Go to opens from anywhere, a box you're typing in included, but never over another dialog.

@@ -831,7 +831,7 @@ class Demo(Base):
 
 
 # For each Prospects row: the cells that run under its Tailor and Pass, which are pinned to the frame's right edge, and
-# the signals it shows, wherever they sit.
+# the signals it shows, wherever they sit. And which columns the table folded in under the titles to fit.
 UNDER_THE_BUTTONS = """() => {
   const table = document.getElementById("radar");
   const head = [...table.tHead.rows[0].cells];
@@ -845,13 +845,14 @@ UNDER_THE_BUTTONS = """() => {
     signals[row.dataset.id] = [...row.querySelectorAll(".pill")].filter((p) => p.getClientRects().length)
       .map((p) => p.textContent).sort();
   }
-  return { covered, signals };
+  return { covered, signals, folded: [...table.classList].filter((name) => name.endsWith("-folded")) };
 }"""
 
 
 class ProspectsInALaptopWindow(Base):
-    """Prospects pins Tailor and Pass to its frame's right edge. In a laptop's window, or a browser on half a wide
-    screen, the table folds columns in under the title rather than run under those buttons, and keeps every signal."""
+    """Prospects pins Tailor and Pass to its frame's right edge. In a laptop's window the table folds columns in under
+    the title rather than run under those buttons, and keeps every signal. How many it folds depends on the fonts, so
+    this holds it to the outcome at the widths that matter, not to which columns fold where."""
 
     def test_nothing_a_row_needs_sits_under_the_pinned_buttons(self):
         try:
@@ -871,7 +872,7 @@ class ProspectsInALaptopWindow(Base):
                 browser = pw.chromium.launch(headless=True)
                 try:
                     seen = {}
-                    for width in (1440, 1280, 1024, 960):
+                    for width in (1440, 1280, 1100, 1024):
                         page = browser.new_page(viewport={"width": width, "height": 800})
                         page.goto(f"http://127.0.0.1:{httpd.server_address[1]}/#radar")
                         page.wait_for_selector("#radar tbody tr[data-id]")
@@ -883,6 +884,7 @@ class ProspectsInALaptopWindow(Base):
             httpd.shutdown()
             httpd.server_close()
         self.assertTrue(any(seen[1440]["signals"].values()), "the demo's prospects show no signals to keep in view")
+        self.assertEqual(seen[1440]["folded"], [], "a wide window has room for every column")
         for width, found in seen.items():
             with self.subTest(width=width):
                 self.assertEqual(found["covered"], [])

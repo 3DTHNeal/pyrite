@@ -287,30 +287,19 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px
 #radar .row-actions, #radar thead th:last-child { position: sticky; right: 0; background: var(--surface); box-shadow: -1px 0 0 var(--line); }
 #radar tbody tr[data-id]:hover .row-actions { background: var(--surface-2); }
 #radar thead th:last-child { background: color-mix(in srgb, var(--surface-2) 55%, var(--surface)); }
-/* Pinned buttons would sit over the last columns of a table too wide for its frame, so as the frame narrows the table
-   gives up columns instead, each moving under the title: Track first, then Signals, then Posted, when Pay may wrap at
-   its dash too. Down to a browser on half a 1920 px screen, every signal, such as Possible ghost, stays in view.
-   Narrower than the last step holds, the table scrolls sideways under the pinned buttons, as it did before. */
-#view-radar .table-wrap { container: prospects / inline-size; }
-/* A long signal, such as Pays well above similar roles, wraps rather than holding its column open. Half a line's height
-   rounds a one-line pill as fully as the usual 999px, and keeps a two-line one's corners clear of its words. */
-#radar .pill { white-space: normal; border-radius: 9px; }
+/* A table too wide for its frame would run its last columns under the pinned buttons, so fitRadar in app.js folds
+   them in under each title instead, one at a time until it fits: Track, then Signals, then Posted, when Pay may wrap
+   at its dash too. Each has a copy under the title, and only one of the two shows. */
 #radar .fold-track, #radar .fold-posted, #radar .fold-signals { display: none; }
 #radar .fold-track, #radar .fold-posted { font-size: 12px; margin-top: 2px; }
 #radar .fold-signals { margin-top: 4px; }
-@container prospects (max-width: 960px) {
-  #radar .col-track { display: none; }
-  #radar .fold-track { display: block; }
-}
-@container prospects (max-width: 860px) {
-  #radar .col-signals { display: none; }
-  #radar .fold-signals { display: flex; }
-}
-@container prospects (max-width: 700px) {
-  #radar .col-posted { display: none; }
-  #radar .fold-posted { display: block; }
-  #radar td.pay { white-space: normal; }
-}
+#radar.track-folded .col-track, #radar.signals-folded .col-signals, #radar.posted-folded .col-posted { display: none; }
+#radar.track-folded .fold-track, #radar.posted-folded .fold-posted { display: block; }
+#radar.signals-folded .fold-signals { display: flex; }
+#radar.posted-folded td.pay { white-space: normal; }
+/* A long signal, such as Pays well above similar roles, wraps rather than holding its column open. Half a line's height
+   rounds a one-line pill as fully as the usual 999px, and keeps a two-line one's corners clear of its words. */
+#radar .pill { white-space: normal; border-radius: 9px; }
 .row-actions .btn + .btn { margin-left: 4px; }
 .btn.small { padding: 2px 8px; font-size: 12px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
