@@ -1189,64 +1189,64 @@ def build_parser() -> argparse.ArgumentParser:
     # A metavar of its own, or the list of choices in the usage line would show the hidden `task` worker too.
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
 
-    p = sub.add_parser("discover", help="pull new postings from the watchlist")
+    p = sub.add_parser("discover", help="pull new postings from the watchlist", description='pull new postings from the watchlist (Guide: docs/commands.md)')
     p.add_argument("--only", help="only sources whose name contains this")
     p.add_argument("--fresh", action="store_true", help="re-evaluate previously rejected postings")
     p.add_argument("--max-minutes", type=float, default=45, help="start no new sources after this long")
     _json_flag(p)
     p.set_defaults(func=cmd_discover)
 
-    p = sub.add_parser("inbox", help="flag possible replies and scams in Gmail, read-only")
+    p = sub.add_parser("inbox", help="flag possible replies and scams in Gmail, read-only", description='flag possible replies and scams in Gmail, read-only (Guide: docs/mail.md)')
     p.add_argument("--from", dest="export", help="judge a JSON export written by hand instead of reading Gmail")
     p.set_defaults(func=cmd_inbox)
-    p = sub.add_parser("sources", help="test every watched source")
+    p = sub.add_parser("sources", help="test every watched source", description='test every watched source (Guide: docs/commands.md)')
     p.add_argument("--json", action="store_true", help="print JSON instead of the table")
     p.set_defaults(func=cmd_sources)
-    p = sub.add_parser("rescore", help="re-apply the filters to postings you haven't acted on")
+    p = sub.add_parser("rescore", help="re-apply the filters to postings you haven't acted on", description="re-apply the filters to postings you haven't acted on (Guide: docs/commands.md)")
     _json_flag(p)
     p.set_defaults(func=cmd_rescore)
 
-    p = sub.add_parser("queue", help="list what needs triage and tailoring")
+    p = sub.add_parser("queue", help="list what needs triage and tailoring", description='list what needs triage and tailoring (Guide: docs/commands.md)')
     p.add_argument("--limit", type=_whole_number(1), help="list at most this many of each, instead of the run's own limits")
     _json_flag(p)
     p.set_defaults(func=cmd_queue)
 
-    p = sub.add_parser("job", help="print one posting")
+    p = sub.add_parser("job", help="print one posting", description='print one posting (Guide: docs/commands.md)')
     p.add_argument("id", type=int, help=JOB_ID)
     _json_flag(p)
     p.set_defaults(func=cmd_job)
 
-    p = sub.add_parser("triage", help="record a fit judgment")
+    p = sub.add_parser("triage", help="record a fit judgment", description='record a fit judgment (Guide: docs/schedule.md)')
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--fit", required=True, choices=["strong", "good", "stretch", "skip"])
     p.add_argument("--reason", required=True)
     p.set_defaults(func=cmd_triage)
 
-    p = sub.add_parser("folder", help="create an application folder")
+    p = sub.add_parser('folder', help='create an application folder', formatter_class=argparse.RawDescriptionHelpFormatter, description='create an application folder\nChanges: creates the application folder under applications/, saves posting.md, and copies starter drafts.\nNeeds: a workspace and a valid job id.\nGuide: docs/documents.md.')
     p.add_argument("id", type=int, help=JOB_ID)
     p.set_defaults(func=cmd_folder)
 
-    p = sub.add_parser("finish", help="build documents, run the assay, mark ready")
+    p = sub.add_parser('finish', help='build documents, run the assay, mark ready', formatter_class=argparse.RawDescriptionHelpFormatter, description='build documents, run the assay, mark ready\nChanges: builds documents, saves assay results and files, and updates job status.\nNeeds: a workspace, a job application folder, and build tools.\nGuide: docs/documents.md.')
     p.add_argument("id", type=int, help=JOB_ID)
     _json_flag(p)
     p.set_defaults(func=cmd_finish)
 
-    p = sub.add_parser("refresh", help="have Claude rewrite a draft resume, kept only if it passes the assay")
+    p = sub.add_parser("refresh", help="have Claude rewrite a draft resume, kept only if it passes the assay", description='have Claude rewrite a draft resume, kept only if it passes the assay (Guide: docs/assay.md)')
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_refresh)
 
-    p = sub.add_parser("prep", help="have Claude write an interview prep brief, kept only if it passes the assay")
+    p = sub.add_parser("prep", help="have Claude write an interview prep brief, kept only if it passes the assay", description='have Claude write an interview prep brief, kept only if it passes the assay (Guide: docs/applying.md)')
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_prep)
 
-    p = sub.add_parser("outlook", help="have Claude research how an industry under [promote] is doing where you live, keeping only sourced points")
+    p = sub.add_parser("outlook", help="have Claude research how an industry under [promote] is doing where you live, keeping only sourced points", description='have Claude research how an industry under [promote] is doing where you live, keeping only sourced points (Guide: docs/prospects.md)')
     p.add_argument("name", help="the industry's name, as under [[promote.industry]]")
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_outlook)
 
-    p = sub.add_parser("culture", help="have Claude research how a job's employer works and treats people, keeping only sourced points")
+    p = sub.add_parser("culture", help="have Claude research how a job's employer works and treats people, keeping only sourced points", description="have Claude research how a job's employer works and treats people, keeping only sourced points (Guide: docs/applying.md)")
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_culture)
@@ -1256,7 +1256,7 @@ def build_parser() -> argparse.ArgumentParser:
                        epilog='for example:\n  pyrite relocate 12\n  pyrite relocate --where "Austin, TX" --pay "$165k-$215k"\n'
                               '  pyrite relocate --taxes ohio\n  pyrite relocate --research-taxes "Springfield, IL"\n\n'
                               "Your pay now and where you live come from [relocation] and [market] in search.toml. The first "
-                              "comparison downloads BEA's price levels into the workspace.")
+                              "comparison downloads BEA's price levels into the workspace.", description='what a job elsewhere pays after taxes and local prices, against your pay now (Guide: docs/dashboard.md)')
     p.add_argument("id", type=int, nargs="?", help=JOB_ID)
     p.add_argument("--where", help="a place to compare instead of a job's, as a city and state")
     p.add_argument("--pay", default="", help="pay there, as a posting writes it: \"$165k-$215k\" or \"$190,000\"")
@@ -1269,7 +1269,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_flag(p)
     p.set_defaults(func=cmd_relocate)
 
-    p = sub.add_parser("skills", help="list how long the skills postings ask years of have existed, or have Claude look new ones up on the web")
+    p = sub.add_parser("skills", help="list how long the skills postings ask years of have existed, or have Claude look new ones up on the web", description='list how long the skills postings ask years of have existed, or have Claude look new ones up on the web (Guide: docs/prospects.md)')
     p.add_argument("phrases", nargs="*", help="skills to look up, as postings write them")
     p.add_argument("--research", action="store_true", help="look up the unknown skills in the postings waiting to be judged")
     p.set_defaults(func=cmd_skills)
@@ -1281,7 +1281,7 @@ def build_parser() -> argparse.ArgumentParser:
                              pyrite gaps answer vendor-management --yes "Chose and ran 3 test-lab vendors" --section Leadership
                              pyrite gaps answer kubernetes --no
                              pyrite gaps answer travel --dismiss
-                             pyrite gaps forget kubernetes"""))
+                             pyrite gaps forget kubernetes"""), description="list the gaps that keep coming up in your applications' notes, or answer one (Guide: docs/commands.md)")
     p.add_argument("action", nargs="?", choices=("answer", "forget"), help="answer a gap, or ask about one again")
     p.add_argument("id", nargs="?", help="the gap's name, as `pyrite gaps` lists it")
     p.add_argument("--min", type=_whole_number(1), default=2, help="list gaps raised by at least this many applications (2)")
@@ -1294,11 +1294,11 @@ def build_parser() -> argparse.ArgumentParser:
     _json_flag(p)
     p.set_defaults(func=cmd_gaps)
 
-    p = sub.add_parser("usage", help="show what the Claude runs started from here have used")
+    p = sub.add_parser("usage", help="show what the Claude runs started from here have used", description='show what the Claude runs started from here have used (Guide: docs/schedule.md)')
     _json_flag(p)
     p.set_defaults(func=cmd_usage)
-    sub.add_parser("sweep", help="read the job boards, then check mail for replies").set_defaults(func=cmd_sweep)
-    sub.add_parser("run", help="judge new postings and tailor the best, with Claude given no shell").set_defaults(func=cmd_run)
+    sub.add_parser('sweep', help='read the job boards, then check mail for replies', formatter_class=argparse.RawDescriptionHelpFormatter, description='read the job boards, then check mail for replies\nChanges: updates job postings, source status, and mail-check records.\nNeeds: a workspace and configured sources.\nGuide: docs/commands.md.').set_defaults(func=cmd_sweep)
+    sub.add_parser('run', help='judge new postings and tailor the best, with Claude given no shell', formatter_class=argparse.RawDescriptionHelpFormatter, description='judge new postings and tailor the best, with Claude given no shell\nChanges: updates job scores/statuses/folders, draft files, and task records.\nNeeds: a workspace and Claude CLI.\nGuide: docs/commands.md.').set_defaults(func=cmd_run)
 
     # No help, so it isn't listed: argparse prints help=SUPPRESS on a subcommand as the text "==SUPPRESS==".
     p = sub.add_parser("task")
@@ -1306,38 +1306,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_task)
 
-    p = sub.add_parser("check", help="run the assay, the fact checker, on any folder")
+    p = sub.add_parser('check', help='run the assay, the fact checker, on any folder', formatter_class=argparse.RawDescriptionHelpFormatter, description='run the assay, the fact checker, on any folder\nChanges: read-only check; does not modify files or database.\nNeeds: a target folder path and workspace config.\nGuide: README.md.')
     p.add_argument("folder")
     p.add_argument("--company", default="")
     p.add_argument("--title", default="")
     _json_flag(p)
     p.set_defaults(func=cmd_check)
 
-    p = sub.add_parser("fill", help="write a job's Workday fill sheet: the paste sheet with this application's tailored role text")
+    p = sub.add_parser("fill", help="write a job's Workday fill sheet: the paste sheet with this application's tailored role text", description="write a job's Workday fill sheet: the paste sheet with this application's tailored role text (Guide: docs/applying.md)")
     p.add_argument("job", help="a job id, or the path of an application folder")
     _json_flag(p)
     p.set_defaults(func=cmd_fill)
 
     p = sub.add_parser("autofill", help="experimental, off unless [workday] autofill = true: type a job's fill sheet into its "
-                                        "Workday form in a browser you sign in to; stops before Submit")
+                                        "Workday form in a browser you sign in to; stops before Submit", description="experimental, off unless [workday] autofill = true: type a job's fill sheet into its Workday form in a browser you sign in to; stops before Submit (Guide: docs/applying.md)")
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--url", default="", help="the apply page, when the job's link isn't it")
     p.add_argument("--no-pause", action="store_true", help="don't wait for a look at each page before it's saved")
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_autofill)
 
-    p = sub.add_parser("sent", help="keep a read-only copy of what was sent for a job you've applied to, if none exists yet")
+    p = sub.add_parser("sent", help="keep a read-only copy of what was sent for a job you've applied to, if none exists yet", description="keep a read-only copy of what was sent for a job you've applied to, if none exists yet (Guide: docs/applying.md)")
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--from", dest="source", default="", help="a subfolder of the job's folder to copy from, for applications made before this existed")
     p.set_defaults(func=cmd_sent)
 
-    p = sub.add_parser("status", help="move a job to a status. Ready and needs_fix come only from `finish`")
+    p = sub.add_parser("status", help="move a job to a status. Ready and needs_fix come only from `finish`", description='move a job to a status. Ready and needs_fix come only from `finish` (Guide: docs/commands.md)')
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("status", choices=[status for status in STATUSES if status not in store.CHECKER_ONLY])
     p.add_argument("--note", default="")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("outreach", help="log reaching out about an application you've sent, such as a note to the hiring manager")
+    p = sub.add_parser("outreach", help="log reaching out about an application you've sent, such as a note to the hiring manager", description="log reaching out about an application you've sent, such as a note to the hiring manager (Guide: docs/applying.md)")
     p.add_argument("id", type=int, help=JOB_ID)
     p.add_argument("--on", default="", help="the day, as YYYY-MM-DD (today if left out)")
     p.add_argument("--to", default="", help="who, such as \"the hiring manager\" (optional)")
@@ -1347,7 +1347,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("add", help="add a posting by hand", formatter_class=argparse.RawDescriptionHelpFormatter,
                        epilog='for example:\n  pyrite add --company "Acme Robotics" --title "Firmware Engineer" '
                               '--url https://example.com/jobs/1\n\nWith --url and no --description-file, the posting\'s text, and its '
-                              'location if you gave none, are read from the link.')
+                              'location if you gave none, are read from the link.', description='add a posting by hand (Guide: docs/prospects.md)')
     p.add_argument("--company", required=True, help="the employer, in quotes if it has a space")
     p.add_argument("--title", required=True, help="the job title, in quotes if it has a space")
     p.add_argument("--url", default="", help="the posting's web address")
@@ -1355,23 +1355,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--description-file", help="a text file holding the posting, which the assay and tailoring read, for a link that can't be read")
     p.set_defaults(func=cmd_add)
 
-    p = sub.add_parser("brief", help="save the morning briefing")
+    p = sub.add_parser("brief", help="save the morning briefing", description='save the morning briefing (Guide: docs/schedule.md)')
     p.add_argument("text", help="the briefing, or - to read stdin")
     p.set_defaults(func=cmd_brief)
 
-    p = sub.add_parser("serve", help="run the dashboard")
+    p = sub.add_parser("serve", help="run the dashboard", description='run the dashboard (Guide: docs/dashboard.md)')
     p.add_argument("--port", type=PORT, help="the port to listen on, instead of port under [dashboard] in search.toml (8787 if unset)")
     p.set_defaults(func=cmd_serve)
 
-    p = sub.add_parser("open", help="open the dashboard in your browser, starting it if it isn't running and replacing it if it has hung")
+    p = sub.add_parser("open", help="open the dashboard in your browser, starting it if it isn't running and replacing it if it has hung", description="open the dashboard in your browser, starting it if it isn't running and replacing it if it has hung (Guide: docs/dashboard.md)")
     p.add_argument("--port", type=PORT, help="the port it runs on, instead of port under [dashboard] in search.toml (8787 if unset)")
     p.set_defaults(func=cmd_open)
 
-    sub.add_parser("seed", help="import applications listed in profile/seed.toml").set_defaults(func=cmd_seed)
-    sub.add_parser("where", help="print which workspace is in use").set_defaults(func=cmd_where)
-    sub.add_parser("code", help="show the code the dashboard is asking for, if its notification didn't show").set_defaults(func=cmd_code)
+    sub.add_parser('seed', help='import applications listed in profile/seed.toml', formatter_class=argparse.RawDescriptionHelpFormatter, description='import applications listed in profile/seed.toml\nChanges: imports prior applications, folders/files, and status events.\nNeeds: a workspace and profile/seed.toml.\nGuide: docs/setup.md.').set_defaults(func=cmd_seed)
+    sub.add_parser("where", help="print which workspace is in use", description='print which workspace is in use (Guide: docs/setup.md)').set_defaults(func=cmd_where)
+    sub.add_parser("code", help="show the code the dashboard is asking for, if its notification didn't show", description="show the code the dashboard is asking for, if its notification didn't show (Guide: docs/profile.md)").set_defaults(func=cmd_code)
 
-    p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it")
+    p = sub.add_parser("init", help="make a new workspace from the example's profile, and point Pyrite at it", description="make a new workspace from the example's profile, and point Pyrite at it (Guide: docs/setup.md)")
     p.add_argument("folder", help="where your workspace goes, outside this repository")
     p.add_argument("--name", default="", help='required: your name, as it goes on your documents, in quotes: --name "Sam Doe"')
     p.add_argument("--blank", action="store_true", help="write the profile files with headings and comments on what goes where, "
@@ -1380,19 +1380,19 @@ def build_parser() -> argparse.ArgumentParser:
                                                       "Never adds a remote. On the workspace in use, does only this")
     p.set_defaults(func=cmd_init)
     p = sub.add_parser("import-resume", help="draft your master resume in Pyrite's form from a .docx, .pdf or .txt resume, "
-                                             "for you to correct. Prints it unless you --save it")
+                                             "for you to correct. Prints it unless you --save it", description="draft your master resume in Pyrite's form from a .docx, .pdf or .txt resume, for you to correct. Prints it unless you --save it (Guide: docs/documents.md)")
     p.add_argument("file", help="your resume as it is now")
     p.add_argument("--save", action="store_true", help="write it to profile/resume.md, keeping the old copy in the Profile "
                                                        "tab's History so Put back can restore it")
     p.set_defaults(func=cmd_import_resume)
-    sub.add_parser("doctor",help="list what's left to set up in your workspace, and which programs are missing").set_defaults(func=cmd_doctor)
+    sub.add_parser('doctor', help="list what's left to set up in your workspace, and which programs are missing", formatter_class=argparse.RawDescriptionHelpFormatter, description="list what's left to set up in your workspace, and which programs are missing\nChanges: read-only check; prints setup items and tool status.\nNeeds: a workspace path.\nGuide: docs/setup.md.").set_defaults(func=cmd_doctor)
 
-    p = sub.add_parser("demo", help="serve the fictional example, without touching your own data")
+    p = sub.add_parser("demo", help="serve the fictional example, without touching your own data", description='serve the fictional example, without touching your own data (Guide: README.md)')
     # Checked here, before the demo reloads the example's database for a server that couldn't start.
     p.add_argument("--port", type=PORT, default=8788)
     p.set_defaults(func=cmd_demo)
 
-    p = sub.add_parser("help", help="explain one command, or list them all")
+    p = sub.add_parser("help", help="explain one command, or list them all", description='explain one command, or list them all (Guide: docs/commands.md)')
     p.add_argument("topic", nargs="?", help="the command to explain")
     p.set_defaults(func=lambda args: _help(parser, sub, args.topic))
     return parser
