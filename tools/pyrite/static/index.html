@@ -99,6 +99,20 @@
       </select>
       <span id="radar-count" class="muted"></span>
     </div>
+    <!-- Limits that hide postings below a bar you set. They never drop a posting: Show the filtered out lists what they
+         hide, each with why. Kept in this browser, as the filters above are. -->
+    <details id="radar-limits" class="radar-limits">
+      <summary>Filters<span id="radar-limits-on" class="muted"></span></summary>
+      <div class="limits-row">
+        <label>Score at least <input id="radar-min-score" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="Any"></label>
+        <label>Priority at least <input id="radar-min-priority" type="number" step="1" inputmode="numeric" placeholder="Any"></label>
+        <label>Pay at least <input id="radar-min-pay" type="text" inputmode="decimal" maxlength="20" placeholder="e.g. 120k" spellcheck="false"></label>
+        <label class="limits-places">Hide places <input id="radar-hide-places" type="text" maxlength="500" placeholder="e.g. Texas, Seattle, Remote - Canada" spellcheck="false"></label>
+        <button id="radar-limits-clear" class="btn small" type="button">Clear</button>
+      </div>
+      <p class="muted limits-help">Pay compares the top of a posting's range, as a year's pay, so a range that reaches your number stays. A posting with no pay stated is kept. Hide places takes names separated by commas, each matched as whole words, and hides a posting only when every place it lists matches one. A posting with no place stated is kept.</p>
+      <p id="radar-pay-error" class="error" role="alert"></p>
+    </details>
     <p class="muted radar-note">Priority is the score, plus points for a recent posting and for a preferred city or industry, minus a penalty for each repost. Repost counts begin with the first pan.</p>
     <div class="table-wrap"><table id="radar" class="grid"></table></div>
   </section>

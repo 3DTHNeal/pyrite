@@ -44,6 +44,7 @@ from . import (
     options,
     outcomes,
     outlook,
+    pay,
     prep,
     profile,
     refresh,
@@ -658,6 +659,8 @@ def build_state(conn, cfg) -> dict[str, Any]:
         "last_run": last_run,
         "briefing": briefing,
         "before_send": cfg.get("dashboard", {}).get("before_send", []),
+        # The currency [pay] compares ranges in, so the Prospects tab's lowest pay leaves another currency's alone.
+        "pay_currency": pay.settings(cfg)["currency"],
         "usage": claude_code.usage(conn),
         "tasks": tasks.latest(conn),
         # Runs this workspace can't start at all yet, with why, so their buttons say so instead of being pressed.

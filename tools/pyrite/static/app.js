@@ -699,9 +699,14 @@ const RADAR_SHOWS = {
   "no-ghost": (j) => !j.ghost_risk && !j.unconfirmed && !(j.scam_signs || []).length,
 };
 
+// The Prospects filters that set a bar a posting has to clear. They hide, never drop: Show the filtered out lists
+// what they leave out, each with why.
+const RADAR_LIMITS = ["radar-min-score", "radar-min-priority", "radar-min-pay", "radar-hide-places"];
 // The Prospects filters you last used, kept in this browser only. Storage can be switched off, so a failed read or write is ignored.
-const RADAR_FILTERS = ["radar-track", "radar-place", "radar-show", "radar-sort"];
+const RADAR_FILTERS = ["radar-track", "radar-place", "radar-show", "radar-sort", ...RADAR_LIMITS];
 const RADAR_STORE = "pyrite.radar-filters";
+// Whether the table lists the postings the limits hide, in place of the ones they let through. Never remembered.
+let radarOut = false;
 
 function restoreRadarFilters() {
   let saved = {};
@@ -715,8 +720,83 @@ function restoreRadarFilters() {
     if (typeof value !== "string") continue;
     // The track list is built from the jobs, so it has no options until the first render, which picks this up.
     if (id === "radar-track") $(id).dataset.saved = value;
+    else if ($(id).tagName !== "SELECT") $(id).value = value;
     else if ([...$(id).options].some((o) => o.value === value)) $(id).value = value;
   }
+}
+
+// A figure as the Pay at least box takes it: "120k", "$120,000" or "1.2M", and a bare number under 1,000 as thousands,
+// since nobody means a year's pay of $120. Null for an empty box and NaN for one that isn't a figure.
+function payFigure(text) {
+  const plain = text.replace(/[$€£,\s]/g, "");
+  if (!plain) return null;
+  const found = plain.match(/^(\d+(?:\.\d+)?)([kKmM]?)$/);
+  if (!found) return NaN;
+  const value = Number(found[1]) * ({ k: 1e3, m: 1e6 }[found[2].toLowerCase()] || 1);
+  if (!value) return null;  // Nothing pays under nothing, so 0 sets no bar.
+  return found[2] || value >= 1000 ? value : value * 1e3;
+}
+
+const wholeNumber = (id) => ($(id).value.trim() === "" || !Number.isFinite(Number($(id).value)) ? null : Math.round(Number($(id).value)));
+// The places a posting lists, as shortPlace splits them.
+const placesOf = (location) => (location || "").split(/\s*[|;]\s*/).filter(Boolean);
+// A year's pay in the currency [pay] compares in, as $120k or €1.2M.
+function briefPay(n) {
+  const code = state.pay_currency || "USD";
+  const sign = { USD: "$", EUR: "€", GBP: "£" }[code] || `${code} `;
+  return n >= 1e6 ? `${sign}${+(n / 1e6).toFixed(1)}M` : `${sign}${+(n / 1e3).toFixed(1)}k`;
+}
+
+// The limits as the boxes set them, each null while its box is empty.
+function radarLimits() {
+  const pay = payFigure($("radar-min-pay").value);
+  $("radar-pay-error").textContent = Number.isNaN(pay) ? "Pay at least takes a figure, such as 120k or 120,000." : "";
+  const places = $("radar-hide-places").value.split(",").map((name) => name.trim()).filter(Boolean)
+    .map((name) => ({ name, test: new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(name).replace(/\s+/g, "\\s*")}(?![\\p{L}\\p{N}])`, "iu") }));
+  return { score: wholeNumber("radar-min-score"), priority: wholeNumber("radar-min-priority"),
+    pay: Number.isNaN(pay) ? null : pay, places };
+}
+
+// Each limit that hides a posting, as a short label and the sentence its tooltip gives. None when it clears them all.
+function limitReasons(job, limits) {
+  const why = [];
+  if (limits.score !== null && (job.score || 0) < limits.score) {
+    why.push({ label: `Score under ${limits.score}`, detail: `Its score is ${job.score || 0}, under the ${limits.score} you set.` });
+  }
+  if (limits.priority !== null && job.rank < limits.priority) {
+    why.push({ label: `Priority under ${limits.priority}`, detail: `Its priority is ${job.rank}, under the ${limits.priority} you set.` });
+  }
+  // Only a range in the currency [pay] compares in. One in another currency, or none at all, says nothing about this.
+  if (limits.pay !== null && job.pay_high && job.pay_currency === state.pay_currency && job.pay_high < limits.pay) {
+    why.push({ label: `Pay under ${briefPay(limits.pay)}`,
+      detail: `Even the top of its range, ${briefPay(job.pay_high)} a year, is under the ${briefPay(limits.pay)} you set.` });
+  }
+  const places = placesOf(job.location);
+  const hits = places.map((place) => limits.places.find((p) => p.test.test(place)));
+  if (places.length && hits.every(Boolean)) {
+    const names = [...new Set(hits.map((p) => p.name))];
+    why.push({ label: `In ${listed(names)}`, detail: `Every place it lists is one you hide: ${places.join("; ")}.` });
+  }
+  return why;
+}
+
+// The limits that are set, in a few words, for the Filters heading and the count line.
+function limitsSet(limits) {
+  return [limits.score !== null ? `score ${limits.score}+` : "", limits.priority !== null ? `priority ${limits.priority}+` : "",
+    limits.pay !== null ? `pay ${briefPay(limits.pay)}+` : "",
+    limits.places.length ? `hiding ${listed(limits.places.map((p) => p.name))}` : ""].filter(Boolean);
+}
+
+function clearRadarLimits() {
+  RADAR_LIMITS.forEach((id) => { $(id).value = ""; });
+  radarOut = false;
+  saveRadarFilters();
+  renderRadar();
+}
+
+function showFilteredOut(on) {
+  radarOut = on;
+  renderRadar();
 }
 
 function saveRadarFilters() {
@@ -747,22 +827,38 @@ function renderRadar() {
   const query = $("radar-search").value.trim().toLowerCase();
   const place = $("radar-place").value;
   const prospects = state.jobs.filter((j) => j.status === "new");
-  const rows = prospects.filter((j) => (!query || `${j.company} ${j.title} ${j.location || ""}`.toLowerCase().includes(query))
+  const narrowed = prospects.filter((j) => (!query || `${j.company} ${j.title} ${j.location || ""}`.toLowerCase().includes(query))
     && (!trackSel.value || j.track === trackSel.value)
     && (!place || j.location_kind === place)
-    && RADAR_SHOWS[$("radar-show").value](j))
-    .sort(RADAR_SORTS[$("radar-sort").value]);
+    && RADAR_SHOWS[$("radar-show").value](j));
+  // The limits split what the filters above leave into what they let through and what they hide, with why.
+  const limits = radarLimits();
+  const set = limitsSet(limits);
+  const why = new Map(narrowed.map((j) => [j.id, limitReasons(j, limits)]));
+  const out = narrowed.filter((j) => why.get(j.id).length);
+  if (!out.length) radarOut = false;
+  const rows = narrowed.filter((j) => radarOut === Boolean(why.get(j.id).length)).sort(RADAR_SORTS[$("radar-sort").value]);
   const shown = rows.slice(0, 300);
   const ids = shown.map((j) => j.id);
   const unseen = prospects.filter((j) => !j.seen).length;
   // A remembered filter outlives the visit that set it, so the count says when one is hiding postings, and which.
   const narrowing = RADAR_NARROWING.filter(([id]) => $(id).value.trim());
   RADAR_NARROWING.forEach(([id]) => $(id).classList.toggle("filtered", Boolean($(id).value.trim())));
+  RADAR_LIMITS.forEach((id) => $(id).classList.toggle("filtered", Boolean($(id).value.trim())));
+  $("radar-limits").classList.toggle("filtered", set.length > 0);
+  $("radar-limits-on").textContent = set.length ? `: ${set.join(", ")}` : "";
   const total = rows.length < prospects.length ? `${rows.length} of ${plural(prospects.length, "posting")}` : plural(rows.length, "posting");
   const count = rows.length > shown.length ? `Showing ${shown.length} of ${total}` : total;
   const by = narrowing.length ? `, filtered by ${listed(narrowing.map(([, name]) => name))}` : "";
-  fill($("radar-count"), `${count}${by}.${unseen ? ` ${unseen} not looked at yet.` : ""}`,
-    narrowing.length ? [" ", h("button", { class: "btn small", type: "button", onclick: showAllProspects }, "Show all")] : null);
+  const small = (label, onclick) => h("button", { class: "btn small", type: "button", onclick }, label);
+  const showAll = narrowing.length ? [" ", small("Show all", showAllProspects)] : null;
+  if (radarOut) {
+    fill($("radar-count"), `${count}${by}, hidden by your filters (${set.join(", ")}).`, " ", small("Back to the rest", () => showFilteredOut(false)), showAll);
+  } else {
+    const hidden = out.length ? ` ${out.length} more filtered out.` : "";
+    fill($("radar-count"), `${count}${by}.${hidden}${unseen ? ` ${unseen} not looked at yet.` : ""}`,
+      out.length ? [" ", small("Show the filtered out", () => showFilteredOut(true))] : null, showAll);
+  }
   // Tailor and Pass act straight from the row, so a quick no never needs the panel.
   const quick = (j, label, action, cls) => h("button", { class: cls, type: "button",
     onclick: (e) => {
@@ -786,9 +882,10 @@ function renderRadar() {
       h("td", {}, j.track),
       payCell(j.comp),
       h("td", { class: "nowrap", title: shortDate(j.first_posted_at || j.posted_at) }, daysAgo(j.age_days) || "Unknown"),
-      h("td", {}, h("span", { class: "signals" }, urgentPills(j), freshnessPills(j))),
+      // What hid it comes first, since that's what the filtered-out list is for.
+      h("td", {}, h("span", { class: "signals" }, why.get(j.id).map((w) => pill("warn", w.label, w.detail)), urgentPills(j), freshnessPills(j))),
       h("td", { class: "row-actions" }, quick(j, "Tailor", "tailor_next", "btn small"), quick(j, "Pass", "pass", "btn small"))))
-      : h("tr", {}, emptyState("pan", "No prospects match.", "td", { colspan: 10 }))));
+      : h("tr", {}, emptyState("pan", out.length ? "Your filters hide every posting here." : "No prospects match.", "td", { colspan: 10 }))));
 }
 
 // Compact where it can be read, and as the posting wrote it in the tooltip either way.
@@ -800,7 +897,7 @@ function payCell(comp) {
 // A posting can list dozens of places. Show the first few and keep the rest in the tooltip.
 function shortPlace(location) {
   if (!location) return "Not stated";
-  const places = [...new Set(location.split(/\s*[|;]\s*/).filter(Boolean))];
+  const places = [...new Set(placesOf(location))];
   if (places.length <= 3) return places.join(" | ");
   return `${places.slice(0, 3).join(" | ")} and ${places.length - 3} more`;
 }
@@ -2997,6 +3094,7 @@ window.addEventListener("beforeunload", (e) => { if (dirtyParts.size || factsOpe
 $("radar-search").addEventListener("input", renderRadar);
 ["archive-search", "archive-outcome"].forEach((id) => $(id).addEventListener("input", renderArchive));
 RADAR_FILTERS.forEach((id) => $(id).addEventListener("input", () => { saveRadarFilters(); renderRadar(); }));
+$("radar-limits-clear").addEventListener("click", clearRadarLimits);
 $("scrim").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => {
   // Go to opens from anywhere, a box you're typing in included, but never over another dialog.
