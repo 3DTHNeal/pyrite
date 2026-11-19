@@ -616,9 +616,15 @@ def tool_calls(output: str) -> list[tuple[str, str]]:
 
     What a tool returned is what the run actually saw, so code can check a run's answer against it rather than take
     the answer's word for it."""
+    return [(name, result) for name, _, result in tool_uses(output)]
+
+
+def tool_uses(output: str) -> list[tuple[str, dict[str, Any], str]]:
+    """Each tool a stream-json run called, in order, as its name, what it was asked ({} when that isn't an object) and
+    the text of what came back. What it was asked says which message a mail reader's result is the text of."""
     events, _ = _events(output)
     calls: dict[str, int] = {}
-    found: list[tuple[str, str]] = []
+    found: list[tuple[str, dict[str, Any], str]] = []
     for event in events:
         message = event.get("message")
         content = message.get("content") if isinstance(message, dict) else None
@@ -627,10 +633,11 @@ def tool_calls(output: str) -> list[tuple[str, str]]:
                 continue
             if part.get("type") == "tool_use":
                 calls[str(part.get("id"))] = len(found)
-                found.append((str(part.get("name") or ""), ""))
+                asked = part.get("input")
+                found.append((str(part.get("name") or ""), asked if isinstance(asked, dict) else {}, ""))
             elif part.get("type") == "tool_result" and str(part.get("tool_use_id")) in calls:
                 at = calls[str(part.get("tool_use_id"))]
-                found[at] = (found[at][0], _result_text(part.get("content")))
+                found[at] = (found[at][0], found[at][1], _result_text(part.get("content")))
     return found
 
 
