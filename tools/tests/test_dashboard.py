@@ -99,6 +99,17 @@ class Dashboard(Base):
         self.assertEqual([o["text"] for o in state["orders"] if o["kind"] == "New listing"], ["Acme: New"])
         self.assertEqual(sorted((j["title"] for j in state["jobs"]), key=lambda t: -next(j["rank"] for j in state["jobs"] if j["title"] == t)), ["New", "Back", "Old"])
 
+    def test_the_prospects_pay_filter_gets_each_range_as_a_year_and_the_currency_to_compare_in(self):
+        self.add(source_id="hourly", comp="$60 - $70 an hour")
+        self.add(source_id="euro", comp="€90,000 - €110,000")
+        self.add(source_id="none")
+        state = server.build_state(self.conn, CFG)
+        self.assertEqual(state["pay_currency"], "USD")
+        pay = {j["source_id"]: (j["pay_high"], j["pay_currency"]) for j in state["jobs"]}
+        self.assertEqual(pay, {"hourly": (145600, "USD"), "euro": (110000, "EUR"), "none": (None, None)})
+        # [pay] currency is the one the Prospects tab compares Pay at least in. Another currency's ranges are left alone.
+        self.assertEqual(server.build_state(self.conn, {**CFG, "pay": {"currency": "eur"}})["pay_currency"], "EUR")
+
     def test_a_long_fit_reason_is_kept_whole_and_shortened_on_the_to_do_list(self):
         reason = "Strong on firmware and fleet tooling. " * 10 + "The gap: your record shows program rather than product management."
         job = self.add(status="ready", fit="stretch", fit_reason=reason)

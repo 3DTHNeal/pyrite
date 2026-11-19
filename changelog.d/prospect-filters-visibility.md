@@ -1,0 +1,3 @@
+### Added
+
+- **Filters** on the Prospects tab hide postings under a bar you set: a lowest score, a lowest priority, a lowest pay, and places to hide. Pay compares the top of a range as a year's pay, in the currency `[pay]` uses, and keeps a posting with no pay stated. Hide places takes names separated by commas, matched as whole words, and hides a posting only when every place it lists is one of them. They hide and never drop, and the count line says how many they leave out: **Show the filtered out** lists those, each tagged with what hid it. They're kept in this browser, as the other Prospects filters are.
