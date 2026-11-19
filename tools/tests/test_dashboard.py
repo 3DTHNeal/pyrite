@@ -830,6 +830,65 @@ class Demo(Base):
         load.assert_not_called()
 
 
+# For each Prospects row: the cells that run under its Tailor and Pass, which are pinned to the frame's right edge, and
+# the signals it shows, wherever they sit.
+UNDER_THE_BUTTONS = """() => {
+  const table = document.getElementById("radar");
+  const head = [...table.tHead.rows[0].cells];
+  const covered = [], signals = {};
+  for (const row of table.querySelectorAll("tbody tr[data-id]")) {
+    const pinned = row.querySelector(".row-actions").getBoundingClientRect();
+    [...row.cells].forEach((cell, i) => {
+      if (cell.classList.contains("row-actions") || !cell.getClientRects().length) return;
+      if (cell.getBoundingClientRect().right > pinned.left + 0.5) covered.push(`${row.dataset.id} ${head[i].textContent}`);
+    });
+    signals[row.dataset.id] = [...row.querySelectorAll(".pill")].filter((p) => p.getClientRects().length)
+      .map((p) => p.textContent).sort();
+  }
+  return { covered, signals };
+}"""
+
+
+class ProspectsInALaptopWindow(Base):
+    """Prospects pins Tailor and Pass to its frame's right edge. In a laptop's window, or a browser on half a wide
+    screen, the table folds columns in under the title rather than run under those buttons, and keeps every signal."""
+
+    def test_nothing_a_row_needs_sits_under_the_pinned_buttons(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright isn't installed")
+        demo.load(self.conn, CFG)
+        self.conn.commit()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        # The page asks whether there's an update as it opens, which would have the server fetch from GitHub.
+        quiet = mock.patch.object(server, "update_state", return_value={"available": False, "off": True})
+        try:
+            with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), quiet, sync_playwright() as pw:
+                if not Path(pw.chromium.executable_path).exists():
+                    self.skipTest("Playwright's Chromium isn't installed")
+                browser = pw.chromium.launch(headless=True)
+                try:
+                    seen = {}
+                    for width in (1440, 1280, 1024, 960):
+                        page = browser.new_page(viewport={"width": width, "height": 800})
+                        page.goto(f"http://127.0.0.1:{httpd.server_address[1]}/#radar")
+                        page.wait_for_selector("#radar tbody tr[data-id]")
+                        seen[width] = page.evaluate(UNDER_THE_BUTTONS)
+                        page.close()
+                finally:
+                    browser.close()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        self.assertTrue(any(seen[1440]["signals"].values()), "the demo's prospects show no signals to keep in view")
+        for width, found in seen.items():
+            with self.subTest(width=width):
+                self.assertEqual(found["covered"], [])
+                self.assertEqual(found["signals"], seen[1440]["signals"])
+
+
 class ReopenNeverSkipsTheAssay(Base):
     """Only the assay makes a draft ready. Reopening a closed job puts back what its last verdict supports, nothing more."""
 
