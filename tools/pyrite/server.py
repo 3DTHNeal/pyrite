@@ -554,6 +554,26 @@ def _setup_orders(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             for todo in doctor.workspace_todos(ROOT, cfg)]
 
 
+def _nothing_kept_order(jobs: list[dict[str, Any]], last_run: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """A to-do item for a search that has never kept a posting though the boards list some, with why they're left out.
+    "0 new" alone reads the same as a quiet day, and this is the day it matters most: the first check of a new
+    workspace, when a title, a place or a limit that's a little off leaves out everything. Once a board's posting has
+    been kept, a check that finds nothing new is an ordinary one, and this never shows again."""
+    if IS_EXAMPLE or not last_run or not last_run.get("left_out"):
+        return []
+    if any(job["source_key"] not in ("manual", "seed") for job in jobs):
+        return []
+    # The section that changes the reason most of them share.
+    reasons = last_run["stats"]["left_out"]
+    most = max(reasons, key=lambda reason: reasons[reason])
+    return [{"rank": 0, "kind": "Finish setup", "job_id": None,
+             "text": f"Your search keeps none of the {last_run['stats']['postings']:,} postings the boards list. It leaves "
+                     f"out {last_run['left_out_why']}.",
+             "detail": "Try a title under Roles you want, and Test a location under Where you'll work, each say why a "
+                       "posting would be kept or left out.",
+             "tab": "profile/where" if most == "location" else "profile/roles"}]
+
+
 def build_state(conn, cfg) -> dict[str, Any]:
     today = date.today().isoformat()
     rows = conn.execute("SELECT * FROM jobs ORDER BY score DESC, first_seen DESC").fetchall()
@@ -642,8 +662,16 @@ def build_state(conn, cfg) -> dict[str, Any]:
     watched = {f"{kind}:{ident}" for kind, ident, _ in discover._watchlist(cfg)}
     source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")
                    if IS_EXAMPLE or r["source_key"] in watched or r["source_key"].startswith("inbox:")]
-    orders = (_setup_orders(cfg) + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg),
-                                           bool(cfg.get("dashboard", {}).get("reach_out", True)))
+    # How many of each board's postings the filters leave out, and why in words, in place of the JSON it's kept as.
+    for source in source_rows:
+        out = discover.left_out(source)
+        source.update(left_out=sum(out.values()), left_out_why=words.left_out(out))
+    if last_run:
+        out = last_run["stats"].get("left_out") or {}  # A check from before these were counted has none.
+        last_run = {**last_run, "left_out": sum(out.values()), "left_out_why": words.left_out(out)}
+    orders = (_setup_orders(cfg) + _nothing_kept_order(jobs, last_run)
+              + _orders(jobs, cfg["run"].get("fix_attempts", DEFAULT_FIX_ATTEMPTS), alerts, ghost_after_days(cfg),
+                        bool(cfg.get("dashboard", {}).get("reach_out", True)))
               + _gaps_order(gaps.view(conn, ROOT)))
     return {
         "jobs": jobs,

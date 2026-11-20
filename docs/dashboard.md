@@ -13,7 +13,7 @@ port = 8790
 
 A rail down the left names every view: **To do** first, then **Pipeline** with each of its stages under it, **Prospects**, **Closed** and **Industries**, then the **Setup** views, **Profile**, **Facts**, **Sources** and **Settings**. Each shows a count where one helps, such as how many things need you beside To do, and a stage under Pipeline opens the board at its column. To do also has the key numbers on one line beside its name, each with its detail in a tooltip. On a narrow screen the rail becomes a strip of views across the top. When a window is too narrow for every column, Prospects moves Track, then Signals, then Posted under each title, as many as it takes to fit, so the Tailor and Pass buttons at the right never cover them.
 
-The bar along the top holds one line of status, **Go to**, **Add a posting**, and **Update available** when there is one. The status line says what's running, or when the boards were last read and how many problems there are, such as a failing source or a run that failed. When the page loads, it shows at once what it showed last time in this browser, and the status line says **Loading the latest** and how old that copy is, until the dashboard has worked out the page anew. That takes a few seconds after a restart. The copy is kept in the browser's storage for the dashboard's address, and clearing that site's data removes it. Click it for the whole story and the two run buttons. It names each failing source, up to three, with what went wrong, and **Open Sources** goes to the rest.
+The bar along the top holds one line of status, **Go to**, **Add a posting**, and **Update available** when there is one. The status line says what's running, or when the boards were last read and how many problems there are, such as a failing source or a run that failed. When the page loads, it shows at once what it showed last time in this browser, and the status line says **Loading the latest** and how old that copy is, until the dashboard has worked out the page anew. That takes a few seconds after a restart. The copy is kept in the browser's storage for the dashboard's address, and clearing that site's data removes it. Click it for the whole story and the two run buttons. It names each failing source, up to three, with what went wrong, and **Open Sources** goes to the rest. It also says how many of the postings the boards list your filters leave out, and why, such as *1,100 by title, 60 by location and 20 below the score floor*, since "0 new" alone reads the same on a quiet day as when every title misses your role types. The Sources tab says the same for each board, in plain text rather than grey when a board's postings are all left out.
 
 **Go to**, a magnifier on a narrower screen, or Ctrl+K (⌘K on a Mac) from anywhere, finds a job, a view, a section of Profile or Settings, or one of the top bar's actions by a few letters of its name, and goes there. Each word you type has to start a word of the name, or of where it is: `firm` finds every firmware job, `cit ind` finds Settings › Cities and industries, and a stage or status such as `applied` finds the jobs at it. Jobs most worth your time come first. With nothing typed, it lists the views, sections and actions. A run that can't start now, such as in the demo, isn't offered.
 
@@ -28,7 +28,7 @@ The dashboard labels its parts in plain words. The code and these docs sometimes
 | Ready to send | Nuggets | Drafts that passed the assay and are ready to send |
 | Prospects | | New postings you haven't judged yet |
 | Closed | Tailings | Jobs that are closed out: passed, rejected, ghosted or taken down. Each shows when it closed and the note you gave then, and the tab can be searched and filtered by outcome |
-| Sources | Veins | The job boards Pyrite reads, and whether each is working |
+| Sources | Veins | The job boards Pyrite reads, whether each is working, and how many of its postings your filters leave out |
 | Check boards now | Pan | Reading the boards and checking mail. The command is `pyrite sweep` |
 | Fact check | Assay | The checker that decides whether a draft is ready |
 
@@ -77,7 +77,7 @@ Each runs in the background, shows its progress in the status line while the cry
 
 | Item | When it shows |
 |---|---|
-| **Finish setup** | Something in your workspace is still the example's or blank, the same findings as `pyrite doctor` |
+| **Finish setup** | Something in your workspace is still the example's or blank, the same findings as `pyrite doctor`. Or the boards list postings and your search has never kept one, with why they're left out |
 | **Possible scam** | A posting you haven't sent has a scam's tells, or mail about hiring has them ([Reply detection](mail.md)) |
 | **Possible reply** | Mail that looks like a reply to an application, marked as a likely rejection or response, with **Read its text** to see its start. Only your buttons change its status |
 | **Act now** | You're interviewing or have an offer, and the date on its **Next step** has come |

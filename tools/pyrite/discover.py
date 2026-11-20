@@ -429,6 +429,9 @@ def run(conn, only: str | None = None, fresh: bool = False, cfg=None, max_minute
     deadline = time.monotonic() + max_minutes * 60
     stats = {"partial": bool(only), "sources": len(items), "failed": 0, "postings": 0, "new": 0,
              "rejected": {"title": 0, "location": 0, "score": 0, "not_open": 0, "scam": 0, "expired": 0},
+             # Of `postings`, how many the filters leave out, by reason: the ones under "rejected", which this check
+             # met for the first time, and the ones an earlier check left out and this one passed over.
+             "left_out": {},
              "closed": 0, "reposted": 0, "redated": 0, "new_ids": []}
     if rescored:
         stats["rescored"] = rescored
@@ -571,8 +574,39 @@ def _save_result(conn, result, cfg, started, stats):
         _ingest(conn, posting, cfg, stats, ts, key, started, baseline)
 
     _close_missing(conn, result, cfg, started, stats, ts)
-    conn.execute("UPDATE source_status SET tracked_since = COALESCE(tracked_since, ?) WHERE source_key = ?", (ts, key))
+    # Kept with the board for the Sources tab, and added up over the boards this check read for its own summary.
+    out, in_all = _left_out_of(conn, key, result["seen"]), stats.setdefault("left_out", {})
+    for reason, count in out.items():
+        in_all[reason] = in_all.get(reason, 0) + count
+    conn.execute("UPDATE source_status SET tracked_since = COALESCE(tracked_since, ?), left_out = ? WHERE source_key = ?",
+                 (ts, json.dumps(out, sort_keys=True), key))
     conn.commit()
+
+
+def _left_out_of(conn, key: str, seen) -> dict[str, int]:
+    """Of the postings a board lists now, how many the filters have left out, by reason. A check counts under
+    "rejected" only the postings it meets for the first time, and passes over one it left out before without reading
+    it again. So that count says little after the first check, and this is how the dashboard knows that 230 of a
+    board's 240 postings are left out for their titles."""
+    listed = {str(source_id) for source_id in seen}
+    counts: dict[str, int] = {}
+    for row in conn.execute("SELECT source_id, reason FROM rejected WHERE source_key = ?", (key,)):
+        if str(row["source_id"]) in listed:
+            reason = row["reason"] or "other"
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def left_out(row) -> dict[str, int]:
+    """A board's count of postings left out, by reason, from its row of source_status. Empty until a check has counted
+    them, as for a board last read by a version that didn't."""
+    try:
+        found = json.loads(row["left_out"] or "{}")
+    except (ValueError, TypeError, KeyError, IndexError):
+        return {}
+    if not isinstance(found, dict):
+        return {}
+    return {str(reason): count for reason, count in found.items() if isinstance(count, int) and count > 0}
 
 
 def _job_id_for_listing(conn, key: str, source_id: str) -> int | None:
