@@ -1062,6 +1062,13 @@ class RunsYouStart(Base):
         discover.run.assert_called_once()
         inbox.run.assert_called_once()
 
+    def test_a_sweep_says_what_the_filters_leave_out(self):
+        # "4 new" alone reads the same on a quiet day as when every title misses the role types.
+        self.stats["left_out"] = {"location": 60, "title": 1100}
+        self.assertTrue(tasks.run(self.conn, CFG, tasks.begin(self.conn, tasks.SWEEP)))
+        self.assertIn("4 new, 1 failing. Your filters leave out 1,160 of them: 1,100 by title and 60 by location. ",
+                      self.state(tasks.SWEEP)["detail"])
+
     def test_trouble_with_mail_never_fails_a_sweep(self):
         inbox.run.side_effect = OSError("no network")
         task = tasks.begin(self.conn, tasks.SWEEP)

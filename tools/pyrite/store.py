@@ -217,7 +217,8 @@ CREATE TABLE IF NOT EXISTS source_status (
     last_ok TEXT,
     last_error TEXT DEFAULT '',
     last_count INTEGER DEFAULT 0,
-    tracked_since TEXT
+    tracked_since TEXT,
+    left_out TEXT
 );
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY,
@@ -495,12 +496,13 @@ def _migrate(conn) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     task_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
     alert_columns = {row["name"] for row in conn.execute("PRAGMA table_info(mail_alerts)")}
+    source_columns = {row["name"] for row in conn.execute("PRAGMA table_info(source_status)")}
     # The sent copy's fingerprints, and the folder's as they were when you said its changes since were fine. Then a
     # failed run's problem in a form the dashboard can act on, and when you said it was yours. Then the start of a
-    # scam warning's text.
+    # scam warning's text. Then how many of a board's postings the filters leave out, by reason.
     for table, column, have in (("jobs", "sent_files", columns), ("jobs", "sent_ack", columns),
                                 ("tasks", "problem", task_columns), ("tasks", "cleared_at", task_columns),
-                                ("mail_alerts", "excerpt", alert_columns)):
+                                ("mail_alerts", "excerpt", alert_columns), ("source_status", "left_out", source_columns)):
         if column not in have:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")

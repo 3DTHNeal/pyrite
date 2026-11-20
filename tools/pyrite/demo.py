@@ -87,6 +87,14 @@ SOURCES = [
     ("workday:umbrella", "Umbrella Instruments", 0, "HTTPError: HTTP Error 503: Service Unavailable"),
     ("inbox:imap", "Email replies", 64, ""),
 ]
+# Of each board's postings, how many the fictional search leaves out, and why. Most of any board is other kinds of work.
+LEFT_OUT = {
+    "greenhouse:acme": {"title": 30, "location": 8},
+    "greenhouse:initech": {"title": 12, "location": 3, "score": 1},
+    "lever:stark": {"title": 71, "location": 20, "score": 2},
+    "ashby:cyberdyne": {"title": 42, "location": 11, "score": 1},
+    "workday:contoso": {"title": 146, "location": 46, "score": 3},
+}
 BRIEFING = (
     "Four new postings overnight. Two resumes are ready: send Initech Controls first, since it's local and matches "
     "your management years. The Globex draft is blocked by the assay and needs a rewrite. Umbrella Instruments' "
@@ -188,11 +196,16 @@ def load(conn, cfg: dict[str, Any]) -> str:
     now_stamp = _stamp(PAN_AGO)
     for key, company, count, error in SOURCES:
         conn.execute(
-            "INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count) VALUES (?, ?, ?, ?, ?, ?)",
-            (key, company, now_stamp, None if error else now_stamp, error, count),
+            "INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count, left_out) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (key, company, now_stamp, None if error else now_stamp, error, count, json.dumps(LEFT_OUT.get(key, {}))),
         )
+    left_out: dict[str, int] = {}
+    for counts in LEFT_OUT.values():
+        for reason, count in counts.items():
+            left_out[reason] = left_out.get(reason, 0) + count
     stats = {"partial": False, "sources": len(SOURCES) - 1, "failed": 1, "postings": sum(s[2] for s in SOURCES[:-1]),
-             "new": 4, "rejected": {"title": 301, "location": 88, "score": 7}, "closed": 0, "new_ids": []}
+             "new": 4, "rejected": {"title": 3, "location": 1}, "left_out": left_out, "closed": 0, "new_ids": []}
     conn.execute("INSERT INTO runs (started_at, finished_at, stats) VALUES (?, ?, ?)", (_stamp(PAN_AGO + 0.01), now_stamp, json.dumps(stats)))
     conn.execute("INSERT INTO briefings (ts, body) VALUES (?, ?)", (_stamp(0.1), BRIEFING))
     # Scored with the settings in search.toml now, as the pan that found them would have been.

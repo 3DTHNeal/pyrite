@@ -181,6 +181,25 @@ class Words(unittest.TestCase):
         self.assertEqual(len([line for line in said if line.startswith("New:")]), words.NAMED)
         self.assertEqual(said[-1], "And 2 more. `pyrite queue` lists what's waiting, best first.")
 
+    def test_what_the_filters_leave_out_is_said_most_first(self):
+        self.assertEqual(words.left_out({"location": 60, "title": 1100, "score": 20}),
+                         "1,100 by title, 60 by location and 20 below the score floor")
+        self.assertEqual(words.left_out({"scam": 1, "title": 1, "expired": 0}), "1 by title and 1 with a scam's tells")
+        self.assertEqual(words.left_out({"not_open": 2}), "2 not openings")
+        self.assertEqual(words.left_out({"something new": 3}), "3 for another reason")
+        self.assertEqual(words.left_out({}), "")
+
+    def test_a_later_pan_says_what_is_left_out_in_all(self):
+        # A pan counts as filtered out only what it met for the first time, which after the first pan is next to nothing.
+        stats = {"partial": False, "sources": 2, "failed": 0, "postings": 675, "new": 0, "rejected": {"title": 2},
+                 "left_out": {"title": 588, "location": 80}}
+        self.assertEqual(words.discover(stats, []).splitlines(), [
+            "Read 675 postings from 2 sources. 0 new, 2 filtered out (2 by title).",
+            "In all, your filters leave out 668 of the 675 listed: 588 by title and 80 by location."])
+        # On the first pan the two are the same, so it's said once.
+        first = {**stats, "rejected": {"title": 588, "location": 80}}
+        self.assertEqual(len(words.discover(first, []).splitlines()), 1)
+
     def test_rescore_names_what_it_dropped_and_counts_what_it_held(self):
         removed = ["Acme: Lead\x1b[2J (scam)"] + [f"Acme: Role {n} (title)" for n in range(1, 12)]
         said = words.rescore({"kept": 40, "dropped": 12, "held": 2, "removed": removed}).splitlines()

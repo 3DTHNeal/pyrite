@@ -320,6 +320,8 @@ function renderSweep() {
   if (run) {
     const reposted = run.stats.reposted ? `, ${run.stats.reposted} reposted` : "";
     parts.push(`Boards checked ${ago(run.finished_at)}: ${run.stats.postings.toLocaleString()} postings read across ${run.stats.sources} sources, ${run.stats.new} new${reposted}.`);
+    // "0 new" reads the same on a quiet day as when every title misses the role types, so what the filters leave out is said with why.
+    if (run.left_out) parts.push(`Your filters leave out ${run.left_out.toLocaleString()} of them: ${run.left_out_why}.`);
     // A sweep after an update that changed scoring rescores prospects first. What it dropped is named, as nothing else of it is left.
     const r = run.stats.rescored;
     if (r) parts.push(`Scoring changed, so ${plural(r.kept, "prospect")} got new scores${r.dropped ? ` and ${r.dropped} that no longer pass ${r.dropped === 1 ? "was" : "were"} dropped: ${r.removed.join("; ")}` : ""}.`);
@@ -970,12 +972,20 @@ function renderSources() {
   $("source-summary").textContent = rows.length
     ? `${rows.length - failing} of ${rows.length} sources working. A failing source is reported here rather than quietly returning nothing.`
     : "The boards haven't been checked yet.";
+  // How many of a board's postings your filters leave out, and why. A board that's all left out is said in plain
+  // text rather than muted, since it's either the wrong board for this search or a filter that's a little off.
+  const leftOut = (r) => {
+    if (r.last_error || !r.left_out) return null;
+    const all = r.left_out >= r.last_count;
+    const count = all ? `All ${r.last_count.toLocaleString()}` : `${r.left_out.toLocaleString()} of ${r.last_count.toLocaleString()}`;
+    return h("div", { class: all ? "left-out" : "left-out muted" }, `${count} left out by your filters: ${r.left_out_why}.`);
+  };
   fill($("sources"),
     h("thead", {}, h("tr", {}, ["State", "Company", "Source", "Postings", "Last good read"].map((c) => h("th", {}, c)))),
     h("tbody", {}, rows.map((r) => h("tr", {},
       h("td", {}, h("span", { class: `pill ${r.last_error ? "bad" : "good"}` }, r.last_error ? "Failing" : "Working")),
       h("td", {}, r.company),
-      h("td", {}, r.last_error ? `${r.source_key}: ${r.last_error}` : r.source_key),
+      h("td", {}, r.last_error ? `${r.source_key}: ${r.last_error}` : r.source_key, leftOut(r)),
       h("td", { class: "num" }, r.last_count),
       h("td", {}, ago(r.last_ok) || "Never")))));
   renderUsage();

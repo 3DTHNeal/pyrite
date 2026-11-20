@@ -324,6 +324,42 @@ class Discovery(Base):
         self.assertEqual(stats["rejected"]["location"], 1)
         self.assertEqual(self.sweep()["new"], 0)
 
+    def test_a_check_says_what_the_filters_leave_out_of_what_a_board_lists_now(self):
+        berlin = self.posting("3", title="Principal Firmware Engineer", location="Berlin, Germany")
+        stub_feed(None, [self.posting(), self.posting("2", title="Sales Lead"), berlin])
+        self.assertEqual(self.sweep()["left_out"], {"title": 1, "location": 1})
+        # The next check passes over the two it left out before, so it rejects none, and they're still left out.
+        again = self.sweep()
+        self.assertEqual((sum(again["rejected"].values()), again["left_out"]), (0, {"title": 1, "location": 1}))
+
+        def board():
+            return discover.left_out(self.conn.execute("SELECT * FROM source_status WHERE source_key = 'greenhouse:acme'").fetchone())
+        self.assertEqual(board(), {"title": 1, "location": 1})
+        # One the board has taken down is no longer among what it lists.
+        stub_feed(None, [self.posting(), berlin])
+        self.assertEqual(self.sweep()["left_out"], {"location": 1})
+        self.assertEqual(board(), {"location": 1})
+        # A board that fails adds nothing to the check's count, and keeps what its last good read found.
+        stub_feed(None, error=urllib.error.URLError("dns"))
+        self.assertEqual(self.sweep()["left_out"], {})
+        self.assertEqual(board(), {"location": 1})
+
+    def test_a_boards_count_of_what_is_left_out_reads_only_what_a_check_wrote(self):
+        for kept, found in (('{"title": 2, "score": 0, "odd": "3"}', {"title": 2}), ("", {}), (None, {}), ("not json", {}),
+                            ("[1, 2]", {})):
+            self.assertEqual(discover.left_out({"left_out": kept}), found, kept)
+        self.assertEqual(discover.left_out({}), {})  # A row read before the column was there.
+
+    def test_an_older_database_gets_somewhere_to_keep_what_is_left_out(self):
+        path = Path(self.tmp.name) / "older.db"
+        older = store.connect(path)
+        older.execute("ALTER TABLE source_status DROP COLUMN left_out")
+        older.commit()
+        older.close()
+        newer = store.connect(path)
+        self.addCleanup(newer.close)
+        self.assertIn("left_out", {row["name"] for row in newer.execute("PRAGMA table_info(source_status)")})
+
     def test_same_posting_for_two_cities_is_one_job(self):
         stub_feed(None, [self.posting("1"), self.posting("2", location="Remote - US")])
         self.assertEqual(self.sweep()["new"], 1)

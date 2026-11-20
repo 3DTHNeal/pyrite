@@ -8,7 +8,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from . import claude_code, discover, doctor, mail
+from . import claude_code, discover, doctor, mail, words
 from .claude_code import find_claude, sign_in_help
 from .store import IS_EXAMPLE, ROOT, ConfigError, log_event, now, read_config
 
@@ -194,6 +194,9 @@ def _sweep(conn, cfg: dict[str, Any], task_id: int) -> str:
     stats = discover.run(conn=conn, cfg=cfg)
     said = (f"{stats['postings']:,} postings read across {stats['sources']} sources, {stats['new']} new"
             + (f", {stats['failed']} failing" if stats["failed"] else "") + ".")
+    out = stats.get("left_out") or {}
+    if out:
+        said += f" Your filters leave out {sum(out.values()):,} of them: {words.left_out(out)}."
     if stats.get("rescored"):
         said += " " + discover.rescore_summary(stats["rescored"])
     progress(conn, task_id, "Checking mail for replies")

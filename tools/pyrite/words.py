@@ -26,6 +26,16 @@ def plural(count: int, word: str) -> str:
     return f"{count:,} {word}{'' if count == 1 else 's'}"
 
 
+def left_out(reasons: dict[str, int]) -> str:
+    """Why the filters left postings out, most first, as "1,100 by title, 60 by location and 20 below the score
+    floor". Empty when they left none out."""
+    order = list(REJECTED)
+    ranked = sorted(((reason, count) for reason, count in reasons.items() if count),
+                    key=lambda item: (-item[1], order.index(item[0]) if item[0] in order else len(order)))
+    parts = [f"{count:,} {REJECTED.get(reason, 'for another reason')}" for reason, count in ranked]
+    return f"{', '.join(parts[:-1])} and {parts[-1]}" if len(parts) > 1 else "".join(parts)
+
+
 def _sentence(text: str) -> str:
     """A capital first letter and a full stop, leaving the rest as it was: str.capitalize would lowercase a name in it."""
     return f"{text[:1].upper()}{text[1:]}."
@@ -52,6 +62,11 @@ def discover(stats: dict[str, Any], new_jobs: list[dict[str, Any]]) -> str:
         reasons = ", ".join(f"{count:,} {REJECTED.get(reason, reason)}" for reason, count in rejected.items())
         line += f", {sum(rejected.values()):,} filtered out ({reasons})"
     lines = [line + "."]
+    # A check counts only the postings it met for the first time, and passes over the ones it left out before. So
+    # after the first check, what the filters leave out in all is said as well.
+    out = stats.get("left_out") or {}
+    if sum(out.values()) > sum(rejected.values()):
+        lines.append(f"In all, your filters leave out {sum(out.values()):,} of the {stats['postings']:,} listed: {left_out(out)}.")
     moved = [f"{plural(stats[key], what)} {verb}" for key, what, verb in (
         ("closed", "posting", "came down"), ("reposted", "posting", "reposted"), ("redated", "posting", "re-dated"),
         ("ghosted", "application", "marked ghosted"), ("expired", "prospect", "passed on after a deadline went by"),

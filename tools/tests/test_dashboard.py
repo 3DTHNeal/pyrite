@@ -88,6 +88,52 @@ class Dashboard(Base):
             listed = [row["source_key"] for row in server.build_state(self.conn, CFG)["sources"]]
         self.assertEqual(sorted(listed), ["greenhouse:anthropic", "inbox:gmail", "workday:dropped"])
 
+    def checked(self, left_out, postings=240):
+        """A board and the check that last read it, with what the filters left out of its postings."""
+        ts = store.now()
+        self.conn.execute("DELETE FROM source_status")
+        self.conn.execute("INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count, left_out) "
+                          "VALUES ('greenhouse:anthropic', 'Anthropic', ?, ?, '', ?, ?)",
+                          (ts, ts, postings, None if left_out is None else json.dumps(left_out)))
+        stats = {"partial": False, "sources": 1, "failed": 0, "postings": postings, "new": 0}
+        self.conn.execute("INSERT INTO runs (started_at, finished_at, stats) VALUES (?, ?, ?)",
+                          (ts, ts, json.dumps(stats if left_out is None else {**stats, "left_out": left_out})))
+        return server.build_state(self.conn, CFG)
+
+    def test_the_last_check_and_each_board_say_what_the_filters_leave_out(self):
+        state = self.checked({"location": 15, "title": 220})
+        self.assertEqual((state["last_run"]["left_out"], state["last_run"]["left_out_why"]), (235, "220 by title and 15 by location"))
+        board = state["sources"][0]
+        self.assertEqual((board["left_out"], board["left_out_why"], board["last_count"]), (235, "220 by title and 15 by location", 240))
+        # A check from before these were counted says nothing of them, rather than that nothing was left out.
+        state = self.checked(None)
+        self.assertEqual((state["last_run"]["left_out"], state["last_run"]["left_out_why"]), (0, ""))
+        self.assertEqual((state["sources"][0]["left_out"], state["sources"][0]["left_out_why"]), (0, ""))
+        script = (Path(server.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("if (run.left_out) parts.push(`Your filters leave out ", script)
+        self.assertIn("left out by your filters: ${r.left_out_why}.", script)
+
+    def test_a_search_that_has_kept_nothing_says_so_first_on_the_to_do_list(self):
+        def first(state):
+            return next(iter(state["orders"]), {})
+        told = first(self.checked({"location": 15, "title": 220}))
+        self.assertEqual((told["kind"], told["rank"], told["tab"]), ("Finish setup", 0, "profile/roles"))
+        self.assertEqual(told["text"], "Your search keeps none of the 240 postings the boards list. It leaves out 220 by title "
+                                       "and 15 by location.")
+        self.assertIn("Try a title", told["detail"])
+        # It opens the section most of them turn on.
+        self.assertEqual(first(self.checked({"location": 200, "title": 20}))["tab"], "profile/where")
+        # A posting you added yourself isn't one the search kept.
+        self.add(source_key="manual", source_id="mine")
+        self.assertIn("keeps none", first(self.checked({"title": 220}))["text"])
+        # The demo is the example on purpose, and a check from before these were counted has nothing to say.
+        with mock.patch.object(server, "IS_EXAMPLE", True):
+            self.assertNotIn("keeps none", first(self.checked({"title": 220})).get("text", ""))
+        self.assertNotIn("keeps none", first(self.checked(None)).get("text", ""))
+        # Once a board's posting has been kept, a check that finds nothing new is an ordinary one.
+        self.add(source_id="kept")
+        self.assertFalse([order for order in self.checked({"title": 220})["orders"] if "keeps none" in order["text"]])
+
     def test_numbers_and_orders_put_new_listings_first(self):
         today = date.today()
         posted = lambda days: (today - timedelta(days=days)).isoformat()
