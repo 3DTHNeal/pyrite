@@ -436,10 +436,15 @@ const inboxGroups = () => state.inbox || state.orders.map((o) => ({ kind: o.kind
 // The jobs on the list as it's laid out, each once, for J and K to walk in the job panel.
 const inboxJobIds = () => [...new Set(inboxGroups().flatMap((g) => g.orders.map((o) => o.job_id)).filter(Boolean))];
 
-// The jobs a group names, as a folded group sums them up.
+// The jobs a group names, as a folded group sums them up. An item for a job or a mail starts with its company or its
+// sender. One for neither, such as a Finish setup item, is a whole sentence, so those are counted, not run together.
 function groupNames(orders) {
-  const names = [...new Set(orders.map((o) => o.text.split(": ")[0]))];
-  if (names.length > 3) return `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+  const named = orders.filter((o) => o.job_id || o.alert_id);
+  const names = [...new Set(named.map((o) => o.text.split(": ")[0]))];
+  const unnamed = orders.length - named.length;
+  if (!names.length) return `${plural(unnamed, "thing")} to do`;
+  const more = Math.max(names.length - 3, 0) + unnamed;
+  if (more) return `${names.slice(0, 3).join(", ")} and ${more} more`;
   return names.length < 3 ? names.join(" and ") : `${names[0]}, ${names[1]} and ${names[2]}`;
 }
 
@@ -1006,7 +1011,7 @@ function renderUsage() {
     h("td", { class: "num" }, tokens(t.input_tokens)),
     h("td", { class: "num" }, tokens(t.output_tokens)),
     h("td", { class: "num" }, cost(t)));
-  const counted = "Every Claude run Pyrite starts is counted: the daily run, judging postings, Refresh resume, Interview prep, checking mail, industry outlooks, employer research and skill ages. A Claude Code session of your own isn't.";
+  const counted = "Every Claude run Pyrite starts is counted: the daily run, judging postings, Refresh resume, Interview prep, checking mail, industry outlooks, employer research, skill ages and checking a model's name. A Claude Code session of your own isn't.";
   $("usage-summary").textContent = usage.all.runs
     ? `${counted} Cost is Claude Code's own estimate at API prices, which isn't a bill if you're on a Claude plan.`
     : `No Claude runs have been started from here yet. ${counted}`;
@@ -3200,7 +3205,7 @@ $("palette").addEventListener("close", () => {
 
 $("run-sweep").addEventListener("click", () => startRun("sweep"));
 $("run-claude").addEventListener("click", () => startRun("claude"));
-$("add-open").addEventListener("click", () => { $("add-error").textContent = ""; $("add-dialog").showModal(); });
+$("add-open").addEventListener("click", () => { $("add-error").textContent = ""; forgetSameRole(); $("add-dialog").showModal(); });
 $("add-cancel").addEventListener("click", () => $("add-dialog").close());
 
 // A link put in the Add a posting form is read for the posting it leads to. Only boxes still empty are filled, so
@@ -3242,6 +3247,36 @@ function forgetAddLink() {
   $("add-read").textContent = "";
 }
 
+// A posting with the company and title of a job already tracked isn't added until you say so: it may be the same job
+// at another link, which would be tailored and sent twice, or another opening. The yes holds for that company and title.
+let addAnyway = false;
+
+function askSameRole(same) {
+  const box = $("add-same");
+  fill(box,
+    h("p", {}, `You already have ${same.company}: ${same.title}, as job ${same.id} (${statusName(same.status)}). `
+      + "This may be the same job at another link, or another opening, such as one in another place."),
+    h("div", { class: "row" },
+      h("button", { class: "btn", type: "button", onclick: async () => {
+        $("add-form").reset();
+        $("add-dialog").close();
+        await openJob(same.id);
+      } }, "Open it"),
+      h("button", { class: "btn primary", type: "button", onclick: () => { addAnyway = true; $("add-form").requestSubmit(); } },
+        "Add it anyway")));
+  box.hidden = false;
+}
+
+function forgetSameRole() {
+  addAnyway = false;
+  $("add-same").hidden = true;
+  fill($("add-same"));
+}
+
+$("add-form").addEventListener("reset", forgetSameRole);
+$("add-company").addEventListener("input", forgetSameRole);
+$("add-title").addEventListener("input", forgetSameRole);
+
 $("add-url").addEventListener("change", readAddLink);
 // The pasted text isn't in the box until the paste has finished.
 $("add-url").addEventListener("paste", () => setTimeout(readAddLink));
@@ -3256,9 +3291,14 @@ $("add-form").addEventListener("submit", async (e) => {
   save.disabled = true;
   $("add-error").textContent = "";
   try {
-    const { id, existing, status } = await api("/api/jobs", {
+    const { id, existing, status, same } = await api("/api/jobs", {
       company: field("company"), title: field("title"), url: field("url"), location: field("location"), description: field("description"),
+      anyway: addAnyway,
     });
+    if (same) {
+      askSameRole(same);
+      return;
+    }
     $("add-form").reset();
     $("add-dialog").close();
     await refresh();

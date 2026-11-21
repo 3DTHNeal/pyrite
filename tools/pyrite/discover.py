@@ -71,6 +71,18 @@ def _watchlist(cfg: dict[str, Any]) -> list[tuple[str, str, Any]]:
     return out
 
 
+def watched_status(conn, cfg: dict[str, Any], demo: bool | None = None) -> list[dict[str, Any]]:
+    """Each source's row of source_status that search.toml watches now, and the inbox's. A board taken out of it isn't
+    checked any more, so its last good read, or its last error, would otherwise be reported for good: as working on the
+    Sources tab, or as failing in `pyrite queue` and the morning briefing. The demo's boards are made up, and the
+    example's search.toml can't watch them without asking real boards for companies that don't exist, so the demo
+    lists every one. `demo` says whether this is the demo, and is the example workspace's flag unless given."""
+    every = store.IS_EXAMPLE if demo is None else demo
+    watched = {f"{kind}:{ident}" for kind, ident, _ in _watchlist(cfg)}
+    return [dict(row) for row in conn.execute("SELECT * FROM source_status ORDER BY company")
+            if every or row["source_key"] in watched or row["source_key"].startswith("inbox:")]
+
+
 def watch_problem(kind: str, ident: str, spec) -> str:
     """What's wrong with how one watched company is written in search.toml, or "" if nothing is. Workday needs a
     table of three settings, and the other boards a name, so the one written the other's way says which it needs."""

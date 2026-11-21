@@ -1185,10 +1185,24 @@ class CommandOutput(Base):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(add)
         self.assertRegex(out.getvalue(), r"^Already tracked as job \d+: Initech, Firmware Lead, new\. Nothing was changed\.")
-        # The same title in another place is another opening.
+        # The same title in another place may be the same job listed twice, or another opening, so it's asked about.
+        elsewhere = add[:-1] + ["Remote - US"]
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+            cli.main(elsewhere)
+        self.assertRegex(str(stopped.exception.code), r"^You already have Initech: Firmware Lead, as job \d+ \(new\)\. Nothing was added\.")
+        self.assertIn("--anyway", str(stopped.exception.code))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            cli.main(add[:-1] + ["Remote - US"])
+            cli.main(elsewhere + ["--anyway"])
         self.assertRegex(out.getvalue(), r"^Job \d+: Initech")
+
+    def test_add_asks_before_reading_a_link_for_a_company_and_title_already_tracked(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["add", "--company", "Initech", "--title", "Firmware Lead"])
+        with mock.patch("pyrite.link.read") as read, self.assertRaises(SystemExit) as stopped:
+            cli.main(["add", "--company", "Initech", "--title", "Firmware Lead", "--url", "https://jobs.example.com/initech/2"])
+        self.assertIn("You already have Initech: Firmware Lead", str(stopped.exception.code))
+        read.assert_not_called()
 
     def test_folder_starts_the_drafts_from_the_masters_and_never_overwrites_one(self):
         self.root = Path(self.tmp.name) / "mine"

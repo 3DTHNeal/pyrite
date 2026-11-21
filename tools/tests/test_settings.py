@@ -280,6 +280,20 @@ class HowPyriteRuns(SettingsBase):
                 options.save({"version": options.view()["version"], "values": values})
         self.assertEqual(self.text(), SETTINGS_TOML)
 
+    def test_a_model_claude_code_doesnt_know_is_refused_and_one_unchanged_isnt_asked_about(self):
+        unknown = "Claude Code doesn't know a model called “opuss-typo”, or your plan can't use it."
+        with mock.patch.object(options.claude_code, "model_problem", side_effect=lambda name, conn=None: unknown if name == "opuss-typo" else None) as asked:
+            with self.assertRaisesRegex(ValueError, r"^Model: Claude Code doesn't know a model called “opuss-typo”.*Nothing was saved\.$"):
+                self.save(claude__model="opuss-typo")
+            self.assertEqual(self.text(), SETTINGS_TOML)
+            self.save(claude__model="claude-opus-5-5", market__model="claude-haiku-5-5")
+            self.assertEqual(sorted(call.args[0] for call in asked.call_args_list), ["claude-haiku-5-5", "claude-opus-5-5", "opuss-typo"])
+            asked.reset_mock()
+            # Saved again as it is, or left at its default, it isn't asked about again.
+            self.save(claude__model="claude-opus-5-5", inbox__model=options.mail.DEFAULT_MODEL, run__tailor_per_day=3)
+            asked.assert_not_called()
+        self.assertEqual(store.load_config()["claude"], {"model": "claude-opus-5-5"})
+
     def test_nothing_outside_the_list_can_be_reached(self):
         for name, value in (("guard.forbidden", []), ("guard.max_resume_pages", 9), ("dashboard.allowed_hosts", ["evil.test"]),
                             ("dashboard.port", 80), ("workday.autofill", True), ("promote.city_points", 50), ("run", {}), ("claude", "x")):

@@ -174,6 +174,25 @@ def tracked_by_url(conn, url: str):
     return next((row for row in rows if _same_posting(row["url"]) == wanted), None)
 
 
+def tracked_by_role(conn, company: str, title: str):
+    """The newest job already tracked with this company and title, in any status, or None. Titles are compared as the
+    sweep compares a repost's. Another link to the same role, such as an aggregator's copy of a board's posting, would
+    otherwise go in as a second job at the front of the line, to be tailored, and maybe sent, a second time."""
+    wanted = discover._norm_title(title)
+    rows = conn.execute("SELECT id, company, title, status FROM jobs WHERE lower(trim(company)) = lower(?) ORDER BY id DESC",
+                        (company.strip(),)).fetchall()
+    return next((row for row in rows if discover._norm_title(row["title"]) == wanted), None)
+
+
+class SameRole(ValueError):
+    """A posting being added has the company and title of a job already tracked, and wasn't asked for anyway. Another
+    place or another team can be another opening, so it's a question for you, not a refusal."""
+
+    def __init__(self, job) -> None:
+        super().__init__(f"You already have {job['company']}: {job['title']}, as job {job['id']} ({job['status']}).")
+        self.job = job
+
+
 def _text(body: dict[str, Any], key: str, label: str, limit: int) -> str:
     """A text field from a request, trimmed. Anything but text, or text over `limit`, is refused rather than stored
     some other way or cut short."""
@@ -188,10 +207,11 @@ def _text(body: dict[str, Any], key: str, label: str, limit: int) -> str:
     return value
 
 
-def add_manual_job(conn, cfg, company, title, url="", location="", description="") -> int:
+def add_manual_job(conn, cfg, company, title, url="", location="", description="", anyway=False) -> int:
     """A posting you found yourself always goes in, whatever the filters think, at the front of the line. One already
     tracked at the same link isn't added twice: that job's number comes back instead. Without a link, the same company,
-    title, place and text is the same posting, but another place or other text is another opening, so it goes in too."""
+    title, place and text is the same posting. Another link, place or text with a company and title already tracked
+    raises SameRole unless `anyway`, since it may be the same job listed twice, or may be another opening."""
     company, title = company.strip(), title.strip()
     if not company or not title:
         raise ValueError("Company and title are required.")
@@ -211,6 +231,9 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
     ).fetchone()
     if existing:
         return existing["id"]
+    same = tracked_by_role(conn, company, title)
+    if same and not anyway:
+        raise SameRole(same)
     # Scored in full even where a filter would refuse it, so the score says how it compares rather than a flat 0.
     verdict = scoring.evaluate(title, location, "", description, cfg, company, added=True)
     ts = now()
@@ -222,7 +245,9 @@ def add_manual_job(conn, cfg, company, title, url="", location="", description="
          verdict.score, json.dumps(verdict.reasons), verdict.track or scoring.ADDED_TRACK,
          json.dumps(verdict.flags), ts),
     )
-    log_event(conn, cursor.lastrowid, "found", "Added by you")
+    # Added beside a job with the same company and title, its timeline says which, so the two are easy to tell apart.
+    log_event(conn, cursor.lastrowid, "found", f"Added by you, beside job {same['id']}, which has the same company and title"
+              if same else "Added by you")
     return cursor.lastrowid
 
 
@@ -656,12 +681,8 @@ def build_state(conn, cfg) -> dict[str, Any]:
             """SELECT e.kind, COUNT(DISTINCT e.job_id) FROM events e JOIN jobs j ON j.id = e.job_id
                WHERE e.ts > ? AND (e.kind = 'applied' OR (e.kind = 'passed' AND j.status = 'passed')) GROUP BY e.kind""",
             (briefing["ts"],))}
-    # The boards search.toml watches now, and the inbox. A board taken out of it isn't checked any more, so its last
-    # good read would otherwise stay on the list as working. The demo's boards are made up, and the example's search.toml
-    # can't watch them without asking real boards for companies that don't exist, so the demo lists every one.
-    watched = {f"{kind}:{ident}" for kind, ident, _ in discover._watchlist(cfg)}
-    source_rows = [dict(r) for r in conn.execute("SELECT * FROM source_status ORDER BY company")
-                   if IS_EXAMPLE or r["source_key"] in watched or r["source_key"].startswith("inbox:")]
+    # The boards search.toml watches now, and the inbox, as `pyrite queue` and the briefing report them.
+    source_rows = discover.watched_status(conn, cfg, demo=IS_EXAMPLE)
     # How many of each board's postings the filters leave out, and why in words, in place of the JSON it's kept as.
     for source in source_rows:
         out = discover.left_out(source)
@@ -1136,10 +1157,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/jobs":
                 known = tracked_by_url(conn, str(body.get("url", "")))
-                job_id = add_manual_job(
-                    conn, cfg, str(body.get("company", "")), str(body.get("title", "")),
-                    str(body.get("url", "")), str(body.get("location", "")), str(body.get("description", "")),
-                )
+                try:
+                    job_id = add_manual_job(
+                        conn, cfg, str(body.get("company", "")), str(body.get("title", "")),
+                        str(body.get("url", "")), str(body.get("location", "")), str(body.get("description", "")),
+                        anyway=body.get("anyway") is True,
+                    )
+                except SameRole as same:
+                    # Nothing was added. The form asks whether to open that job or add this one anyway.
+                    return self._json({"same": {key: same.job[key] for key in ("id", "company", "title", "status")}}, 200)
                 conn.commit()
                 if known:
                     return self._json({"id": job_id, "existing": True, "status": known["status"]}, 200)

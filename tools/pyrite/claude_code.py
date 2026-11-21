@@ -39,9 +39,62 @@ def sign_in_help(claude: str) -> str:
     else:
         command = f'"{claude}" auth login'
     return f"Claude Code isn't signed in for background use. Run this once in a terminal: {command}"
+
+
+# What Claude Code says when the model it was given doesn't exist, or the plan can't use it. Its own advice, "Run
+# --model to pick a different model", is for its command line and means nothing on the dashboard.
+NO_SUCH_MODEL = re.compile(r"issue with the selected model|may not exist or you may not have access|not_found_error", re.I)
+# The aliases Claude Code always takes, which need no asking about. Any other name is asked about when it's saved.
+MODEL_ALIASES = frozenset({"default", "sonnet", "opus", "haiku", "opusplan"})
+MODEL_CHECK_SECONDS = 90
+
+
+def _model_in(cmd: list[str]) -> str:
+    return cmd[cmd.index("--model") + 1] if "--model" in cmd[:-1] else ""
+
+
+def failure(cmd: list[str], message: str, returncode: int) -> str:
+    """What to tell you about a run that stopped with an error: in Pyrite's words where Claude Code's would mislead."""
+    if "not logged in" in message.lower():
+        return sign_in_help(cmd[0])
+    if NO_SUCH_MODEL.search(message):
+        model = _model_in(cmd)
+        return (f"Claude Code doesn't know the model{f' “{model}”' if model else ''}, or your plan can't use it. "
+                "Change it under Settings › Claude, then try again.")
+    return f"Claude stopped with an error: {message[-500:] or returncode}"
+
+
+def model_problem(name: str, conn=None) -> str | None:
+    """Why Claude Code can't use the model `name`, or None when it can, or when it can't be asked. An alias it always
+    takes isn't asked about. Only a request to the model says whether a name exists and your plan may use it, so any
+    other name gets one turn with no tools and a one-word prompt, which uses a little of your plan and is counted with
+    the rest when `conn` is given. A typo found here is found before every run of the next morning fails on it."""
+    if name.strip().lower().removesuffix("[1m]") in MODEL_ALIASES:
+        return None
+    claude = find_claude()
+    if not claude:
+        return None  # The Claude section says it's missing, and no run can start without it anyway.
+    cmd = [claude, "-p", "--output-format", "json", "--no-session-persistence", "--strict-mcp-config",
+           "--setting-sources", "project", "--permission-mode", "dontAsk", "--max-turns", "1", "--model", name, "--tools", ""]
+    began = time.monotonic()
+    try:
+        # From an empty folder, so it reads no CLAUDE.md or git history: it needs nothing but the one-word prompt.
+        with tempfile.TemporaryDirectory(prefix="pyrite-model-") as nowhere:
+            out = run_process(cmd, input="Reply with the single word OK.", cwd=Path(nowhere), timeout=MODEL_CHECK_SECONDS)
+    except (OSError, subprocess.TimeoutExpired):
+        return None  # Unsure, so the save goes ahead, and a run that can't use it says so.
+    message, result = _read_result(out.stdout or out.stderr or "")
+    failed = bool(out.returncode or result.get("is_error"))
+    if conn is not None:
+        record(conn, None, "model", result, time.monotonic() - began, ok=not failed)
+    if failed and NO_SUCH_MODEL.search(f"{message}\n{out.stderr or ''}"):
+        return f"Claude Code doesn't know a model called “{name}”, or your plan can't use it."
+    return None
+
+
 KIND_LABELS = {"refresh": "Refresh resume", "prep": "Interview prep", "triage": "Judging postings", "tailor": "Tailoring resumes",
                "mail": "Checking mail", "outlook": "Industry outlook", "culture": "Employer research", "skills": "Skill ages",
-               "localtax": "Local tax research"}
+               "localtax": "Local tax research", "model": "Checking a model's name"}
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 # The longest a single Claude run of a judging or writing job may take. How long a task can go quiet before it
 # counts as dead is worked out from this, so it covers one step, not a whole job.
@@ -591,10 +644,7 @@ def ask(conn, job_id: int | None, kind: str, cmd: list[str], text: str, cwd: Pat
     failed = bool(out.returncode or result.get("is_error"))
     run_id = record(conn, job_id, kind, result, time.monotonic() - began, ok=not failed)
     if failed:
-        message = message or (out.stderr or "").strip()
-        if "not logged in" in message.lower():
-            raise ClaudeFailed(sign_in_help(cmd[0]))
-        raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
+        raise ClaudeFailed(failure(cmd, message or (out.stderr or "").strip(), out.returncode))
     answer = Answer(message)
     answer.run_id = run_id
     answer.init = startup(out.stdout or "")

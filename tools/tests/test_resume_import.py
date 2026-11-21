@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import re
 import shutil
 import subprocess
 import tempfile
@@ -155,6 +156,49 @@ class Layouts(Tmp):
         self.assertIn("Various freelance work for small clients", found.text)
         self.assertIn("- Built websites.", found.text)
         self.assertIn("no '### Employer | dates' heading", found.problems)
+
+    def experience(self, *lines: str) -> str:
+        found = resumeimport.convert([resumeimport.Line(t) for t in ("Sam Doe", "sam@example.com", "Experience", *lines)]
+                                     + [resumeimport.Line("Wrote the bootloader.", bullet=True)])
+        return found.text.split("## Experience\n")[1]
+
+    def test_a_role_on_one_line_with_only_commas_between_its_parts(self):
+        # Employer first or title first, with the state after a comma or not, or Remote. A one-word title once made
+        # "Employer, Title" look like "Town, State", and the line was lost; "Milwaukee WI" was taken for the employer.
+        read = "### Lakeshore Instruments\n#### {title} | {place} | Aug 2012 – Jun 2017\n- Wrote the bootloader.\n"
+        for line, title, place in (
+                ("Lakeshore Instruments, Analyst, Milwaukee, WI, Aug 2012 - Jun 2017", "Analyst", "Milwaukee, WI"),
+                ("Lakeshore Instruments, Technician, Aug 2012 - Jun 2017", "Technician", ""),
+                ("Lakeshore Instruments, Embedded Software Engineer, Milwaukee, WI, Aug 2012 - Jun 2017",
+                 "Embedded Software Engineer", "Milwaukee, WI"),
+                ("Lakeshore Instruments, Embedded Software Engineer, Milwaukee WI, Aug 2012 - Jun 2017",
+                 "Embedded Software Engineer", "Milwaukee, WI"),
+                ("Embedded Software Engineer, Lakeshore Instruments, Milwaukee WI, Aug 2012 - Jun 2017",
+                 "Embedded Software Engineer", "Milwaukee, WI"),
+                ("Lakeshore Instruments, Embedded Software Engineer, Remote, Aug 2012 - Jun 2017", "Embedded Software Engineer", "Remote"),
+                ("Lakeshore Instruments, Analyst, Madison, Wisconsin, Aug 2012 - Jun 2017", "Analyst", "Madison, Wisconsin")):
+            with self.subTest(line):
+                self.assertEqual(self.experience(line), read.format(title=title, place=place).replace("|  |", "| |"))
+        self.assertTrue(self.experience("Acme, Inc., Staff Engineer, 2019 - 2021").startswith("### Acme, Inc.\n#### Staff Engineer |"))
+        # Two capitals that aren't a state stay with the title.
+        self.assertTrue(self.experience("Senior Engineer II, Acme, 2019 - 2021").startswith("### Acme\n#### Senior Engineer II |"))
+
+    def test_every_line_is_in_the_draft_or_named_in_a_note(self):
+        for line in ("Lakeshore Instruments, Analyst, Milwaukee, WI, Aug 2012 - Jun 2017", "Madison, WI, 2015 - 2017",
+                     "Director, Product Management, Acme, 2019 - 2021", "Vice President, Engineering, Acme, 2019 - 2021",
+                     "Acme, Engineer, London, UK, 2019 - 2021", "Owner, Rivera Consulting, LLC, 2018 - Present",
+                     "Growth Hacker Extraordinaire, Hooli, 2019 - 2021", "Ivory Tower | Springfield, IL | 2019 - 2021"):
+            with self.subTest(line):
+                found = resumeimport.convert([resumeimport.Line(t) for t in ("Sam Doe", "sam@example.com", "Experience", line)])
+                said = found.text + "\n".join(found.notes)
+                missing = [word for word in re.findall(r"[A-Za-z]{3,}", resumeimport.DATES.sub("", line)) if word not in said]
+                self.assertEqual(missing, [], f"{found.text}\n{found.notes}")
+
+    def test_a_dated_line_it_cant_read_before_any_role_is_kept(self):
+        found = resumeimport.convert([resumeimport.Line(t) for t in (
+            "Sam Doe", "sam@example.com", "Experience", "Madison, WI, 2015 - 2017")])
+        self.assertIn("Madison, WI, 2015 - 2017", found.text)
+        self.assertTrue(any("kept as written: 'Madison, WI, 2015 - 2017'" in note for note in found.notes))
 
     def test_a_resume_with_no_contact_details_says_so(self):
         found = resumeimport.convert([resumeimport.Line(t) for t in ("Sam Doe", "Education", "B.A., 2010")])

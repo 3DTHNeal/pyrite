@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import doctor
+from .score import US_STATES
 from .steps import EMAIL, LINK, PHONE
 
 # The dashboard runs under pythonw, with no console of its own, so a console program it starts would open a window
@@ -464,6 +465,58 @@ def _fields(text: str) -> list[str]:
 
 
 COMPANY_ENDINGS = re.compile(r"^(?:inc|llc|ltd|plc|corp|co|gmbh|lp|llp|pc|sa|ag|bv)\.?$", re.I)
+STATE_NAMES = frozenset(name.lower() for name in US_STATES.values())
+# "Milwaukee WI": a town and a state's code with no comma between. Only a US state's code counts, so a title that ends
+# in two capitals, such as "Engineer II", isn't read as a place.
+TOWN_AND_STATE = re.compile(r"^(?P<town>[A-Z][A-Za-z.' -]*[A-Za-z.])\s+(?P<state>[A-Z]{2})$")
+
+
+def _region(text: str) -> bool:
+    """A state, province or country after a town's comma: a code in two capitals, or a US state's name."""
+    return bool(re.fullmatch(r"[A-Z]{2}", text)) or text.lower() in STATE_NAMES
+
+
+def _real_place(part: str) -> bool:
+    """A field PLACE takes for a place that is one: Remote, or a town and its region. "Lakeshore Instruments, Analyst"
+    has a place's shape, a capitalized name, a comma and a capitalized word, but no region at its end."""
+    if part in ("Remote", "Hybrid"):
+        return True
+    return _region(re.sub(r"\s+\d{5}$", "", part).rsplit(",", 1)[-1].strip())
+
+
+def _comma_fields(text: str) -> list[str]:
+    """A role written on one line with only commas between its parts, as "Employer, Title, Milwaukee, WI": each part
+    on its own, with a town and its region put back together, and an "Inc." kept with the name before it."""
+    out: list[str] = []
+    for part in (p.strip(" ;()[]") for p in text.split(",")):
+        if not part:
+            continue
+        if out and (_region(part) or COMPANY_ENDINGS.match(part)):
+            out[-1] = f"{out[-1]}, {part}"
+            continue
+        town = TOWN_AND_STATE.match(part)
+        out.append(f"{town['town']}, {town['state']}" if town and town["state"] in US_STATES else part)
+    return out
+
+
+def _role_fields(rest: str, alone: bool) -> list[str]:
+    """A dated line's fields, its dates taken out, with any "Title, Employer" split apart. A line with nothing but
+    commas between its parts is read part by part as well, when the usual reading finds no title and employer, or takes
+    something for a place that isn't one, or a town for an employer. "Lakeshore Instruments, Analyst, Milwaukee, WI" was
+    read as two places and lost, and "…, Embedded Software Engineer, Milwaukee WI" took the town for the employer.
+    `alone` says no lines came before it that could name its employer, which the usual reading then uses."""
+    parts = _split_title(_fields(rest))
+    chunks = [chunk for chunk in FIELD_SEP.split(rest) if chunk.strip(" ,;()[]|")]
+    if not alone or len(chunks) != 1 or "," not in chunks[0]:
+        return parts
+    read_as = [(part, _kind(part)) for part in parts]
+    kinds = {kind for _, kind in read_as}
+    misread = ({"title", "org"} - kinds
+               or any(kind == "place" and not _real_place(part) for part, kind in read_as)
+               or any(kind == "org" and (TOWN_AND_STATE.match(part) or _region(part)) for part, kind in read_as))
+    listed = _comma_fields(chunks[0])
+    read = [_kind(part) for part in listed]
+    return listed if misread and "title" in read and "org" in read else parts
 
 
 def _split_title(parts: list[str]) -> list[str]:
@@ -579,7 +632,7 @@ class _Experience:
         if not dates:
             self.pending.append(line.text)  # The next line settles what it is: an employer, a title or a paragraph.
             return
-        self._dated(dates, _split_title(_fields(rest)), line.text)
+        self._dated(dates, _role_fields(rest, alone=not self.pending), line.text)
 
     def _dated(self, dates: str, parts: list[str], source: str) -> None:
         pending, self.pending = self.pending, []
@@ -617,6 +670,8 @@ class _Experience:
             self.notes.append(f"Found dates but no title or employer, so the line was kept as written: {source!r}")
             if self.role:
                 self.role.body.append(source)
+            else:  # Before any role, it stands on its own, as a bullet there does, rather than being lost.
+                self._employer("").roles.append(Role("", body=[source]))
 
     def _undated(self, pending: list[str]) -> None:
         """Lines with no dates right before a bullet: a role whose dates are its employer's, or a role's paragraph."""
@@ -645,6 +700,10 @@ class _Experience:
                 continue
             out.append(f"### {employer.name}" + (f" | {employer.dates}" if employer.dates else ""))
             place = employer.place
+            if place and not any(role.title for role in employer.roles):
+                # A place goes on each role's #### line, so with no role under the employer it would be lost.
+                self.notes.append(f"No role was found under {employer.name!r}, so its place, {place!r}, is on no #### line. "
+                                  "Add a #### line for each role there.")
             for role in employer.roles:
                 if role.title:
                     place = role.place or place

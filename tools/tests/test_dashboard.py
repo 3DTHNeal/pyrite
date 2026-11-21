@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import struct
+import tempfile
 import threading
 import unittest
 import unittest.mock as mock
@@ -172,23 +173,41 @@ class Dashboard(Base):
                 self.assertEqual(server.tracked_by_url(self.conn, url)["id"], sent)
                 self.assertEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", url), sent)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
-        # Another posting with the same title, or no link at all, is still added.
+        # Another posting with the same title, or no link at all, is still added once you say it's another opening.
         self.assertIsNone(server.tracked_by_url(self.conn, "https://jobs.example.com/acme/R-200"))
-        self.assertNotEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", "https://jobs.example.com/acme/R-200"), sent)
+        self.assertNotEqual(server.add_manual_job(self.conn, CFG, "Acme", "Firmware Lead", "https://jobs.example.com/acme/R-200",
+                                                  anyway=True), sent)
         self.assertIsNone(server.tracked_by_url(self.conn, ""))
+
+    def test_another_link_to_a_company_and_title_already_tracked_asks_first(self):
+        # A board's posting, ready to send, and the same job pasted from somewhere else.
+        ready = self.add(company="Initech Controls", title="Firmware Engineering Manager", status="ready",
+                         url="https://careers.initech.example/jobs/1003")
+        copy = ("Initech Controls ", "firmware engineering manager", "https://jobs.aggregator.example/view/88812", "Middleton, WI")
+        with self.assertRaises(server.SameRole) as asked:
+            server.add_manual_job(self.conn, CFG, *copy)
+        self.assertEqual((asked.exception.job["id"], asked.exception.job["status"]), (ready, "ready"))
+        self.assertIn(f"as job {ready} (ready)", str(asked.exception))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+        # Another place or team can be another opening, so it goes in when you say so, and its timeline names the other.
+        added = server.add_manual_job(self.conn, CFG, *copy, anyway=True)
+        found = self.conn.execute("SELECT detail FROM events WHERE job_id = ? AND kind = 'found'", (added,)).fetchone()
+        self.assertIn(f"beside job {ready}", found["detail"])
+        # Another title at the same employer isn't asked about.
+        self.assertTrue(server.add_manual_job(self.conn, CFG, "Initech Controls", "Firmware Engineer", "https://jobs.aggregator.example/view/1"))
 
     def test_without_a_link_another_place_or_text_is_another_opening(self):
         first = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors.")
         self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
-        elsewhere = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Remote - US", "Builds sensors.")
-        other_text = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds motors.")
+        elsewhere = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Remote - US", "Builds sensors.", anyway=True)
+        other_text = server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds motors.", anyway=True)
         self.assertEqual(len({first, elsewhere, other_text}), 3)
         # One added before the place and text counted, under the old number, is still found.
         self.conn.execute("UPDATE jobs SET source_id = 'old-form' WHERE id = ?", (first,))
         self.assertEqual(server.add_manual_job(self.conn, CFG, "Initech", "Firmware Lead", "", "Madison, WI", "Builds sensors."), first)
 
     def added(self, title, location, description="Firmware in embedded C++ for a robot."):
-        job = server.add_manual_job(self.conn, CFG, "Initech", title, "", location, description)
+        job = server.add_manual_job(self.conn, CFG, "Initech", title, "", location, description, anyway=True)
         row = store.get_job(self.conn, job)
         return row["score"], row["track"], row["location_kind"], json.loads(row["score_reasons"])
 
@@ -487,6 +506,23 @@ class Security(unittest.TestCase):
         status, said, _ = self.post("/api/run/accept", b'{"id": 987654, "retry": true}')
         self.assertEqual(status, 400)
         self.assertIn("isn't showing any more", json.loads(said)["error"])
+
+    def test_the_form_is_asked_about_a_company_and_title_already_tracked(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.object(store, "DB_PATH", Path(tmp) / "t.db"):
+            conn = store.connect(Path(tmp) / "t.db")
+            try:
+                first = server.add_manual_job(conn, CFG, "Initech Controls", "Firmware Engineering Manager", "https://a.example/1")
+                conn.commit()
+                posting = {"company": "Initech Controls", "title": "Firmware Engineering Manager", "url": "https://b.example/2"}
+                status, body, _ = self.post("/api/jobs", json.dumps(posting).encode())
+                self.assertEqual((status, json.loads(body)), (200, {"same": {"id": first, "company": "Initech Controls",
+                                                                            "title": "Firmware Engineering Manager", "status": "new"}}))
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+                status, body, _ = self.post("/api/jobs", json.dumps({**posting, "anyway": True}).encode())
+                self.assertEqual(status, 201)
+                self.assertNotEqual(json.loads(body)["id"], first)
+            finally:
+                conn.close()
 
     def test_a_body_that_is_not_an_object_is_refused(self):
         status, body, _ = self.post("/api/jobs", b"[1]")
@@ -935,6 +971,43 @@ class ProspectsInALaptopWindow(Base):
             with self.subTest(width=width):
                 self.assertEqual(found["covered"], [])
                 self.assertEqual(found["signals"], seen[1440]["signals"])
+
+
+class FoldedToDoGroups(Base):
+    """A folded group on To do sums its items up in a line: the companies of a group of jobs, and the count of a group
+    of setup items, which are whole sentences and once ran together as "still the fictional example's., profile/…"."""
+
+    def folded_lines(self, todos):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright isn't installed")
+        demo.load(self.conn, CFG)
+        self.conn.commit()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        quiet = mock.patch.object(server, "update_state", return_value={"available": False, "off": True})
+        setup = mock.patch.object(doctor, "workspace_todos", return_value=todos)
+        try:
+            with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), quiet, setup, sync_playwright() as pw:
+                if not Path(pw.chromium.executable_path).exists():
+                    self.skipTest("Playwright's Chromium isn't installed")
+                browser = pw.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page.goto(f"http://127.0.0.1:{httpd.server_address[1]}/")
+                    page.wait_for_selector("#orders .group-toggle")
+                    return page.evaluate("""() => Object.fromEntries([...document.querySelectorAll("#orders .order-group.folded")]
+                      .map((g) => [g.querySelector(".group-toggle").dataset.kind, g.querySelector(".what").textContent]))""")
+                finally:
+                    browser.close()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_setup_items_are_counted_not_run_together(self):
+        todos = [{"what": f"profile/file-{n}.md is still the fictional example's.", "fix": "Replace it."} for n in range(5)]
+        self.assertEqual(self.folded_lines(todos)["Finish setup"], "5 things to do")
 
 
 class ReopenNeverSkipsTheAssay(Base):

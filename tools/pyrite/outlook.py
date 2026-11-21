@@ -353,9 +353,10 @@ def ask_web(conn, claude: str, kind: str, text: str, model: str, minutes: int) -
     shouldn't carry what Claude Code picks up from where it starts, such as the workspace's CLAUDE.md and the recent
     commits in its git history, which name the employers applied to. A page it reads could ask for them in a link."""
     began = time.monotonic()
+    cmd = command(claude, model)
     try:
         with tempfile.TemporaryDirectory(prefix="pyrite-web-") as nowhere:
-            out = claude_code.run_process(command(claude, model), input=text, cwd=Path(nowhere), timeout=minutes * 60)
+            out = claude_code.run_process(cmd, input=text, cwd=Path(nowhere), timeout=minutes * 60)
     except subprocess.TimeoutExpired as err:
         claude_code.record(conn, None, kind, claude_code.cut_short(err.stdout), time.monotonic() - began, ok=False)
         raise ClaudeFailed(f"Claude hadn't finished after {minutes} minutes.") from err
@@ -365,10 +366,7 @@ def ask_web(conn, claude: str, kind: str, text: str, model: str, minutes: int) -
     failed = bool(out.returncode or result.get("is_error") or not result)
     run_id = claude_code.record(conn, None, kind, result, time.monotonic() - began, ok=not failed)
     if failed:
-        message = answer or (out.stderr or "").strip()
-        if "not logged in" in message.lower():
-            raise ClaudeFailed(sign_in_help(claude))
-        raise ClaudeFailed(f"Claude stopped with an error: {message[-500:] or out.returncode}")
+        raise ClaudeFailed(claude_code.failure(cmd, answer or (out.stderr or "").strip(), out.returncode))
     # Remembers its run, so a run whose answer turns out to be no use can be counted as failed.
     kept = claude_code.Answer(answer)
     kept.run_id = run_id
