@@ -52,7 +52,7 @@ The assay blocked this draft: 10 problems to fix.
   - Employer, title or dates differ from your record: '#### VP of Engineering | Madison, WI | Jan 2015 – Oct 2026'
 ```
 
-Add `--json` for the same verdict as JSON, which is what it prints whenever its output goes to a file or another program.
+Add `--json` for the same verdict as JSON, which is what it prints whenever its output goes to a file or another program. In your own workspace, `check <id>` checks a job's folder with its own employer and title, and a folder can also be named as the dashboard names it, `applications/…`. It exits 1 when the assay blocks the draft, and 2 when there's no folder to check.
 
 It also refuses the disguises that would slip a word past a pattern: invisible characters, a letter borrowed from another alphabet, and a word split in two by formatting. A negative only counts as a denial when it sits right next to the claim it denies, so "With no added headcount, cut defects by 83%" is still a claim of 83%.
 

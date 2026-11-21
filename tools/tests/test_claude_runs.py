@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import support
 from support import BRIEF, CFG, CONFIDENTIAL, LETTER, MODEL, RESUME, Base, ClaudeRun
 
 from pyrite import claude_code, cli, daily, discover, inbox, prep, refresh, server, store, tasks
@@ -1015,6 +1016,18 @@ class RunClaudeNow(ClaudeRun):
             spaced = claude_code.sign_in_help(r"C:\Users\Alex Rivera\claude.exe")
         self.assertIn(r'& "C:\Users\Alex Rivera\claude.exe" auth login', spaced)
 
+    def test_a_model_claude_code_doesnt_know_is_named_with_where_to_change_it(self):
+        said = ("There's an issue with the selected model (opuss-typo). It may not exist or you may not have access to it. "
+                "Run --model to pick a different model.")
+        out = subprocess.CompletedProcess([], 1, json.dumps({"type": "result", "is_error": True, "result": said}), "")
+        cmd = claude_code.command("claude", [], {"claude": {"model": "opuss-typo"}})
+        with mock.patch.object(claude_code, "run_process", return_value=out), \
+                self.assertRaises(claude_code.ClaudeFailed) as failed:
+            claude_code.ask(self.conn, None, "refresh", cmd, "Rewrite it.", Path(self.tmp.name), 600, 10)
+        self.assertIn("doesn't know the model “opuss-typo”", str(failed.exception))
+        self.assertIn("Settings › Claude", str(failed.exception))
+        self.assertNotIn("--model", str(failed.exception))
+
     def test_verdicts_are_read_strictly(self):
         self.assertEqual(daily.parse_verdict('Sure.\n{"fit": "good", "reason": "Most of it\\nmatches."}'), ("good", "Most of it matches."))
         # Braces quoted inside a reason don't break it.
@@ -1176,6 +1189,44 @@ class RunsYouStart(Base):
             cli.main(["sweep"])
         self.assertIn("postings read", out.getvalue())
         self.assertEqual(self.state(tasks.SWEEP)["state"], "done")
+
+
+class ModelNames(Base):
+    """A model's name is asked about when it's saved, so a typo is found then, not when every run of the next morning
+    fails on it. An alias Claude Code always takes isn't asked about, and asking costs one turn with no tools."""
+
+    UNKNOWN = ("There's an issue with the selected model (opuss-typo). It may not exist or you may not have access to it. "
+               "Run --model to pick a different model.")
+
+    def asked(self, name, returncode=0, result="OK"):
+        out = subprocess.CompletedProcess([], returncode, json.dumps(
+            {"type": "result", "is_error": bool(returncode), "result": result, "usage": {"input_tokens": 12, "output_tokens": 2}}), "")
+        with mock.patch.object(claude_code, "find_claude", return_value="claude"), \
+                mock.patch.object(claude_code, "run_process", return_value=out) as ran:
+            problem = support.MODEL_PROBLEM(name, self.conn)
+        return problem, ran
+
+    def test_an_alias_is_taken_without_asking(self):
+        for name in ("opus", "Sonnet", "opus[1m]", "haiku"):
+            with self.subTest(name):
+                problem, ran = self.asked(name)
+                self.assertIsNone(problem)
+                ran.assert_not_called()
+
+    def test_a_name_claude_code_doesnt_know_is_refused_and_the_ask_is_counted(self):
+        problem, ran = self.asked("opuss-typo", returncode=1, result=self.UNKNOWN)
+        self.assertEqual(problem, "Claude Code doesn't know a model called “opuss-typo”, or your plan can't use it.")
+        cmd = ran.call_args.args[0]
+        self.assertEqual((cmd[cmd.index("--model") + 1], cmd[cmd.index("--tools") + 1], cmd[cmd.index("--max-turns") + 1]),
+                         ("opuss-typo", "", "1"))
+        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT kind, ok FROM claude_runs")], [("model", 0)])
+
+    def test_a_name_it_knows_or_an_answer_it_cant_give_lets_the_save_go_ahead(self):
+        self.assertIsNone(self.asked("claude-sonnet-5-5")[0])
+        # Another failure, such as being signed out, isn't about the name: the run that follows says what it is.
+        self.assertIsNone(self.asked("claude-sonnet-5-5", returncode=1, result="Not logged in")[0])
+        with mock.patch.object(claude_code, "find_claude", return_value=None):
+            self.assertIsNone(support.MODEL_PROBLEM("claude-sonnet-5-5"))
 
 
 if __name__ == "__main__":

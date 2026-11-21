@@ -75,6 +75,45 @@ ESCAPES = "Staff Firmware Engineer\x1b[2J\x1b]0;owned\x07"
 CHECK = ("check", str(BAD_DRAFT), "--company", "Globex Automation", "--title", "Staff Firmware Engineer")
 
 
+class CheckWhat(Base):
+    """`pyrite check` takes a job's number or a folder, from here or in the workspace, and says when there's no folder,
+    rather than reporting a draft the assay blocked because resume.md is missing."""
+
+    def check(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        code: object = 0
+        with mock.patch.object(store, "DB_PATH", Path(self.tmp.name) / "t.db"), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            try:
+                cli.main(["check", *argv, "--json"])
+            except SystemExit as stop:
+                code = stop.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_jobs_number_checks_its_folder_with_its_employer_and_title(self):
+        by_folder = json.loads(self.check(*CHECK[1:])[1])
+        job = self.add(company="Globex Automation", title="Staff Firmware Engineer",
+                       app_folder="applications/2026-11-globex-staff-firmware-engineer")
+        self.conn.commit()
+        code, out, _ = self.check(str(job))
+        self.assertEqual(code, 1)  # Blocked, as the draft is meant to be.
+        self.assertEqual(json.loads(out)["errors"], by_folder["errors"])
+
+    def test_a_folder_is_found_in_the_workspace_from_anywhere(self):
+        code, out, _ = self.check("applications/2026-11-globex-staff-firmware-engineer", "--company", "Globex Automation")
+        self.assertEqual(code, 1)
+        self.assertNotIn("resume.md is missing", out)
+
+    def test_no_folder_is_said_as_such_with_its_own_exit_code(self):
+        for argv, said in ((["applications/no-such-folder"], "No folder applications/no-such-folder"),
+                           ([str(self.add())], "has no application folder yet")):
+            self.conn.commit()
+            with self.subTest(argv):
+                code, out, err = self.check(*argv)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn(said, err)
+
+
 class WordsOrJson(Base):
     """Words for a person at a terminal, and the same JSON as before for the daily run, scripts and anything else reading a pipe."""
 
@@ -327,6 +366,17 @@ class SentJob(ClaudeRun):
         fresh = self.add(source_id="3")
         self.conn.execute("UPDATE jobs SET status = 'new' WHERE id = ?", (self.job,))
         self.assertEqual([job["id"] for job in cli.queue(self.conn, CFG)["to_triage"]], [fresh])
+
+    def test_the_queue_names_only_failing_sources_still_watched(self):
+        # The morning briefing names the queue's failing sources, so it leaves the same ones out.
+        ts = store.now()
+        for key, company in (("greenhouse:anthropic", "Anthropic"), ("workday:dropped", "Dropped Co"), ("inbox:imap", "Email replies")):
+            self.conn.execute("INSERT INTO source_status (source_key, company, last_run, last_ok, last_error, last_count) "
+                              "VALUES (?, ?, ?, ?, 'HTTPError: 503', 1)", (key, company, ts, ts))
+        # The Workday board was taken off the watchlist, so nothing reads it again, and its last error would stay for good.
+        failing = cli.queue(self.conn, CFG)["failing"]
+        self.assertEqual(sorted(row["source_key"] for row in failing), ["greenhouse:anthropic", "inbox:imap"])
+        self.assertEqual(set(failing[0]), {"company", "source_key", "last_error"})
 
     def test_fill_writes_no_sheet_for_a_sent_job_or_into_a_folder_with_a_sent_copy(self):
         self.send()

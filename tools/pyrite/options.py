@@ -13,9 +13,10 @@ import json
 import threading
 import time
 import tomllib
+from contextlib import closing
 from typing import Any
 
-from . import confirm, deadline, doctor, inbox, localtax, mail, outlook, profile, relocate, settings, store, taxes, tomledit
+from . import claude_code, confirm, deadline, doctor, inbox, localtax, mail, outlook, profile, relocate, settings, store, taxes, tomledit
 
 CLAUDE_DEFAULT = "Claude Code's default"
 # Claude Code is asked whether it's signed in at most this often, since asking starts it.
@@ -208,6 +209,20 @@ def _clean(field: dict[str, Any], raw: Any) -> Any:
     return raw.strip()
 
 
+def _check_models(cleaned: dict[str, Any], current: dict[str, Any]) -> None:
+    """Refuse a model Claude Code doesn't know, naming the setting, before it's saved. A typo would otherwise be found
+    only when every run of the next morning failed on it. Only a name that changes is asked about."""
+    for name, value in cleaned.items():
+        field = FIELDS[name]
+        if field["kind"] != "model" or value is None or value == _in_use(current, field):
+            continue
+        with closing(store.connect()) as conn:
+            problem = claude_code.model_problem(value, conn)
+        if problem:
+            raise ValueError(f"{field['label']}: {problem} Check its spelling, or use an alias such as opus or sonnet. "
+                             "Nothing was saved.")
+
+
 def save(body: dict[str, Any]) -> dict[str, Any]:
     """Set the settings named in `values`, each by its id, and leave every other line of search.toml as it was."""
     if store.IS_EXAMPLE:
@@ -215,17 +230,22 @@ def save(body: dict[str, Any]) -> dict[str, Any]:
     values = body.get("values")
     if not isinstance(values, dict) or not values:
         raise ValueError("Nothing to save.")
+    cleaned = {}
+    for name, raw in values.items():
+        field = FIELDS.get(name)
+        if field is None:
+            raise ValueError(f"{name} isn't a setting this tab can change.")
+        cleaned[name] = _clean(field, raw)
+    # Before the lock, since asking takes a few seconds. The version check below still catches a change meanwhile.
+    _check_models(cleaned, tomllib.loads(settings._read()))
     with settings._lock:
         text = settings._read()
         current = tomllib.loads(text)
         if body.get("version") != _version(current):
             raise settings.Conflict("These settings changed after you opened them, so nothing was saved. Reload Settings to see the latest.")
         updated = text
-        for name, raw in values.items():
-            field = FIELDS.get(name)
-            if field is None:
-                raise ValueError(f"{name} isn't a setting this tab can change.")
-            value = _clean(field, raw)
+        for name, value in cleaned.items():
+            field = FIELDS[name]
             if value is None:
                 updated = tomledit.delete_value(updated, field["table"], field["key"])
             elif value != _in_use(current, field):

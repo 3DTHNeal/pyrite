@@ -179,7 +179,8 @@ class AddCommand(Base):
 
     def run_add(self, *more):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
-            cli.main(["add", "--company", "Acme Robotics", "--title", "Firmware Engineer", *more])
+            # --anyway: these add the same company and title at several links, which would otherwise ask first.
+            cli.main(["add", "--company", "Acme Robotics", "--title", "Firmware Engineer", "--anyway", *more])
         row = self.conn.execute("SELECT location, description FROM jobs ORDER BY id DESC LIMIT 1").fetchone()
         return row["location"], row["description"], err.getvalue()
 

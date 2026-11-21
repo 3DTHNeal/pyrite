@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from . import __version__, checks, claude_code, demo, discover, fill, outcomes, score, signals, store, words, workspace
 from .store import CODE_ROOT, ROOT, STATUSES, connect, get_job, job_dict, load_config, log_event, now, set_status
@@ -192,9 +192,9 @@ def queue(conn, cfg: dict[str, Any], limit: int | None = None) -> dict[str, Any]
         )) if job["id"] not in stuck and current(job)),
         key=lambda j: (-j["priority"], not j["decide_soon"], fit_order.get(j["fit"], 2), -j["rank"]),
     )[:limit or run_cfg["tailor_per_day"]]
-    failing = [dict(r) for r in conn.execute(
-        "SELECT company, source_key, last_error FROM source_status WHERE last_error != ''"
-    )]
+    # Only the sources watched now, as the Sources tab shows them: one taken off the list keeps its last error for good.
+    failing = [{key: row[key] for key in ("company", "source_key", "last_error")}
+               for row in discover.watched_status(conn, cfg) if row["last_error"]]
     return {"last": last, "failing": failing, "stuck": stuck, "to_triage": triage, "to_tailor": tailor}
 
 
@@ -721,10 +721,43 @@ def cmd_usage(args, conn):
         print(words.usage(used))
 
 
+def _no_folder(message: str) -> NoReturn:
+    """Stop because there's no application folder to work on. Exits 2, since `check` exits 1 for a draft the assay
+    blocked, and a script reading the code can then tell a missing folder from a failed draft."""
+    print(message, file=sys.stderr)
+    sys.exit(2)
+
+
+def _application_folder(text: str) -> Path:
+    """An application folder named on the command line: as given from where the command runs, or else within the
+    workspace, where the dashboard's `applications/…` paths are. The guide runs every command from the code folder."""
+    given = Path(text).expanduser()
+    for folder in (given,) if given.is_absolute() else (given, ROOT / given):
+        if folder.is_dir():
+            return folder.resolve()
+    where = "" if given.is_absolute() else f", here or in the workspace at {ROOT}"
+    _no_folder(f"No folder {text}{where}. Give a job's number, or the path of its application folder.")
+
+
 def cmd_check(args):
     cfg = load_config()
-    folder = Path(args.folder).resolve()
-    report = checks.check_application(folder, cfg, args.company, args.title)
+    company, title, posting = args.company, args.title, {}
+    if args.folder.isdigit():
+        # A job's number checks its folder as `finish` would, with its own employer, title and posting, so neither
+        # name is questioned as a term the sources don't hold.
+        with closing(_open_db()) as conn:
+            job = get_job(conn, int(args.folder))
+        if not job["app_folder"]:
+            _no_folder(f"Job {args.folder} has no application folder yet, so there's nothing to check. "
+                       f"`pyrite folder {args.folder}` makes one.")
+        folder = ROOT / job["app_folder"]
+        if not folder.is_dir():
+            _no_folder(f"Job {args.folder}'s folder, {job['app_folder']}, isn't in the workspace any more.")
+        company, title = company or job["company"], title or job["title"]
+        posting = {"description": job["description"], "source_key": job["source_key"], "source_id": job["source_id"]}
+    else:
+        folder = _application_folder(args.folder)
+    report = checks.check_application(folder, cfg, company, title, **posting)
     if _as_json(args):
         _print_json(report)
     else:
@@ -737,9 +770,7 @@ def cmd_check(args):
 def cmd_fill(args):
     """Write a job's fill sheet: the Workday paste sheet with this application's tailored role text."""
     if not args.job.isdigit():
-        folder = Path(args.job).resolve()
-        if not folder.is_dir():
-            sys.exit(f"No folder {folder}.")
+        folder = _application_folder(args.job)
         if store.sent_copies(folder):
             sys.exit(f"{folder} has a copy of what was sent in {store.SENT_FOLDER}/, so it's a record and gets no new fill "
                      f"sheet. {SECOND_APPLICATION}")
@@ -867,9 +898,15 @@ def cmd_outreach(args, conn):
 def cmd_add(args, conn):
     """Add a posting you found yourself, such as one from LinkedIn."""
     from . import link
-    from .server import add_manual_job, tracked_by_url
+    from .server import SameRole, add_manual_job, tracked_by_role, tracked_by_url
+
+    def same_role(job) -> NoReturn:
+        sys.exit(f"{SameRole(job)} Nothing was added. If this is another opening, such as one in another place or on "
+                 "another team, add it again with --anyway.")
 
     description = ""
+    if args.url and not args.anyway and not tracked_by_url(conn, args.url) and (same := tracked_by_role(conn, args.company, args.title)):
+        same_role(same)  # Before the link is read, which would be for nothing.
     if args.description_file:
         try:
             description = Path(args.description_file).read_text(encoding="utf-8")
@@ -886,7 +923,10 @@ def cmd_add(args, conn):
             args.location = args.location or found["location"]
     newest = conn.execute("SELECT COALESCE(MAX(id), 0) FROM jobs").fetchone()[0]
     try:
-        job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description)
+        job_id = add_manual_job(conn, load_config(), args.company, args.title, args.url, args.location, description,
+                                anyway=args.anyway)
+    except SameRole as same:
+        same_role(same.job)
     except ValueError as err:
         sys.exit(str(err))
     conn.commit()
@@ -1008,7 +1048,8 @@ def cmd_import_resume(args):
         sys.exit(str(err))
     told = [f"Check: {note}" for note in found.notes]
     if found.problems:
-        told.append(f"It still has {doctor._and(found.problems)}, which the assay needs. Add them before drafting from it.")
+        told.append(f"It still has {doctor._and(found.problems)}, which the assay needs. "
+                    f"Add {'them' if len(found.problems) > 1 else 'it'} before drafting from it.")
     told.append("Every claim in it must also be in profile/facts.md, or the assay blocks drafts that use it.")
     if not args.save:
         print(found.text, end="")
@@ -1323,13 +1364,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_task)
 
-    p = command("check", "run the assay, the fact checker, on any folder",
+    p = command("check", "run the assay, the fact checker, on a job's folder or any folder",
                 description="Check the resume, cover letter, and notes in an application folder against your "
-                            "workspace's facts and settings. Report the result without changing a job's status.",
+                            "workspace's facts and settings. Report the result without changing a job's status. "
+                            "Exits 1 when the assay blocks the draft, and 2 when there's no folder to check.",
                 epilog="See README.md under See the assay stop a bad draft for a worked example.")
-    p.add_argument("folder")
-    p.add_argument("--company", default="")
-    p.add_argument("--title", default="")
+    p.add_argument("folder", metavar="job",
+                   help="a job's number, or the path of an application folder: from here, or within the workspace, as "
+                        "applications/2026-11-acme-firmware-engineer")
+    p.add_argument("--company", default="",
+                   help="the posting's employer, so the assay doesn't question its name in the documents. A job's number "
+                        "brings its own")
+    p.add_argument("--title", default="", help="the posting's job title, for the same reason. A job's number brings its own")
     _json_flag(p)
     p.set_defaults(func=cmd_check)
 
@@ -1373,6 +1419,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--url", default="", help="the posting's web address")
     p.add_argument("--location", default="", help="where the job is, such as Remote")
     p.add_argument("--description-file", help="a text file holding the posting, which the assay and tailoring read, for a link that can't be read")
+    p.add_argument("--anyway", action="store_true",
+                   help="add it even though a job with the same company and title is tracked already, as another opening")
     p.set_defaults(func=cmd_add)
 
     p = command("brief", "save the morning briefing")

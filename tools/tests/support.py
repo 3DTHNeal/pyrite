@@ -103,6 +103,10 @@ doctor.program_todos = lambda: []
 # it's drawn. Here both runs are set up, as in a finished workspace, and no test reaches Task Scheduler.
 OWN_TASKS = schedule.own_tasks
 schedule.own_tasks = lambda: {"pan": {"time": "05:15", "disabled": False}, "run": {"time": "07:00", "disabled": False}}
+# Nor whether a model's name exists, which only a request to Claude can say, and a save of a model asks. Here no name
+# is refused, and no test reaches Claude Code. The tests of the check call the original kept here.
+MODEL_PROBLEM = claude_code.model_problem
+claude_code.model_problem = lambda name, conn=None: None
 
 CFG = store.load_config()
 MODEL = store.ROOT / "applications" / "2026-11-acme-principal-robotics-software-engineer"
